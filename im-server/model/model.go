@@ -1065,11 +1065,51 @@ type Game struct {
 	// RechargeDailyMax 单用户单日累计积分限额（0=不限；pending 也占额，防并发双下单绕过）
 	RechargeDailyMax float64 `gorm:"column:recharge_daily_max;type:double;default:0" json:"recharge_daily_max"`
 	// Status 0上架 1下架（下架后商店列表/详情不展示，已入库用户可继续下载已拥有版本）
+	// OwnerUsername 归属商户（=users.username role=2；空=官方游戏，管理端专属。商户侧全部接口
+	// 以本列做 SQL 层隔离归口：不匹配一律 404 不暴露存在性）。AutoMigrate 自动加列，存量零回归
+	OwnerUsername string `gorm:"column:owner_username;type:varchar(32);default:'';index" json:"owner_username"`
+	// AuditStatus 商户游戏审核状态（商户自助上架链路）：0=官方免审（默认，存量/管理员创建）/
+	// 1=待审核（商户新增或编辑对外字段后自动回退）/ 2=已通过（玩家侧可见的唯一商户态）/
+	// 3=已驳回（附 audit_remark 理由，商户修改后可重新提交回 1）。玩家侧列表/区块/置顶等
+	// 发现面统一过滤 audit_status IN (0,2)；详情面对已入库玩家保留（与下架语义一致）
+	AuditStatus int8 `gorm:"column:audit_status;type:tinyint;default:0;index" json:"audit_status"`
+	// AuditRemark 驳回理由（商户端可见）；AuditTime 最近审核时间；AuditedBy 审核管理员
+	AuditRemark string     `gorm:"column:audit_remark;type:varchar(255);default:''" json:"audit_remark"`
+	AuditTime   *time.Time `gorm:"column:audit_time" json:"audit_time"`
+	AuditedBy   string     `gorm:"column:audited_by;type:varchar(32);default:''" json:"audited_by"`
+
 	Status     int8      `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
 	Sort       int       `gorm:"column:sort;default:0" json:"sort"` // 排序（小在前）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
+
+// 商户游戏审核状态常量（服务端与商户/管理端同口径）
+const (
+	GameAuditOfficial = 0 // 官方免审（存量游戏与管理员创建的默认态）
+	GameAuditPending  = 1 // 待审核（商户新增/编辑对外字段后）
+	GameAuditApproved = 2 // 已通过（玩家侧可见的唯一商户态）
+	GameAuditRejected = 3 // 已驳回（附理由，商户改后可重新提交）
+)
+
+// Merchant 商户资料/配置表 im_merchant（商户独立后台）：
+// username 对应 users.username（role=2，账号由管理员后台创建）；commission_rate 为商户分成比例
+// （0~100，应结金额=成功充值总额×rate%，服务端计算商户只读）；停用仅禁登录，已过审游戏保留展示
+type Merchant struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);uniqueIndex;not null" json:"username"`
+	Name     string `gorm:"column:name;type:varchar(64);default:''" json:"name"`
+	// CommissionRate 商户分成比例（百分比 0~100；100=全额结算）
+	CommissionRate float64 `gorm:"column:commission_rate;type:double;default:100" json:"commission_rate"`
+	// Status 0 启用 / 1 停用（default:0 约定同公告表：default:1 会让 GORM 省略零值字段落成启用）
+	Status     int8      `gorm:"column:status;type:tinyint;default:0" json:"status"`
+	Remark     string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (Merchant) TableName() string { return "im_merchant" }
 
 // GatewayBook 网关地址簿（端口透传·远程加密网关的 im-gateway 条目，后台热更）：
 // 每条目 = 一台部署了 im-gateway 的远程服务器；游戏 gw 转发规则经 @name 引用。

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>商户后台 - 即时通讯</title>
+    <!-- 主题防闪烁：先于样式渲染读取本地主题偏好（与 chat.js 同一套 im_theme 约定） -->
+    <script>
+        (function () {
+            var theme = localStorage.getItem('im_theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，Steam 同款暗色卡片风；主题色跟随现有设定与明暗切换） -->
+    <link rel="stylesheet" href="css/style.css?v=1.52">
+    <link rel="stylesheet" href="css/admin.css?v=1.38">
+    <link rel="stylesheet" href="css/merchant.css?v=1.1">
+</head>
+<body>
+    <!-- 启动骨架层 -->
+    <div id="m-boot" class="admin-boot">
+        <div class="admin-boot-spinner"></div>
+        <div class="admin-boot-text">加载中…</div>
+    </div>
+
+    <!-- 登录视图（商户账号 role=2 由管理员创建） -->
+    <div id="m-login" class="admin-login-view hidden">
+        <div class="admin-login-card">
+            <h1 class="admin-login-title">商户后台</h1>
+            <p class="admin-login-sub">游戏入驻运营控制台</p>
+            <input type="text" id="m-login-username" class="admin-input" placeholder="商户账号" autocomplete="username">
+            <input type="password" id="m-login-password" class="admin-input" placeholder="密码" autocomplete="current-password">
+            <button id="m-login-btn" class="admin-btn primary block">登 录</button>
+            <p class="admin-login-hint">商户账号由平台管理员创建</p>
+            <a class="admin-login-back" href="/">← 返回首页</a>
+        </div>
+    </div>
+
+    <!-- 主面板 -->
+    <div id="m-main" class="hidden">
+        <aside class="m-side">
+            <div class="m-side-logo">
+                <span class="m-side-logo-badge">⚡</span>
+                <div>
+                    <div class="m-side-title">商户后台</div>
+                    <div class="m-side-sub" id="m-who">—</div>
+                </div>
+            </div>
+            <nav class="m-nav" id="m-nav">
+                <button class="m-nav-item active" data-view="games"><span class="m-nav-ico">🎮</span>我的游戏</button>
+                <button class="m-nav-item" data-view="stats"><span class="m-nav-ico">📊</span>赞助统计</button>
+                <button class="m-nav-item" data-view="gateway"><span class="m-nav-ico">🖥️</span>网关部署</button>
+            </nav>
+            <div class="m-side-foot">
+                <button id="m-logout" class="admin-btn small">退出登录</button>
+            </div>
+        </aside>
+
+        <main class="m-content" id="m-scroll">
+            <!-- ===== 我的游戏 ===== -->
+            <section class="m-view" id="m-view-games">
+                <header class="m-head">
+                    <h2>我的游戏</h2>
+                    <button id="m-game-add" class="admin-btn primary">+ 新增游戏</button>
+                </header>
+                <div id="m-game-list" class="m-game-list"><div class="m-empty">加载中…</div></div>
+            </section>
+
+            <!-- ===== 赞助统计 ===== -->
+            <section class="m-view hidden" id="m-view-stats">
+                <header class="m-head"><h2>赞助统计</h2><span class="m-head-tip">仅统计成功订单；处理中与失败不计入</span></header>
+                <div class="m-stat-cards">
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-st-total">—</div><div class="m-stat-label">玩家赞助总额（积分）</div></div>
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-st-rate">—</div><div class="m-stat-label">分成比例</div></div>
+                    <div class="m-stat-card hl"><div class="m-stat-num" id="m-st-payable">—</div><div class="m-stat-label">应结金额（积分）</div></div>
+                </div>
+                <h3 class="m-sub-title">按游戏</h3>
+                <div id="m-st-bygame" class="m-table-wrap"><div class="m-empty">加载中…</div></div>
+                <h3 class="m-sub-title">近 30 天按日</h3>
+                <div id="m-st-byday" class="m-table-wrap"><div class="m-empty">加载中…</div></div>
+                <h3 class="m-sub-title">充值订单</h3>
+                <div id="m-st-orders" class="m-table-wrap"><div class="m-empty">加载中…</div></div>
+                <div class="m-pager">
+                    <button id="m-ord-prev" class="admin-btn small">上一页</button>
+                    <span id="m-ord-page" class="m-page-txt">第 1 页</span>
+                    <button id="m-ord-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            <!-- ===== 网关部署 ===== -->
+            <section class="m-view hidden" id="m-view-gateway">
+                <header class="m-head"><h2>网关部署</h2></header>
+                <div class="m-card">
+                    <p class="m-p">下载网关部署包并在您的服务器上部署，玩家的积分赞助经网关参数化 SQL 写入您的游戏数据库。包内含 2008R2/2012 兼容版程序、<b>不含任何密钥</b>的配置模板与部署说明。</p>
+                    <p class="m-p">部署要点：解压后按说明填写 <code>token_secret</code>（由平台管理员在后台「网关地址簿」分配）与游戏数据库配置，运行后由平台侧连通验证。</p>
+                    <button id="m-gw-dl" class="admin-btn primary">⬇ 下载 im-gateway-2008r2.zip</button>
+                    <span id="m-gw-tip" class="m-head-tip"></span>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- 自绘确认弹窗（无系统弹窗） -->
+    <div id="m-modal-mask" class="m-mask hidden">
+        <div class="m-modal small">
+            <h3 id="m-modal-title" class="m-modal-title">确认</h3>
+            <p id="m-modal-text" class="m-modal-text"></p>
+            <div class="m-modal-btns">
+                <button id="m-modal-cancel" class="admin-btn">取消</button>
+                <button id="m-modal-ok" class="admin-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏 编辑/新增 弹窗 -->
+    <div id="m-game-mask" class="m-mask hidden">
+        <div class="m-modal">
+            <h3 id="m-game-title" class="m-modal-title">新增游戏</h3>
+            <div class="m-form">
+                <div class="m-row"><label>游戏名称 *</label><input id="m-f-name" class="admin-input" maxlength="128"></div>
+                <div class="m-row"><label>slug（安装目录名，小写字母/数字/_/-，创建后不可改）*</label><input id="m-f-slug" class="admin-input" maxlength="64"></div>
+                <div class="m-row"><label>一句话简介</label><input id="m-f-short" class="admin-input" maxlength="255"></div>
+                <div class="m-row"><label>详细介绍</label><textarea id="m-f-desc" class="admin-input" rows="4"></textarea></div>
+                <div class="m-row"><label>标签（逗号分隔）</label><input id="m-f-tags" class="admin-input" maxlength="255" placeholder="动作,单人"></div>
+                <div class="m-row"><label>开发商 / 发行商</label>
+                    <div style="display:flex;gap:8px;"><input id="m-f-dev" class="admin-input" maxlength="64" placeholder="开发商"><input id="m-f-pub" class="admin-input" maxlength="64" placeholder="发行商"></div>
+                </div>
+                <div class="m-row"><label>售价（积分，0=免费）</label><input id="m-f-price" type="number" min="0" step="0.001" class="admin-input" value="0"></div>
+                <div class="m-row"><label>封面图</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="file" id="m-f-cover-file" accept=".png,.jpg,.jpeg,.gif,.webp" class="hidden">
+                        <button id="m-f-cover-pick" class="admin-btn small">上传封面</button>
+                        <img id="m-f-cover-prev" class="m-cover-prev hidden" alt="">
+                        <input id="m-f-cover" class="admin-input" readonly placeholder="上传后自动填充">
+                    </div>
+                </div>
+                <div class="m-row"><label>截图（最多 12 张，多选上传）</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="file" id="m-f-ss-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
+                        <button id="m-f-ss-pick" class="admin-btn small">上传截图</button>
+                        <span id="m-f-ss-tip" class="m-head-tip">未上传</span>
+                    </div>
+                    <input id="m-f-ss" class="hidden">
+                </div>
+                <div class="m-row"><label>启动程序（安装目录内相对路径，如 bin/game.exe）</label><input id="m-f-exe" class="admin-input" maxlength="255"></div>
+                <div class="m-row"><label>启动显示名 / 启动参数</label>
+                    <div style="display:flex;gap:8px;"><input id="m-f-exename" class="admin-input" maxlength="128"><input id="m-f-exeargs" class="admin-input" maxlength="1024" placeholder="{0}=账号 {1}=专属密码"></div>
+                </div>
+                <div class="m-row"><label>开放积分赞助</label><input type="checkbox" id="m-f-rgw"></div>
+                <div class="m-row"><label>汇率（1 积分=N 游戏币）/ 单日限额（0=不限）</label>
+                    <div style="display:flex;gap:8px;"><input id="m-f-rgw-rate" type="number" min="0" step="0.001" class="admin-input" value="1"><input id="m-f-rgw-daily" type="number" min="0" step="0.001" class="admin-input" value="0"></div>
+                </div>
+                <div class="m-row"><label>充值档位（逗号分隔，如 100,500,1000；档位即单笔白名单）</label><input id="m-f-rgw-tiers" class="admin-input" maxlength="255"></div>
+                <div class="m-row"><label>充值网关名（小写字母/数字/_/-，由平台管理员分配）</label><input id="m-f-rgw-gw" class="admin-input" maxlength="64"></div>
+            </div>
+            <p class="m-head-tip" id="m-game-tip">提交后进入待审核，管理员审核通过后玩家可见</p>
+            <div class="m-modal-btns">
+                <button id="m-game-cancel" class="admin-btn">取消</button>
+                <button id="m-game-ok" class="admin-btn primary">提交</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 版本管理 弹窗（分片上传 + 版本列表） -->
+    <div id="m-ver-mask" class="m-mask hidden">
+        <div class="m-modal">
+            <h3 class="m-modal-title">版本管理 — <span id="m-ver-game"></span></h3>
+            <div class="m-form">
+                <div class="m-row"><label>版本号 *</label><input id="m-ver-version" class="admin-input" maxlength="32" placeholder="如 1.0.0 或 2026-11-04"></div>
+                <div class="m-row"><label>更新日志</label><textarea id="m-ver-log" class="admin-input" rows="2"></textarea></div>
+                <div class="m-row"><label>游戏目录 / 文件</label>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <input type="file" id="m-ver-dir" webkitdirectory class="hidden">
+                        <input type="file" id="m-ver-files" multiple class="hidden">
+                        <button id="m-ver-pick-dir" class="admin-btn small">选择整个目录</button>
+                        <button id="m-ver-pick-files" class="admin-btn small">选择文件</button>
+                        <button id="m-ver-clear" class="admin-btn small">清空</button>
+                    </div>
+                </div>
+                <div id="m-ver-list" class="m-ver-list"></div>
+                <div class="m-progress hidden" id="m-ver-progress"><div class="m-progress-bar" id="m-ver-bar"></div></div>
+            </div>
+            <div class="m-modal-btns">
+                <button id="m-ver-cancel" class="admin-btn">关闭</button>
+                <button id="m-ver-ok" class="admin-btn primary">开始上传并登记版本</button>
+            </div>
+            <h3 class="m-sub-title">已有版本</h3>
+            <div id="m-ver-existing" class="m-table-wrap"><div class="m-empty">加载中…</div></div>
+        </div>
+    </div>
+
+    <!-- 公告管理 弹窗 -->
+    <div id="m-notice-mask" class="m-mask hidden">
+        <div class="m-modal">
+            <h3 class="m-modal-title">公告管理 — <span id="m-notice-game"></span></h3>
+            <div class="m-form">
+                <div class="m-row"><label>标题</label><input id="m-no-title" class="admin-input" maxlength="64"></div>
+                <div class="m-row"><label>正文（可空=纯图片公告）</label><textarea id="m-no-content" class="admin-input" rows="4" maxlength="2000"></textarea></div>
+                <div class="m-row"><label>图片（最多 9 张，首图兼作头图）</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="file" id="m-no-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
+                        <button id="m-no-pick" class="admin-btn small">上传图片</button>
+                        <span id="m-no-tip" class="m-head-tip">未上传</span>
+                    </div>
+                    <input id="m-no-images" class="hidden">
+                    <div id="m-no-imgs" class="m-ss-preview"></div>
+                </div>
+            </div>
+            <div class="m-modal-btns">
+                <button id="m-notice-cancel" class="admin-btn">关闭</button>
+                <button id="m-notice-ok" class="admin-btn primary">发布公告</button>
+            </div>
+            <h3 class="m-sub-title">已发布公告</h3>
+            <div id="m-no-list" class="m-table-wrap"><div class="m-empty">加载中…</div></div>
+        </div>
+    </div>
+
+    <!-- 自绘 Toast -->
+    <div id="m-toast" class="m-toast hidden"></div>
+
+    <script src="js/merchant.js?v=1.2"></script>
+</body>
+</html>

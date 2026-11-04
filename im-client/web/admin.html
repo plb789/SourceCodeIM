@@ -17,6 +17,7 @@
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
     <link rel="stylesheet" href="css/admin.css?v=1.38">
+    <link rel="stylesheet" href="css/merchant.css?v=1.0">
 </head>
 <body>
     <!-- 启动骨架层：脚本编译期间（echarts/admin.js 数百 KB）保持主题背景+spinner，
@@ -59,6 +60,8 @@
                 <button class="admin-nav-item sub" data-view="gwbook">网关地址簿</button>
                 <button class="admin-nav-item sub" data-view="groders">充值订单</button>
                 <button class="admin-nav-item sub" data-view="cards">充值卡</button>
+                <button class="admin-nav-item sub" data-view="gaudit">游戏审核</button>
+                <button class="admin-nav-item sub" data-view="merchants">商户管理</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -1564,11 +1567,12 @@
                             <th>下载次数</th>
                             <th>排序</th>
                             <th>状态</th>
+                            <th>归属 / 审核</th>
                             <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="gm-tbody">
-                        <tr><td colspan="11" class="vec-empty">加载中…</td></tr>
+                        <tr><td colspan="12" class="vec-empty">加载中…</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1663,6 +1667,69 @@
                     <button id="cards-prev" class="admin-btn small">上一页</button>
                     <span id="cards-page-info" class="admin-view-tip">-</span>
                     <button id="cards-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+            <!-- 游戏审核（游戏管理二级页：商户提交的待审核游戏，通过上架/驳回附理由） -->
+            <section id="admin-view-gaudit" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>游戏审核</h2>
+                    <span id="gaudit-status" class="admin-view-tip">-</span>
+                </header>
+                <p class="admin-view-tip">商户提交的游戏经审核通过后才会出现在玩家端商店（官方游戏免审）。通过即自动上架；驳回需填写理由，商户修改后可重新提交。商户编辑已过审游戏会重新回到待审核队列。</p>
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">
+                    <select id="gaudit-f-status" class="admin-input gm-num-input">
+                        <option value="">全部状态</option>
+                        <option value="1" selected>待审核</option>
+                        <option value="2">已通过</option>
+                        <option value="3">已驳回</option>
+                    </select>
+                    <input id="gaudit-remark" class="admin-input" style="max-width:320px;" placeholder="驳回理由（点「驳回」时必填）" maxlength="255">
+                    <button id="gaudit-refresh" class="admin-btn small primary" type="button">刷新</button>
+                </div>
+                <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>游戏</th><th>slug</th><th>商户</th><th>售价</th><th>赞助</th><th>状态</th><th>提交时间</th><th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gaudit-tbody">
+                        <tr><td colspan="8" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </section>
+            <!-- 商户管理（游戏管理二级页：建号/启停/分成比例/重置密码） -->
+            <section id="admin-view-merchants" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>商户管理</h2>
+                    <span id="merchants-status" class="admin-view-tip">-</span>
+                </header>
+                <p class="admin-view-tip">商户账号=IM 账号体系（role=2），由管理员创建；分成比例为商户结算口径（应结=成功赞助总额×比例%），服务端计算商户只读。停用仅禁止商户登录，其已过审游戏保留展示。</p>
+                <div class="gm-layout-card">
+                    <div class="gm-layout-head"><span class="gm-pub-title" id="merchants-form-title">创建商户</span></div>
+                    <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;">
+                        <input id="merchants-f-user" class="admin-input" style="max-width:180px;" placeholder="账号（2~32 位字母数字）" maxlength="32">
+                        <input id="merchants-f-pass" class="admin-input" style="max-width:180px;" placeholder="密码（6~64 位）" maxlength="64">
+                        <input id="merchants-f-name" class="admin-input" style="max-width:180px;" placeholder="商户显示名" maxlength="64">
+                        <input id="merchants-f-rate" type="number" min="0" max="100" step="0.1" class="admin-input gm-num-input" placeholder="分成比例%" value="100" title="商户分成比例（0~100）">
+                        <input id="merchants-f-remark" class="admin-input" style="max-width:200px;" placeholder="备注（可空）" maxlength="255">
+                        <button id="merchants-save" class="admin-btn small primary" type="button">创建</button>
+                        <button id="merchants-reset-form" class="admin-btn small hidden" type="button">取消编辑</button>
+                    </div>
+                    <span class="admin-field-hint">编辑存量商户时账号只读；密码留空=不重置；比例 0~100。</span>
+                </div>
+                <div class="vec-table-wrap" style="margin-top:12px;">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>账号</th><th>显示名</th><th>分成比例</th><th>状态</th><th>游戏数</th><th>成功赞助总额</th><th>创建时间</th><th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="merchants-tbody">
+                        <tr><td colspan="8" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
                 </div>
             </section>
             <!-- 游戏公告管理（游戏管理二级页：表格一行一条，服务端分页+关键词搜索，公告量不限） -->
@@ -2117,7 +2184,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.71"></script>
+    <script src="js/admin.js?v=1.73"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

@@ -305,6 +305,10 @@
             else if (item.dataset.view === 'groders') { grodPage = 1; grodLoad(); }
             // 充值卡（游戏管理二级页）：进入视图拉取卡密列表（重置到第一页）
             else if (item.dataset.view === 'cards') { cardsPage = 1; cardsLoad(); }
+            // 游戏审核（游戏管理二级页）：进入视图拉取商户提交的游戏队列
+            else if (item.dataset.view === 'gaudit') { gauditLoad(); }
+            // 商户管理（游戏管理二级页）：进入视图拉取商户列表并复位表单为「创建」态
+            else if (item.dataset.view === 'merchants') { merchantsResetForm(); merchantsLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
@@ -5510,7 +5514,7 @@
         if (!list.length) {
             var tr0 = document.createElement('tr');
             var td0 = document.createElement('td');
-            td0.colSpan = 11;
+            td0.colSpan = 12;
             td0.className = 'vec-empty';
             td0.textContent = '暂无游戏，点击"新建游戏"上架第一款';
             tr0.appendChild(td0);
@@ -5589,6 +5593,23 @@
             st.textContent = a.status === 0 ? '已上架' : '已下架';
             tdSt.appendChild(st);
             tr.appendChild(tdSt);
+            // 归属 / 审核（官方=owner 空免审；商户游戏显示归属账号 + 审核徽标，商户独立后台联动）
+            var tdOwn = document.createElement('td');
+            if (a.owner_username) {
+                var AUD_GM = { 1: ['pending', '待审核'], 2: ['ok', '已通过'], 3: ['rej', '已驳回'] };
+                var ad = AUD_GM[a.audit_status] || AUD_GM[1];
+                var ownLine = document.createElement('div');
+                ownLine.textContent = a.owner_username;
+                ownLine.style.fontSize = '12px';
+                var badge = document.createElement('span');
+                badge.className = 'm-badge ' + ad[0];
+                badge.textContent = ad[1];
+                tdOwn.appendChild(ownLine);
+                tdOwn.appendChild(badge);
+            } else {
+                tdOwn.textContent = '官方';
+            }
+            tr.appendChild(tdOwn);
             // 操作：编辑 / 版本 / 上架下架 / 删除
             var tdOp = document.createElement('td');
             tdOp.className = 'vec-td-actions';
@@ -7727,6 +7748,185 @@
             showToast('网络异常');
         });
     });
+
+    // ===== 游戏审核（商户提交队列：通过上架 / 驳回附理由；gaudit-* 归口） =====
+    function esc(s) { // HTML 转义（商户名/游戏名/理由等用户可控文本入 innerHTML 前统一转义）
+        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    var gauditGames = [];
+    function gauditLoad() {
+        var st = $('gaudit-f-status').value;
+        $('gaudit-status').textContent = '加载中…';
+        api('GET', '/admin/api/merchant/audit/list' + (st ? '?status=' + st : '')).then(function (result) {
+            if (!result.ok) { $('gaudit-status').textContent = result.msg || '加载失败'; return; }
+            gauditGames = result.data.list || [];
+            var pend = 0;
+            gauditGames.forEach(function (g) { if (g.audit_status === 1) pend++; });
+            $('gaudit-status').textContent = '共 ' + gauditGames.length + ' 条' + (st === '' || st === '1' ? '（待审核 ' + pend + '）' : '');
+            var AUD = { 1: ['pending', '待审核'], 2: ['ok', '已通过'], 3: ['rej', '已驳回'] };
+            var tbody = $('gaudit-tbody');
+            if (!gauditGames.length) { tbody.innerHTML = '<tr><td colspan="8" class="vec-empty">队列为空</td></tr>'; return; }
+            tbody.innerHTML = '';
+            gauditGames.forEach(function (g) {
+                var tr = document.createElement('tr');
+                var def = AUD[g.audit_status] || AUD[1];
+                var remark = g.audit_remark ? '<div style="font-size:12px;color:var(--danger,#e5484d);">理由：' + esc(g.audit_remark) + '</div>' : '';
+                tr.innerHTML =
+                    '<td>' + esc(g.name) + remark + '</td>' +
+                    '<td>' + esc(g.slug) + '</td>' +
+                    '<td>' + esc(g.owner_username) + '</td>' +
+                    '<td>' + (Number(g.price) > 0 ? esc(g.price) + ' 积分' : '免费') + '</td>' +
+                    '<td>' + (g.recharge_enabled !== undefined ? (g.recharge_enabled ? '开放' : '未开放') : '—') + '</td>' +
+                    '<td><span class="m-badge ' + def[0] + '">' + def[1] + '</span></td>' +
+                    '<td>' + esc(String(g.create_time || '')) + '</td><td></td>';
+                var acts = document.createElement('div');
+                acts.style.cssText = 'display:flex;gap:6px;';
+                if (g.audit_status === 1 || g.audit_status === 3) {
+                    var pass = document.createElement('button');
+                    pass.className = 'admin-btn small primary';
+                    pass.textContent = '通过';
+                    pass.addEventListener('click', function () { gauditAct(g, 'pass'); });
+                    var rej = document.createElement('button');
+                    rej.className = 'admin-btn small';
+                    rej.textContent = '驳回';
+                    rej.style.color = 'var(--danger,#e5484d)';
+                    rej.addEventListener('click', function () { gauditAct(g, 'reject'); });
+                    acts.appendChild(pass);
+                    acts.appendChild(rej);
+                } else {
+                    acts.appendChild(document.createTextNode('—'));
+                }
+                tr.lastElementChild.appendChild(acts);
+                tbody.appendChild(tr);
+            });
+        });
+    }
+    function gauditAct(g, action) {
+        var remark = $('gaudit-remark').value.trim();
+        if (action === 'reject' && !remark) { showToast('请在上方输入框填写驳回理由'); return; }
+        if (action === 'pass' && !showConfirmBool('审核通过', '通过「' + g.name + '」？通过后游戏自动上架并对玩家可见')) return;
+        api('POST', '/admin/api/merchant/audit/' + g.id, { action: action, remark: remark }).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+            showToast(action === 'pass' ? '已通过并上架' : '已驳回');
+            $('gaudit-remark').value = '';
+            gauditLoad();
+        });
+    }
+    // 轻量确认（复用原生外的自绘流程：用双重点击防误触——首次点击变为"再次点击确认"）
+    function showConfirmBool(title, text) {
+        // 管理端无全局确认弹窗组件，此处以两次点击确认防误触（首次点击后按钮文案提示 3 秒）
+        if (showConfirmBool._armed && showConfirmBool._armed === title + text) {
+            showConfirmBool._armed = null;
+            clearTimeout(showConfirmBool._t);
+            return true;
+        }
+        showConfirmBool._armed = title + text;
+        showToast(title + '：' + text + '（3 秒内再次点击确认）');
+        clearTimeout(showConfirmBool._t);
+        showConfirmBool._t = setTimeout(function () { showConfirmBool._armed = null; }, 3000);
+        return false;
+    }
+
+    // ===== 商户管理（建号/编辑/启停/重置密码；merchants-* 归口） =====
+    var merchantsEditing = ''; // 空=创建态；非空=正在编辑该账号
+    function merchantsResetForm() {
+        merchantsEditing = '';
+        $('merchants-f-user').value = '';
+        $('merchants-f-user').disabled = false;
+        $('merchants-f-pass').value = '';
+        $('merchants-f-pass').placeholder = '密码（6~64 位）';
+        $('merchants-f-name').value = '';
+        $('merchants-f-rate').value = 100;
+        $('merchants-f-remark').value = '';
+        $('merchants-form-title').textContent = '创建商户';
+        $('merchants-save').textContent = '创建';
+        $('merchants-reset-form').classList.add('hidden');
+    }
+    function merchantsLoad() {
+        $('merchants-status').textContent = '加载中…';
+        api('GET', '/admin/api/merchants?page=1&size=100').then(function (result) {
+            if (!result.ok) { $('merchants-status').textContent = result.msg || '加载失败'; return; }
+            var items = (result.data.list || []);
+            $('merchants-status').textContent = '共 ' + (result.data.total || items.length) + ' 个商户';
+            var tbody = $('merchants-tbody');
+            if (!items.length) { tbody.innerHTML = '<tr><td colspan="8" class="vec-empty">暂无商户，用上方表单创建</td></tr>'; return; }
+            tbody.innerHTML = '';
+            items.forEach(function (m) {
+                var tr = document.createElement('tr');
+                var st = m.status === 0
+                    ? '<span class="m-badge ok">启用</span>'
+                    : '<span class="m-badge rej">停用</span>';
+                tr.innerHTML =
+                    '<td>' + esc(m.username) + '</td>' +
+                    '<td>' + esc(m.name || '—') + '</td>' +
+                    '<td>' + esc(m.commission_rate) + '%</td>' +
+                    '<td>' + st + '</td>' +
+                    '<td>' + (m.game_count || 0) + '</td>' +
+                    '<td>' + (Number(m.recharge_total) || 0) + '</td>' +
+                    '<td>' + esc(String(m.create_time || '')) + '</td><td></td>';
+                var acts = document.createElement('div');
+                acts.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+                var edit = document.createElement('button');
+                edit.className = 'admin-btn small';
+                edit.textContent = '编辑';
+                edit.addEventListener('click', function () {
+                    merchantsEditing = m.username;
+                    $('merchants-f-user').value = m.username;
+                    $('merchants-f-user').disabled = true;
+                    $('merchants-f-pass').value = '';
+                    $('merchants-f-pass').placeholder = '留空=不重置密码';
+                    $('merchants-f-name').value = m.name || '';
+                    $('merchants-f-rate').value = m.commission_rate;
+                    $('merchants-f-remark').value = m.remark || '';
+                    $('merchants-form-title').textContent = '编辑商户 — ' + m.username;
+                    $('merchants-save').textContent = '保存';
+                    $('merchants-reset-form').classList.remove('hidden');
+                });
+                var toggle = document.createElement('button');
+                toggle.className = 'admin-btn small';
+                toggle.textContent = m.status === 0 ? '停用' : '启用';
+                toggle.addEventListener('click', function () {
+                    api('PUT', '/admin/api/merchants/' + encodeURIComponent(m.username), { status: m.status === 0 ? 1 : 0 }).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+                        showToast(m.status === 0 ? '已停用（立即拒绝登录）' : '已启用');
+                        merchantsLoad();
+                    });
+                });
+                acts.appendChild(edit);
+                acts.appendChild(toggle);
+                tr.lastElementChild.appendChild(acts);
+                tbody.appendChild(tr);
+            });
+        });
+    }
+    $('merchants-save').addEventListener('click', function () {
+        var user = $('merchants-f-user').value.trim();
+        var pass = $('merchants-f-pass').value;
+        var name = $('merchants-f-name').value.trim();
+        var rate = Number($('merchants-f-rate').value);
+        var remark = $('merchants-f-remark').value.trim();
+        if (merchantsEditing) {
+            var body = { name: name, commission_rate: rate, remark: remark };
+            if (pass) body.password = pass;
+            api('PUT', '/admin/api/merchants/' + encodeURIComponent(merchantsEditing), body).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+                showToast('已保存');
+                merchantsResetForm();
+                merchantsLoad();
+            });
+        } else {
+            if (!user || !pass) { showToast('请填写账号与密码'); return; }
+            api('POST', '/admin/api/merchants', { username: user, password: pass, name: name, commission_rate: rate, remark: remark }).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '创建失败'); return; }
+                showToast('商户已创建：' + user);
+                merchantsResetForm();
+                merchantsLoad();
+            });
+        }
+    });
+    $('merchants-reset-form').addEventListener('click', merchantsResetForm);
+    $('gaudit-refresh').addEventListener('click', gauditLoad);
 
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
     // 归位说明：启动必须放在 IIFE 末尾——此前位于积分管理区块之前（L2975），带 #gn/#games 等

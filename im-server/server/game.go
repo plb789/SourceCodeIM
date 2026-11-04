@@ -48,7 +48,7 @@ func InitGame(cfg *config.Config) {
 	tables := []interface{}{&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{},
 		&model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{},
 		&model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}, &model.GatewayBook{},
-		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.RechargeCard{}}
+		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.RechargeCard{}, &model.Merchant{}}
 	migrateFailed := false
 	for _, t := range tables {
 		if err := store.DB.AutoMigrate(t); err != nil {
@@ -176,7 +176,7 @@ func gameStoreConfig(viewer string) (string, map[string]bool, []map[string]inter
 		var ids []uint
 		if json.Unmarshal([]byte(cfg.Featured), &ids) == nil && len(ids) > 0 {
 			var games []model.Game
-			store.DB.Where("id IN ? AND status = 0", ids).Find(&games)
+			store.DB.Where("id IN ? AND status = 0 AND audit_status IN ?", ids, []int8{model.GameAuditOfficial, model.GameAuditApproved}).Find(&games)
 			byID := map[uint]model.Game{}
 			for _, g := range games {
 				byID[g.ID] = g
@@ -250,7 +250,7 @@ func gameSectionList(viewer string) []map[string]interface{} {
 		games := []map[string]interface{}{}
 		if len(ids) > 0 {
 			var gs []model.Game
-			store.DB.Where("id IN ? AND status = 0", ids).Find(&gs)
+			store.DB.Where("id IN ? AND status = 0 AND audit_status IN ?", ids, []int8{model.GameAuditOfficial, model.GameAuditApproved}).Find(&gs)
 			byID := map[uint]model.Game{}
 			for _, g := range gs {
 				byID[g.ID] = g
@@ -614,6 +614,8 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("GET /api/game/save/slots/{id}", s.guardGame(s.HandleGameSaveSlots))
 	// 管理端（上架/版本/分片上传）
 	registerGameAdminRoutes(s)
+	registerMerchantAdminRoutes(s)
+	registerMerchantRoutes(s)
 	// 端口透传·网关写库内部接口（网关专用 HMAC 鉴权，与用户端/管理端隔离；见 gatewaydbwrite.go）
 	http.HandleFunc("GET /internal/gateway/dbwrite", s.handleInternalGatewayDbwrite)
 	http.HandleFunc("POST /internal/gateway/dbwrite/ack", s.handleInternalGatewayDbwriteAck)
@@ -647,7 +649,9 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 	if size < 1 || size > 60 {
 		size = 24
 	}
-	db := store.DB.Model(&model.Game{}).Where("status = ?", 0)
+	// 发现面统一过滤：上架 + 审核可见（官方免审 0 / 商户已过审 2；商户待审/驳回/编辑回审中的游戏
+	// 不出现在任何列表与搜索入口，玩家侧过滤墙归口）
+	db := store.DB.Model(&model.Game{}).Where("status = ? AND audit_status IN ?", 0, []int8{model.GameAuditOfficial, model.GameAuditApproved})
 	if kw := strings.TrimSpace(q.Get("keyword")); kw != "" {
 		like := "%" + kw + "%"
 		db = db.Where("name LIKE ? OR short_desc LIKE ?", like, like)
@@ -721,8 +725,10 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
-	// 下架游戏仅对已入库用户可见（商店下架语义；未入库访问按不存在处理防枚举）
-	if g.Status != 0 {
+	// 下架游戏仅对已入库用户可见（商店下架语义；未入库访问按不存在处理防枚举）；
+	// 商户游戏审核态（1 待审核/3 驳回）同样仅对已入库玩家保留详情（商户编辑回审期间，
+	// 已入库玩家仍可玩旧内容——新玩家发现面已在列表/区块/置顶过滤墙拦截）
+	if g.Status != 0 || (g.AuditStatus != model.GameAuditOfficial && g.AuditStatus != model.GameAuditApproved) {
 		var cnt int64
 		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", username, g.ID).Count(&cnt)
 		if cnt == 0 {

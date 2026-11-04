@@ -50,12 +50,21 @@ var gameUploadSessions = struct {
 
 type gameUploadSession struct {
 	UploadID  string
+	Owner     string // 会话归属（上传发起者：管理员或商户用户名；版本登记时校验防跨身份串用）
 	Kind      string // game=游戏包 / video=宣传视频（两通道共用会话表与临时目录，Kind 区分互不串道）
 	Ext       string // 视频扩展名（video 会话专用，如 ".mp4"，合并落位取名用）
 	Total     int
 	FileSize  int64
 	Received  map[int]int64
 	CreatedAt time.Time
+}
+
+// uploadOwnerFromCtx 上传发起者身份归口（管理端/商户端守卫二选一注入；版本登记时与会话 Owner 比对）
+func uploadOwnerFromCtx(r *http.Request) string {
+	if u := adminUserFromCtx(r); u != "" {
+		return u
+	}
+	return merchantUserFromCtx(r)
 }
 
 // gameSlugRe slug 白名单：小写字母/数字/下划线/中划线（=安装目录名，跨平台路径安全）
@@ -613,6 +622,14 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 		g.Status = 0
 	}
 	g.ID = 0
+	// 归属/审核态强制归一（防请求体注入：model.Game 整体解码会接收 owner_username/audit_status——
+	// 官方游戏被注入 audit=3 会从玩家端消失、注入任意 owner 会造成脏归属；管理员创建一律官方免审。
+	// 商户游戏归属仅经商户接口链路写入，管理员调整归属走商户管理归口）
+	g.OwnerUsername = ""
+	g.AuditStatus = model.GameAuditOfficial
+	g.AuditRemark = ""
+	g.AuditedBy = ""
+	g.AuditTime = nil
 	// 游戏专属派生密钥强制服务端生成（覆盖请求可能携带的任意值；模型 json:"-" 本就不接收，
 	// 此处双保险）：每游戏独立持钥，单游戏密钥泄露/轮换不影响其他游戏
 	g.GameSecret = gameRandomSecret()
@@ -653,6 +670,9 @@ func (s *Server) handleAdminGameList(w http.ResponseWriter, r *http.Request) {
 		item := gameSummary(g)
 		item["status"] = g.Status
 		item["create_time"] = g.CreateTime.Format("2006-01-02 15:04")
+		// 归属/审核态（管理端列表列展示：官方/商户名+审核徽标；商户字段不入 gameSummary 公开摘要）
+		item["owner_username"] = g.OwnerUsername
+		item["audit_status"] = g.AuditStatus
 		list = append(list, item)
 	}
 	adminJSON(w, map[string]interface{}{"list": list, "total": total, "page": page, "size": size})
@@ -835,12 +855,19 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"recharge_rate":      u.RechargeRate,
 		"recharge_tiers":     u.RechargeTiers,
 		"recharge_daily_max": u.RechargeDailyMax,
-		"save_paths":    u.SavePaths, "save_exclude": u.SaveExclude,
+		"save_paths":         u.SavePaths, "save_exclude": u.SaveExclude,
 		"online_ports_tcp": gamePortsClean(u.OnlinePortsTCP), "online_ports_udp": gamePortsClean(u.OnlinePortsUDP),
 		"supernodes": u.Supernodes, "net_mode": u.NetMode,
 		"torrent_path": tp,
 		// BT·上传种子元信息全量回写（种子重扫结果）：换新种子保存即更新大小与版本日期
 		"size_bytes": u.SizeBytes, "latest_version": u.LatestVersion,
+	}
+	// 管理员代改商户游戏对外字段 → 回待审核（与商户侧编辑同语义；官方游戏 owner 空，不受影响）
+	if g.OwnerUsername != "" {
+		now := time.Now()
+		updates["audit_status"] = model.GameAuditPending
+		updates["audit_remark"] = ""
+		updates["audit_time"] = &now
 	}
 	if err := store.DB.Model(&g).Updates(updates).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "保存失败")
@@ -964,7 +991,7 @@ func (s *Server) handleAdminGameChunk(w http.ResponseWriter, r *http.Request) {
 	gameUploadSessions.Lock()
 	sess, ok := gameUploadSessions.m[uploadID]
 	if !ok {
-		sess = &gameUploadSession{UploadID: uploadID, Kind: "game", Total: total, FileSize: fileSize,
+		sess = &gameUploadSession{UploadID: uploadID, Owner: uploadOwnerFromCtx(r), Kind: "game", Total: total, FileSize: fileSize,
 			Received: make(map[int]int64), CreatedAt: time.Now()}
 		gameUploadSessions.m[uploadID] = sess
 		gameUploadSessions.Unlock()
@@ -1248,7 +1275,7 @@ func (s *Server) handleAdminGameVideoChunk(w http.ResponseWriter, r *http.Reques
 	gameUploadSessions.Lock()
 	sess, ok := gameUploadSessions.m[uploadID]
 	if !ok {
-		sess = &gameUploadSession{UploadID: uploadID, Kind: "video", Ext: ext, Total: total,
+		sess = &gameUploadSession{UploadID: uploadID, Owner: uploadOwnerFromCtx(r), Kind: "video", Ext: ext, Total: total,
 			FileSize: fileSize, Received: make(map[int]int64), CreatedAt: time.Now()}
 		gameUploadSessions.m[uploadID] = sess
 		gameUploadSessions.Unlock()
@@ -1369,11 +1396,7 @@ type gameUploadItem struct {
 	uploadID string
 }
 
-// handleAdminGameVersionCreate 版本上架登记：把已分片上传的文件流式合并落位
-// POST /admin/api/game/{id}/version
-// 入参 {version, changelog, min_req, files:[{rel_path,size,sha256,upload_id}]}
-// 流程：清洗校验 → 逐文件合并分片至 games/<slug>/<version>/<rel_path>（MultiWriter 单遍复算
-// SHA256 与总大小，不信任客户端声明）→ 全部通过后登记版本与清单行 → 刷新游戏最新版冗余 → 清理临时分片
+// handleAdminGameVersionCreate 版本上架登记入口（管理端）：归属校验后走共享核心
 func (s *Server) handleAdminGameVersionCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
@@ -1384,6 +1407,15 @@ func (s *Server) handleAdminGameVersionCreate(w http.ResponseWriter, r *http.Req
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
+	s.gameVersionCreateCore(w, r, &g, uploadOwnerFromCtx(r))
+}
+
+// gameVersionCreateCore 版本上架登记共享核心（管理端/商户端同链路，商户侧前置归属校验）：
+// 入参 {version, changelog, min_req, files:[{rel_path,size,sha256,upload_id}]}
+// 流程：清洗校验 → 逐文件合并分片至 games/<slug>/<version>/<rel_path>（MultiWriter 单遍复算
+// SHA256 与总大小，不信任客户端声明）→ 全部通过后登记版本与清单行 → 刷新游戏最新版冗余 → 清理临时分片。
+// 分片会话 Owner 与操作者强制比对（防跨身份串用他人会话）
+func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g *model.Game, operator string) {
 	// BT·上传种子方式禁走版本上架：客户端清单按种子合成（files 恒空，下载走 BT 分片校验），
 	// 上架的版本文件客户端永远不下载（孤儿数据）；且版本表记录会让 BT 清单版本号恒为该版本号，
 	// 覆盖"换新种子=日期变=触发更新"的检测闭环（gameManifest 版本号优先级：版本表 > latest_version）。
@@ -1445,10 +1477,15 @@ func (s *Server) handleAdminGameVersionCreate(w http.ResponseWriter, r *http.Req
 			return
 		}
 		gameUploadSessions.Lock()
-		_, ok := gameUploadSessions.m[f.UploadID]
+		sess, ok := gameUploadSessions.m[f.UploadID]
 		gameUploadSessions.Unlock()
 		if !ok {
 			adminFail(w, http.StatusGone, "分片会话不存在或已过期: "+rp+"（请重新上传该文件）")
+			return
+		}
+		// 会话归属校验：登记者必须与上传发起者一致（防商户/管理员跨身份串用他人 upload_id）
+		if operator == "" || sess.Owner != operator {
+			adminFail(w, http.StatusForbidden, "分片会话归属校验失败: "+rp+"（请以当前登录身份重新上传）")
 			return
 		}
 		items = append(items, gameUploadItem{relPath: rp, size: f.Size, sha: sha, uploadID: f.UploadID})
@@ -1514,7 +1551,7 @@ func (s *Server) handleAdminGameVersionCreate(w http.ResponseWriter, r *http.Req
 		os.RemoveAll(s.gameTmpDir(it.uploadID))
 	}
 	logger.Info("游戏版本上架: %s (%s) v%s, 文件 %d 个, 共 %d 字节, 操作人=%s",
-		g.Name, g.Slug, version, len(items), totalSize, adminUserFromCtx(r))
+		g.Name, g.Slug, version, len(items), totalSize, operator)
 	adminJSON(w, map[string]interface{}{"version_id": v.ID, "version": version,
 		"file_count": len(items), "size_bytes": totalSize, "manifest_hash": manifestHash})
 }
@@ -1567,8 +1604,7 @@ func (s *Server) gameVersionRollback(verRoot string, items []gameUploadItem, cle
 	}
 }
 
-// handleAdminGameVersionDelete 删除版本：清清单行与版本行、删版本磁盘目录；
-// 被删版本为最新版时回退到剩余版本（无剩余则清空冗余）
+// handleAdminGameVersionDelete 删除版本入口（管理端）：归属链路校验后走共享核心
 func (s *Server) handleAdminGameVersionDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
@@ -1584,6 +1620,12 @@ func (s *Server) handleAdminGameVersionDelete(w http.ResponseWriter, r *http.Req
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
+	s.gameVersionDeleteCore(w, &v, &g, uploadOwnerFromCtx(r))
+}
+
+// gameVersionDeleteCore 版本删除共享核心（管理端/商户端同链路，商户侧前置归属校验）：
+// 清清单行与版本行、删版本磁盘目录；被删版本为最新版时回退到剩余版本（无剩余则清空冗余）
+func (s *Server) gameVersionDeleteCore(w http.ResponseWriter, v *model.GameVersion, g *model.Game, operator string) {
 	store.DB.Where("version_id = ?", v.ID).Delete(&model.GameFile{})
 	store.DB.Delete(&v)
 	os.RemoveAll(filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, v.Version))
@@ -1592,19 +1634,19 @@ func (s *Server) handleAdminGameVersionDelete(w http.ResponseWriter, r *http.Req
 	// 而非按版本逻辑清空/置剩余版本号——否则 BT 清单版本号回退 "torrent" 占位且全部玩家
 	// installed 与清单不一致，种子未变却被误标"待更新"触发一轮无意义重装
 	if g.DownloadMethod == 2 {
-		s.gameTorrentMetaFill(&g, false) // 种子未换：latest_version 原值保留（含同日序号），仅重扫大小
-		store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": g.LatestVersion, "size_bytes": g.SizeBytes})
+		s.gameTorrentMetaFill(g, false) // 种子未换：latest_version 原值保留（含同日序号），仅重扫大小
+		store.DB.Model(g).Updates(map[string]interface{}{"latest_version": g.LatestVersion, "size_bytes": g.SizeBytes})
 	} else {
 		var rest model.GameVersion
 		if err := store.DB.Where("game_id = ?", g.ID).Order("id DESC").First(&rest).Error; err == nil {
 			var total int64
 			store.DB.Model(&model.GameFile{}).Select("COALESCE(SUM(size_bytes),0)").Where("version_id = ?", rest.ID).Scan(&total)
-			store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": rest.Version, "size_bytes": total})
+			store.DB.Model(g).Updates(map[string]interface{}{"latest_version": rest.Version, "size_bytes": total})
 		} else {
-			store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": "", "size_bytes": 0})
+			store.DB.Model(g).Updates(map[string]interface{}{"latest_version": "", "size_bytes": 0})
 		}
 	}
-	logger.Info("游戏版本删除: %s v%s, 操作人=%s", g.Name, v.Version, adminUserFromCtx(r))
+	logger.Info("游戏版本删除: %s v%s, 操作人=%s", g.Name, v.Version, operator)
 	adminJSON(w, map[string]interface{}{"ok": true})
 }
 
@@ -1900,7 +1942,7 @@ func (s *Server) handleAdminGameConfigPut(w http.ResponseWriter, r *http.Request
 	}
 	if len(feat) > 0 {
 		var cnt int64
-		store.DB.Model(&model.Game{}).Where("id IN ? AND status = 0", feat).Count(&cnt)
+		store.DB.Model(&model.Game{}).Where("id IN ? AND status = 0 AND audit_status IN ?", feat, []int8{model.GameAuditOfficial, model.GameAuditApproved}).Count(&cnt)
 		if int(cnt) != len(feat) {
 			adminFail(w, http.StatusBadRequest, "置顶推荐包含不存在或已下架的游戏")
 			return
@@ -1992,7 +2034,7 @@ func (s *Server) handleAdminGameSectionsPut(w http.ResponseWriter, r *http.Reque
 		}
 		if len(ids) > 0 {
 			var cnt int64
-			store.DB.Model(&model.Game{}).Where("id IN ? AND status = 0", ids).Count(&cnt)
+			store.DB.Model(&model.Game{}).Where("id IN ? AND status = 0 AND audit_status IN ?", ids, []int8{model.GameAuditOfficial, model.GameAuditApproved}).Count(&cnt)
 			if int(cnt) != len(ids) {
 				adminFail(w, http.StatusBadRequest, fmt.Sprintf("第 %d 个区块包含不存在或已下架的游戏", i+1))
 				return
