@@ -1289,6 +1289,15 @@ contextBridge.exposeInMainWorld('desktop', {
     overlaySettingsSet: function (s) {
         ipcRenderer.send('overlay:settings-set', s || {});
     },
+    // ===== 截图/录屏全局快捷键自定义（设置页「快捷键」分类；阶段二百九十六） =====
+    // get → {shot:{custom,label,ok}, rec:{custom,label,ok}}（custom=用户自定义展示标签，空=默认键位；
+    // ok=当前实际注册成功）；set({shot,rec}) 即时重注册并回传同构结果（占用/非法时 ok=false 供行内提示）
+    shortcutsGet: function () {
+        return ipcRenderer.invoke('shortcuts:get');
+    },
+    shortcutsSet: function (s) {
+        return ipcRenderer.invoke('shortcuts:set', s || {});
+    },
     // 显隐/热键状态广播（全窗口）：{open, enabled, hotkey, hotkeyOk, armed}
     onOverlayState: function (cb) {
         if (typeof cb !== 'function') return;

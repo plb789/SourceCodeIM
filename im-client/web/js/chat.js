@@ -1218,6 +1218,159 @@
     });
     if (settingsSubheadClose) settingsSubheadClose.addEventListener('click', settingsClose);
 
+    // ===== 阶段二百九十六：设置页「快捷键」分类（截图/录屏全局键自定义） =====
+    // 仅 PC 客户端显示（window.desktop.shortcutsGet 桥存在才有全局键能力；WEB/手机端隐藏入口，
+    // 手机端亦不入 SETTINGS_HOME_GROUPS 分组）。微信/QQ 同款按键录入：点「修改」进入捕获态，
+    // 直接按组合键录入，Enter/失焦保存、Esc 取消；结果由主进程回传（ok=false=被占用）行内提示，免系统弹窗
+    (function initSettingsHotkeys() {
+        var navBtn = document.querySelector('.settings-nav-item[data-view="hotkeys"]');
+        if (!navBtn) return;
+        if (!(window.desktop && window.desktop.shortcutsGet && window.desktop.shortcutsSet)) {
+            navBtn.classList.add('hidden'); // WEB 端隐藏「快捷键」入口
+            return;
+        }
+        var rows = {
+            shot: {
+                input: document.getElementById('settings-hotkey-shot-input'),
+                value: document.getElementById('settings-hotkey-shot-value'),
+                edit: document.getElementById('settings-hotkey-shot-edit'),
+                reset: document.getElementById('settings-hotkey-shot-reset'),
+                state: document.getElementById('settings-hotkey-shot-state')
+            },
+            rec: {
+                input: document.getElementById('settings-hotkey-rec-input'),
+                value: document.getElementById('settings-hotkey-rec-value'),
+                edit: document.getElementById('settings-hotkey-rec-edit'),
+                reset: document.getElementById('settings-hotkey-rec-reset'),
+                state: document.getElementById('settings-hotkey-rec-state')
+            }
+        };
+        var cur = { shot: { custom: '', label: '', ok: false }, rec: { custom: '', label: '', ok: false } };
+        var gameHk = ''; // 游戏内面板热键（overlay:settings 异步取，撞键软提示对比用）
+
+        // 组合键捕获（微信/QQ 同款，与游戏中心热键录入同口径）：Ctrl/Shift/Alt + 主键
+        function hkKeyLabel(e) {
+            var k = e.key;
+            if (k === ' ' || k === 'Spacebar') return 'Space';
+            if (k.length === 1) return k.toUpperCase(); // 字母/数字统一大写（globalShortcut 口径）
+            if (/^F\d{1,2}$/.test(k) || 'Tab,Home,End,PageUp,PageDown,Insert,Delete,Up,Down,Left,Right'.indexOf(k) >= 0) return k;
+            return ''; // 修饰键单按/其他系统键不作为主键
+        }
+        function hkCombo(e) {
+            var main = hkKeyLabel(e);
+            if (!main) return '';
+            var parts = [];
+            if (e.ctrlKey) parts.push('Ctrl');
+            if (e.shiftKey) parts.push('Shift');
+            if (e.altKey) parts.push('Alt');
+            parts.push(main);
+            return parts.join('+');
+        }
+        function showState(row, msg, isErr) {
+            if (!row.state) return;
+            if (!msg) { row.state.style.display = 'none'; return; }
+            row.state.textContent = msg;
+            row.state.classList.toggle('err', !!isErr);
+            row.state.style.display = '';
+        }
+        function renderRow(key) {
+            var row = rows[key], s = cur[key] || {};
+            if (!row || !row.value) return;
+            row.value.textContent = s.label || s.custom || '';
+            if (row.reset) row.reset.style.display = s.custom ? '' : 'none';
+            // 未生效（被占用/注册失败）：行内提示；空自定义且默认链全占用同样提示；
+            // 生效键与游戏内面板热键撞键：软提示不拦截（全局键与游戏注入热键两套机制，
+            // 同键在游戏内按下会两者同时触发——游戏中心热键编辑未做互斥校验，此处仅提示）
+            if (!s.ok) {
+                showState(row, s.custom
+                    ? I18N.t('快捷键 {key} 已被其他程序占用，当前未生效', { key: s.custom })
+                    : I18N.t('默认快捷键均被其他程序占用，当前未生效'), true);
+            } else if (s.custom && gameHk && (s.custom || s.label) === gameHk) {
+                showState(row, I18N.t('与游戏内面板热键相同，游戏内按下时两者都会触发'), false);
+            } else if (s.custom) {
+                showState(row, '');
+            }
+        }
+        function renderAll() { renderRow('shot'); renderRow('rec'); }
+        window.desktop.shortcutsGet().then(function (r) {
+            if (!r) return;
+            cur.shot = r.shot || cur.shot;
+            cur.rec = r.rec || cur.rec;
+            renderAll();
+        }).catch(function () { });
+        // 游戏内面板热键（软提示对比用；取不到置空即不提示，不影响主流程）
+        window.desktop.overlaySettingsGet && window.desktop.overlaySettingsGet().then(function (s) {
+            if (s && s.hotkey) { gameHk = s.hotkey; renderAll(); }
+        }).catch(function () { });
+
+        function exitEdit(key) {
+            var row = rows[key];
+            if (!row || !row.input) return;
+            row.input.style.display = 'none';
+            if (row.value) row.value.style.display = '';
+            if (row.edit) row.edit.style.display = '';
+        }
+        function save(key, v) {
+            v = (v || '').trim();
+            var row = rows[key];
+            var before = cur[key] || {};
+            exitEdit(key);
+            if (!v || v === before.custom) { renderRow(key); return; } // 空组合/未变化不提交
+            var req = { shot: undefined, rec: undefined };
+            req[key] = v; // 只提交当前行，另一键位由主进程沿用存量配置
+            window.desktop.shortcutsSet(req).then(function (r) {
+                if (!r) return;
+                if (r.error === 'conflict') { showState(rows[key], I18N.t('截图与录屏快捷键不能相同'), true); renderRow(key); return; }
+                if (r.error === 'invalid') { showState(rows[key], I18N.t('无效的快捷键组合'), true); renderRow(key); return; }
+                cur.shot = r.shot || cur.shot;
+                cur.rec = r.rec || cur.rec;
+                renderAll();
+                var s = r[key] || {};
+                if (s.ok) showToast(I18N.t('快捷键已更新：') + (s.label || v));
+                else showState(rows[key], I18N.t('快捷键 {key} 已被其他程序占用，当前未生效', { key: v }), true);
+            }).catch(function () {
+                showState(rows[key], I18N.t('保存失败，请重试'), true);
+            });
+        }
+        Object.keys(rows).forEach(function (key) {
+            var row = rows[key];
+            if (!row.input) return;
+            if (row.edit) row.edit.addEventListener('click', function () {
+                var s = cur[key] || {};
+                row.value.style.display = 'none';
+                row.edit.style.display = 'none';
+                row.input.style.display = '';
+                row.input.value = s.custom || s.label || '';
+                row.input.focus(); // 微信/QQ 同款：进入编辑即待捕获，直接按组合键录入
+            });
+            row.input.addEventListener('keydown', function (e) {
+                e.preventDefault(); // 捕获态吞掉一切按键（防 Tab 走焦点/Esc 关页）
+                e.stopPropagation();
+                if (e.key === 'Escape') { row.input.value = ''; exitEdit(key); renderRow(key); return; } // 取消
+                if (e.key === 'Enter') { save(key, row.input.value); return; } // 确认
+                var c = hkCombo(e);
+                if (c) row.input.value = c; // 实时显示组合（未含主键的修饰单按不更新）
+            });
+            row.input.addEventListener('blur', function () {
+                // 失焦自动保存（微信风格）：框内有新组合即生效
+                if (row.input.style.display !== 'none') save(key, row.input.value);
+            });
+            if (row.reset) row.reset.addEventListener('click', function () {
+                var req = { shot: undefined, rec: undefined };
+                req[key] = ''; // 空串=清除自定义回默认键位链
+                window.desktop.shortcutsSet(req).then(function (r) {
+                    if (!r) return;
+                    cur.shot = r.shot || cur.shot;
+                    cur.rec = r.rec || cur.rec;
+                    renderAll();
+                    showToast(I18N.t('已恢复默认快捷键') + (r[key] && r[key].label ? '：' + r[key].label : ''));
+                }).catch(function () {
+                    showState(rows[key], I18N.t('保存失败，请重试'), true);
+                });
+            });
+        });
+    })();
+
     settingsNavItems.forEach(function (b) {
         b.addEventListener('click', function () { settingsShowView(b.dataset.view); });
     });

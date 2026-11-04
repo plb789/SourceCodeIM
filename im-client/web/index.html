@@ -1619,6 +1619,12 @@
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm7.93 9h-3.98a15.65 15.65 0 0 0-1.38-6.03A8.02 8.02 0 0 1 19.93 11zM12 4.04c.83 1.2 1.87 3.46 2.22 6.96h-4.44c.35-3.5 1.39-5.76 2.22-6.96zM4.07 13h3.98c.15 2.26.62 4.29 1.38 6.03A8.02 8.02 0 0 1 4.07 13zm3.98-2H4.07a8.02 8.02 0 0 1 5.36-6.03A15.65 15.65 0 0 0 8.05 11zM12 19.96c-.83-1.2-1.87-3.46-2.22-6.96h4.44c-.35 3.5-1.39 5.76-2.22 6.96zm2.57-.93c.76-1.74 1.23-3.77 1.38-6.03h3.98a8.02 8.02 0 0 1-5.36 6.03z"/></svg>
                     <span>网络</span>
                 </button>
+                <!-- 阶段二百九十六：快捷键分类（截图/录屏全局快捷键自定义，微信/QQ 同款按键录入；
+                     仅 PC 客户端显示——无 desktop 桥的 WEB 端由 chat.js 隐藏入口，手机端不入分组） -->
+                <button class="settings-nav-item" data-view="hotkeys">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 12H4V7h16v10zM6 9h2v2H6V9zm0 4h2v2H6v-2zm3-4h2v2H9V9zm0 4h8v2H9v-2zm3-4h2v2h-2V9zm3 0h2v2h-2V9z"/></svg>
+                    <span>快捷键</span>
+                </button>
                 <!-- 阶段一百六十五：网盘挂载（WinFsp+rclone 盘符映射，阿里云盘挂载盘同原理；仅 PC 端可挂载） -->
                 <button class="settings-nav-item" data-view="drivemount">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4zm0 2h16v10H4V7zm2 2v2h12V9H6zm0 4v2h6v-2H6zm9.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/></svg>
@@ -1862,6 +1868,43 @@
                     <p class="settings-desc">开启后正在使用其他应用时收到邀请，接听画面直接弹出，无需点击通知。</p>
                     <button id="settings-call-overlay-btn" class="settings-btn">去开启悬浮窗</button>
                 </div>
+            </section>
+            <!-- 阶段二百九十六：快捷键分类（截图/录屏全局快捷键自定义，微信/QQ 同款按键录入；
+                 仅 PC 客户端显示，chat.js 按 desktop 桥存在与否控制入口显隐；复用 settings-hotkey-input 样式） -->
+            <section id="settings-view-hotkeys" class="settings-view hidden">
+                <h2 class="settings-title">快捷键</h2>
+                <h3 class="settings-subtitle">截图与录屏</h3>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">截图快捷键</div>
+                            <div class="settings-card-desc">全局截图快捷键，任意界面按下即可静默抓屏进入编辑（默认 Alt+A）。</div>
+                        </div>
+                        <div class="settings-hotkey-row">
+                            <input id="settings-hotkey-shot-input" class="settings-hotkey-input" style="display:none;" readonly placeholder="直接按组合键录入">
+                            <span id="settings-hotkey-shot-value" class="settings-hotkey-value"></span>
+                            <button id="settings-hotkey-shot-edit" class="settings-disk-path-btn">修改</button>
+                            <button id="settings-hotkey-shot-reset" class="settings-disk-path-btn" style="display:none;">恢复默认</button>
+                        </div>
+                    </div>
+                    <p id="settings-hotkey-shot-state" class="settings-hotkey-state" style="display:none;"></p>
+                </div>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">录屏快捷键</div>
+                            <div class="settings-card-desc">全局录屏快捷键：未录制时按下开始选区录制，录制中再按停止（默认 Ctrl+Alt+R）。</div>
+                        </div>
+                        <div class="settings-hotkey-row">
+                            <input id="settings-hotkey-rec-input" class="settings-hotkey-input" style="display:none;" readonly placeholder="直接按组合键录入">
+                            <span id="settings-hotkey-rec-value" class="settings-hotkey-value"></span>
+                            <button id="settings-hotkey-rec-edit" class="settings-disk-path-btn">修改</button>
+                            <button id="settings-hotkey-rec-reset" class="settings-disk-path-btn" style="display:none;">恢复默认</button>
+                        </div>
+                    </div>
+                    <p id="settings-hotkey-rec-state" class="settings-hotkey-state" style="display:none;"></p>
+                </div>
+                <p class="settings-desc">点击「修改」后直接按下组合键即可录入：Enter 或点击其他位置保存，Esc 取消。键位被其他程序占用时会在此提示，可另选组合或恢复默认；截图与录屏不能使用相同键位。</p>
             </section>
             <!-- 游戏内 Overlay 设置区（settings-view-game）已整体迁入游戏中心设置弹窗
                  「游戏」分栏（game-store.html #gsSetPaneGame），主设置页不再保留 -->

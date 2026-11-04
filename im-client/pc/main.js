@@ -392,8 +392,8 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 
 // 服务端地址（默认本地）
-//const SERVER_URL = 'http://127.0.0.1:2087/';
-const SERVER_URL = 'https://im.sxgyxny.com/';
+const SERVER_URL = 'http://127.0.0.1:2087/';
+//const SERVER_URL = 'https://im.sxgyxny.com/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
@@ -4676,15 +4676,174 @@ ipcMain.on('remote:bar-disconnect', function (e) {
 // ===== 阶段一百五十五：全局快捷键挂起/恢复（QQ 同款语义） =====
 // 控制端正在操作对方电脑时，本机 Alt+A/录屏键应让路——用户按键意图是发给对方电脑而非本机截图；
 // 观看窗开启（grant=control）即挂起，关闭/异常销毁即恢复（幂等，重复恢复无副作用）
+// 阶段二百九十六：键位支持用户自定义（设置页「快捷键」分类）——持久化 userData/shortcut-settings.json
+// {shot:'', rec:''}（空=走默认键位链），注册统一归口 registerShotRecShortcuts()：启动与设置改键共用，
+// 改键即时重注册免重启生效；remoteHotkeySuspend/Resume 改经该归口，改键发生在挂起期时恢复自动按新键位重挂
 var remoteHotkeySuspended = false;
-var recShortcutKey = ''; // 实际注册成功的录屏键位（Ctrl+Alt+R 或回退 Ctrl+Shift+R；空=未注册全局键）
+var recShortcutKey = ''; // 实际注册成功的录屏键位（自定义/Ctrl+Alt+R/回退 Ctrl+Shift+R；空=未注册全局键）
 var recShortcutLabel = recShortcutKey; // 快捷键展示标签（空串=无全局键，仅菜单入口可用）
-var shotShortcutKey = ''; // 实际注册成功的截图键位（Alt+A 或回退 Alt+Q；空=未注册全局键）
+var shotShortcutKey = ''; // 实际注册成功的截图键位（自定义/Alt+A/回退 Alt+Q；空=未注册全局键）
 var shotShortcutLabel = 'Alt+A'; // 截图键位展示标签（渲染层悬停提示/文案同步用，注册结果就绪后推送覆盖）
 // rec:shortcut 查询归口放模块加载期注册（原在 whenReady 尾部——渲染层早调用报
 // "No handler registered" 竞态错误，实测启动期 2026-10-19；读值为闭包运行期取最新）
 ipcMain.handle('rec:shortcut', function () { return recShortcutLabel; });
 ipcMain.handle('shot:shortcut', function () { return shotShortcutLabel; });
+
+// 快捷键自定义配置存取（与 game-download-settings.json 同款轻量 JSON 落盘模式）
+var shortcutStore = (function () {
+    var file = path.join(app.getPath('userData'), 'shortcut-settings.json');
+    var s = { shot: '', rec: '' };
+    try {
+        // strip BOM：外部工具（PowerShell UTF8 等）写入常带 BOM，JSON.parse 不容错
+        var o = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+        if (o && typeof o === 'object') {
+            if (typeof o.shot === 'string') s.shot = o.shot;
+            if (typeof o.rec === 'string') s.rec = o.rec;
+        }
+    } catch (e) { /* 首启/文件损坏回退默认键位 */ }
+    function save() { try { fs.writeFileSync(file, JSON.stringify(s, null, 2), 'utf8'); } catch (e) { } }
+    return {
+        get: function () { return s; },
+        set: function (k, v) { s[k] = v; save(); }
+    };
+})();
+
+// 展示标签（"Ctrl+Alt+R"）→ Electron accelerator（"Control+Alt+R"）。
+// 仅接受 修饰键+单主键 组合（字母/数字/F1~F24/方向导航键），垃圾值返回空串由调用侧拒绝，
+// 防止把非法 accelerator 喂给 globalShortcut.register 抛异常
+function accelFromLabel(label) {
+    var parts = String(label || '').split('+').map(function (p) { return p.trim(); }).filter(Boolean);
+    if (!parts.length) return '';
+    var mods = { ctrl: 'Control', control: 'Control', shift: 'Shift', alt: 'Alt', win: 'Super', meta: 'Super', cmd: 'Super', super: 'Super' };
+    var navKeys = ['Space', 'Tab', 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown', 'Insert', 'Delete'];
+    var out = [], key = '';
+    for (var i = 0; i < parts.length; i++) {
+        var p = parts[i], low = p.toLowerCase();
+        if (mods[low]) { if (out.indexOf(mods[low]) < 0) out.push(mods[low]); continue; }
+        if (key) return ''; // 双主键组合无效
+        if (/^[a-z0-9]$/.test(low)) key = low.toUpperCase();
+        else if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(p)) key = p.toUpperCase();
+        else if (navKeys.indexOf(low.charAt(0).toUpperCase() + low.slice(1)) >= 0) key = low.charAt(0).toUpperCase() + low.slice(1);
+        else return '';
+    }
+    // 必须带修饰键：裸主键（如单按 A）会全局劫持正常打字，拒绝注册
+    if (!out.length) return '';
+    return key ? out.join('+') + '+' + key : '';
+}
+
+// 全局截图/录屏键触发入口（模块层归口：boot 注册与设置改键重注册共用同一 handler）
+function shotGlobalTrigger() {
+    mainLog('[hotkey] 截图快捷键触发');
+    captureWithHide().then(function (dataUrl) {
+        // 抓屏结果必须回投渲染层打开编辑器——渲染层 onGlobalShot 监听 'shot:global-result'，
+        // 而主进程原实现从不发送（历史重构遗留断链）：抓屏成功但结果被丢弃，编辑器永不弹出
+        // （main.log 实测 2026-11-01：快捷键触发后无任何后续）。失败仍补 toast
+        if (!dataUrl) {
+            pushMainToast('截图失败，请重试');
+            return;
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('shot:global-result', dataUrl);
+        }
+    }).catch(function (err) {
+        console.warn('全局截图失败:', err);
+        mainLog('[capture] 全局截图异常: ' + (err && err.message));
+        pushMainToast('截图失败，请重试');
+    });
+}
+function recGlobalTrigger() {
+    if (!mainWindow) return;
+    mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
+}
+
+// 键位注册统一归口：先注销现役键位，再按用户自定义（无自定义走默认回退链）注册。
+// 挂起态（远控中）仅更新键位/标签不实际注册——恢复时 remoteHotkeyResume 按最新配置重挂
+function registerShotRecShortcuts() {
+    var st = shortcutStore.get();
+    if (shotShortcutKey) { try { globalShortcut.unregister(shotShortcutKey); } catch (e) { } }
+    if (recShortcutKey) { try { globalShortcut.unregister(recShortcutKey); } catch (e) { } }
+    shotShortcutKey = '';
+    recShortcutKey = '';
+    shotShortcutLabel = st.shot || 'Alt+A';
+    recShortcutLabel = st.rec || 'Ctrl+Alt+R';
+    if (remoteHotkeySuspended) return;
+    // 截图键：自定义优先（占用即失败不回退——回退会静默改键违背用户预期），默认链 Alt+A → Alt+Q
+    if (st.shot) {
+        var acc = accelFromLabel(st.shot);
+        if (acc) {
+            try { if (globalShortcut.register(acc, shotGlobalTrigger)) { shotShortcutKey = acc; } } catch (e) { }
+        }
+        if (!shotShortcutKey) console.warn('截图自定义快捷键注册失败（' + st.shot + ' 被占用，仅按钮入口可用）');
+    } else {
+        shotShortcutKey = 'Alt+A';
+        shotShortcutLabel = 'Alt+A';
+        var shotOk = globalShortcut.register('Alt+A', shotGlobalTrigger);
+        if (!shotOk) {
+            shotShortcutLabel = 'Alt+Q';
+            shotShortcutKey = 'Alt+Q';
+            shotOk = globalShortcut.register('Alt+Q', shotGlobalTrigger);
+        }
+        if (!shotOk) {
+            shotShortcutLabel = '';
+            shotShortcutKey = '';
+            console.warn('截图全局快捷键注册失败（Alt+A 与 Alt+Q 均被占用，仅按钮入口可用）');
+        }
+    }
+    // 录屏键：自定义优先，默认链 Ctrl+Alt+R → Ctrl+Shift+R（实测本机 Ctrl+Alt+R 被其他程序长期占用）
+    if (st.rec) {
+        var racc = accelFromLabel(st.rec);
+        if (racc) {
+            try { if (globalShortcut.register(racc, recGlobalTrigger)) { recShortcutKey = racc; } } catch (e) { }
+        }
+        if (!recShortcutKey) console.warn('录屏自定义快捷键注册失败（' + st.rec + ' 被占用，仅菜单入口可用）');
+    } else {
+        recShortcutLabel = 'Ctrl+Alt+R';
+        recShortcutKey = 'Control+Alt+R';
+        var recShortcutOk = globalShortcut.register('Control+Alt+R', recGlobalTrigger);
+        if (!recShortcutOk) {
+            recShortcutLabel = 'Ctrl+Shift+R';
+            recShortcutKey = 'Control+Shift+R';
+            recShortcutOk = globalShortcut.register('Control+Shift+R', recGlobalTrigger);
+        }
+        if (!recShortcutOk) {
+            recShortcutLabel = '';
+            recShortcutKey = '';
+            console.warn('录屏全局快捷键注册失败（Ctrl+Alt+R 与 Ctrl+Shift+R 均被占用，仅菜单入口可用）');
+        }
+    }
+    // 键位注册就绪后主动推送渲染层（渲染层启动即拉取可能早于本注册——启动竞态；推送兜底保证文案最终一致）
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('shot:shortcut-label', shotShortcutLabel);
+        mainWindow.webContents.send('rec:shortcut-label', recShortcutLabel);
+    }
+}
+
+// 设置页「快捷键」读写 IPC（invoke 形态：注册结果同步回渲染层供行内冲突提示，免系统弹窗）
+ipcMain.handle('shortcuts:get', function () {
+    var st = shortcutStore.get();
+    return {
+        shot: { custom: st.shot, label: shotShortcutLabel, ok: !!shotShortcutKey },
+        rec: { custom: st.rec, label: recShortcutLabel, ok: !!recShortcutKey }
+    };
+});
+ipcMain.handle('shortcuts:set', function (e, req) {
+    req = req || {};
+    var st = shortcutStore.get();
+    var shot = String(req.shot === undefined ? st.shot : req.shot).trim();
+    var rec = String(req.rec === undefined ? st.rec : req.rec).trim();
+    if (shot && rec && shot === rec) return { error: 'conflict' }; // 两键互占，整体拒绝
+    if (shot && !accelFromLabel(shot)) return { error: 'invalid', key: 'shot' };
+    if (rec && !accelFromLabel(rec)) return { error: 'invalid', key: 'rec' };
+    shortcutStore.set('shot', shot);
+    shortcutStore.set('rec', rec);
+    registerShotRecShortcuts(); // 即时重注册（挂起态仅更新配置，恢复时自动按新键位生效）
+    var st2 = shortcutStore.get();
+    return {
+        shot: { custom: st2.shot, label: shotShortcutLabel, ok: !!shotShortcutKey },
+        rec: { custom: st2.rec, label: recShortcutLabel, ok: !!recShortcutKey }
+    };
+});
+
 function remoteHotkeySuspend() {
     if (remoteHotkeySuspended) return;
     remoteHotkeySuspended = true;
@@ -4694,21 +4853,7 @@ function remoteHotkeySuspend() {
 function remoteHotkeyResume() {
     if (!remoteHotkeySuspended) return;
     remoteHotkeySuspended = false;
-    if (shotShortcutKey) {
-        try {
-            globalShortcut.register(shotShortcutKey, function () {
-                captureWithHide().catch(function (err) { console.warn('全局截图失败:', err); });
-            });
-        } catch (e) { }
-    }
-    if (recShortcutKey) {
-        try {
-            globalShortcut.register(recShortcutKey, function () {
-                if (!mainWindow) return;
-                mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
-            });
-        } catch (e) { }
-    }
+    registerShotRecShortcuts(); // 按当前（可能是挂起期改过的最新）键位重挂
 }
 
 // ===== 阶段一百五十一补丁：会议共享期间窗口内容保护（防"窗口套窗口"递归画面） =====
@@ -5707,69 +5852,10 @@ app.whenReady().then(async function () {
     // Alt+A 全局快捷键：任意界面静默抓屏并推送渲染层进入截图编辑器（微信同款快捷键）
     // 阶段三十八：改走 captureWithHide——先让主窗口消失再抓屏（QQ 同款），可截到被自己窗口挡住的内容；
     // 快照经 shot:prepare 推送渲染层预加载冻结编辑器，就绪后揭幕（此处不再单独推送，避免重复打开）
-    // 阶段二百九十四：Alt+A 被占用时自动回退 Alt+Q（微信默认占用 Alt+A 截图——同机共存即注册恒失败，
-    // 用户按键"没反应"且无提示，实测 2026-11-01）；实际键位落盘日志 + 推送渲染层同步悬停提示
-    var shotHotkeyHandler = function () {
-        mainLog('[hotkey] 截图快捷键触发');
-        captureWithHide().then(function (dataUrl) {
-            // 抓屏结果必须回投渲染层打开编辑器——渲染层 onGlobalShot 监听 'shot:global-result'，
-            // 而主进程原实现从不发送（历史重构遗留断链）：抓屏成功但结果被丢弃，编辑器永不弹出
-            // （main.log 实测 2026-11-01：快捷键触发后无任何后续）。失败仍补 toast
-            if (!dataUrl) {
-                pushMainToast('截图失败，请重试');
-                return;
-            }
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('shot:global-result', dataUrl);
-            }
-        }).catch(function (err) {
-            console.warn('全局截图失败:', err);
-            mainLog('[capture] 全局截图异常: ' + (err && err.message));
-            pushMainToast('截图失败，请重试');
-        });
-    };
-    shotShortcutLabel = 'Alt+A';
-    shotShortcutKey = 'Alt+A';
-    var shotOk = globalShortcut.register('Alt+A', shotHotkeyHandler);
-    if (!shotOk) {
-        shotShortcutLabel = 'Alt+Q';
-        shotShortcutKey = 'Alt+Q';
-        shotOk = globalShortcut.register('Alt+Q', shotHotkeyHandler);
-    }
-    if (!shotOk) {
-        shotShortcutLabel = '';
-        shotShortcutKey = '';
-        console.warn('截图全局快捷键注册失败（Alt+A 与 Alt+Q 均被占用，仅按钮入口可用）');
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('shot:shortcut-label', shotShortcutLabel);
-    }
-
-    // 阶段一百三十九：录屏全局快捷键（QQ 同款二段语义）——未录制时触发录屏流程，录制中再按=停止；
-    // Ctrl+Alt+R 被占用时自动回退 Ctrl+Shift+R（实测本机 Ctrl+Alt+R 被其他程序长期占用，注册恒失败）；
-    // 两个都失败仅告警（截图按钮下拉菜单"录屏"项仍可用），实际生效键位经 rec:shortcut 供菜单文案同步
-    var recHotkeyHandler = function () {
-        if (!mainWindow) return;
-        mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
-    };
-    recShortcutLabel = 'Ctrl+Alt+R'; // 赋值顶层变量（声明已提模块层，func 局部不可再 var 重声明）
-    recShortcutKey = 'Control+Alt+R'; // 模块层记录实际生效键位（快捷键挂起/恢复用）
-    var recShortcutOk = globalShortcut.register('Control+Alt+R', recHotkeyHandler);
-    if (!recShortcutOk) {
-        recShortcutLabel = 'Ctrl+Shift+R';
-        recShortcutKey = 'Control+Shift+R';
-        recShortcutOk = globalShortcut.register('Control+Shift+R', recHotkeyHandler);
-    }
-    if (!recShortcutOk) {
-        recShortcutLabel = '';
-        recShortcutKey = '';
-        console.warn('录屏全局快捷键注册失败（Ctrl+Alt+R 与 Ctrl+Shift+R 均被占用，仅菜单入口可用）');
-    }
-    // 键位注册就绪后主动推送渲染层（渲染层启动即拉取可能早于本注册——启动竞态，拉到空串后
-    // 菜单"录屏"项热键文案整段隐藏，实测 2026-11-01；推送兜底保证文案最终一致）
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('rec:shortcut-label', recShortcutLabel);
-    }
+    // 阶段二百九十六：注册统一归口 registerShotRecShortcuts()（模块层）——读取用户自定义键位
+    //（shortcut-settings.json，设置页「快捷键」分类改写），无自定义走默认回退链（Alt+A→Alt+Q、
+    // Ctrl+Alt+R→Ctrl+Shift+R）；实际键位落盘日志 + 推送渲染层同步悬停提示
+    registerShotRecShortcuts();
     var elevatedFlag = '-';
     try {
         const sh = require('koffi').load('shell32.dll');

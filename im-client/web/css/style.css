@@ -13151,6 +13151,39 @@ html.m .ua-form-row .modal-input {
     border-color: var(--primary, #07c160);
 }
 
+/* 阶段二百九十六：设置页「快捷键」分类（截图/录屏全局键自定义；跟随主题变量） */
+.settings-hotkey-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* 当前键位展示（未进入编辑态时替代输入框；等宽字体对齐组合键观感） */
+.settings-hotkey-value {
+    font-size: 12px;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    color: var(--text, #333);
+    background: var(--hover, #f5f5f5);
+    border-radius: 6px;
+    padding: 4px 10px;
+    white-space: nowrap;
+}
+
+/* 键位状态行内提示（占用/已更新等；不弹系统弹窗，跟随主题色弱化呈现） */
+.settings-hotkey-state {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    background: var(--hover, #f5f5f5);
+    color: var(--text-secondary, #888);
+}
+
+.settings-hotkey-state.err {
+    color: #e64340;
+}
+
 /* 阶段一百五十九补：自绘滑块开关（微信同款，替代网络页原生勾选框；跟随主题色，关闭态用边框色） */
 .slide-switch {
     flex: none;
