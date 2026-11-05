@@ -1449,6 +1449,13 @@
                     </select>
                 </div>
                 <span class="admin-field-hint">积分价格：用户从商店获取游戏时从其积分钱包扣除（0=免费），移出游戏库全额退还</span>
+                <!-- 游戏归属（阶段二百九十七）：官方=平台自运营免审；选商户账号保存即转移归属——
+                     转移后游戏回待审核（玩家端暂不可见），商户管理「游戏审核」通过后自动重新上架；
+                     新建游戏固定官方（服务端强制），该行仅编辑态显示 -->
+                <div class="gm-form-row" id="gm-owner-row" style="display:none;">
+                    <select id="gm-f-owner" class="admin-input gm-num-input" title="官方=平台自运营（免审）；选择商户即转移归属，保存后回待审核，审核通过自动重新上架"></select>
+                    <span class="admin-field-hint" style="flex:1;">转移归属到商户后游戏将回待审核（玩家端暂不可见），在「商户管理-游戏审核」通过后自动重新上架；转回官方即时恢复玩家端可见</span>
+                </div>
                 <!-- 上传种子行：仅下载方式=「BT（上传种子）」时使用（自制 .torrent 直发客户端；JS 按选中方式显隐） -->
                 <div class="gm-form-row hidden" id="gm-torrent-row">
                     <button id="gm-torrent-btn" class="admin-btn small" type="button">上传种子</button>

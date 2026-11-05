@@ -5490,6 +5490,9 @@
     var gmCancelFlag = false; // 取消标记（当前分片结束即停止后续）
     var gmAbort = null;       // 当前分片 fetch 的 AbortController（取消即时断开）
     var gmStartedIds = [];    // 本批已开始分片上传的 upload_id（取消/失败时统一 cancel 清临时分片）
+    // ===== 游戏归属（阶段二百九十七）：编辑态下拉（官方/商户账号），保存随表单提交 owner_username =====
+    var gmOwnerLoaded = false; // 商户下拉选项已拉取标记（一次拉取缓存复用，重开表单不重复请求）
+    var gmOwnerCur = '';       // 当前游戏真实归属（库内值；下拉加载失败时保底回显与提交，防误转官方）
 
     // ===== 列表 =====
     function gmLoadList() {
@@ -5968,6 +5971,8 @@
         $('gm-f-status').value = d ? String(d.status === 1 ? 1 : 0) : '0';
         // 下载方式三态回填（0=HTTP 直连 / 1=BT·生成种子 / 2=BT·上传种子）
         $('gm-f-dlmethod').value = d ? String(d.download_method === 2 ? 2 : (d.download_method === 1 ? 1 : 0)) : '0';
+        // 游戏归属下拉回填（编辑态显示；新建态隐藏——服务端创建一律官方）
+        gmOwnerBackfill(d);
         // 上传种子回填（编辑时仅文件名；种子内元信息在本次上传时才有，编辑回填不复算）
         gmTorrentPath = d ? (d.torrent_path || '') : '';
         gmTorrentMeta = '';
@@ -6021,6 +6026,53 @@
         // 页内表单：编辑时滚动定位到表单卡（新建/编辑同卡，不再有弹窗开合）
         var card = $('gm-edit-card');
         if (card) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+
+    // 游戏归属下拉回填（阶段二百九十七；编辑态：官方 + 商户账号；新建态隐藏——服务端创建一律官方）。
+    // 商户列表拉取一次缓存复用；无论加载成功与否，先同步注入「当前归属」兜底选项，
+    // 保证显示与提交都落在库内原值（防商户列表拉取失败时误把商户游戏转回官方）
+    function gmOwnerBackfill(d) {
+        var row = $('gm-owner-row'), sel = $('gm-f-owner');
+        if (!row || !sel) return;
+        gmOwnerCur = d ? (d.owner_username || '') : '';
+        if (!d) { row.style.display = 'none'; sel.value = ''; return; } // 新建态：固定官方
+        row.style.display = '';
+        var ensureCur = function () {
+            if (gmOwnerCur && !sel.querySelector('option[value="' + gmOwnerCur + '"]')) {
+                var o = document.createElement('option');
+                o.value = gmOwnerCur;
+                o.textContent = gmOwnerCur + '（当前归属）';
+                sel.appendChild(o);
+            }
+            sel.value = gmOwnerCur;
+        };
+        sel.innerHTML = '<option value="">官方</option>';
+        ensureCur();
+        if (gmOwnerLoaded) return;
+        api('GET', '/admin/api/merchants?size=100').then(function (r) {
+            if (!r.ok) return; // 失败保留「官方+当前归属」兜底项，下拉下次打开重试
+            var opts = document.createElement('option');
+            opts.value = '';
+            opts.textContent = '官方';
+            sel.innerHTML = '';
+            sel.appendChild(opts);
+            var found = !gmOwnerCur;
+            ((r.data && r.data.list) || []).forEach(function (m) {
+                if (m.username === gmOwnerCur) found = true;
+                var o = document.createElement('option');
+                o.value = m.username;
+                o.textContent = m.username + (m.name ? '（' + m.name + '）' : '');
+                sel.appendChild(o);
+            });
+            if (!found) {
+                var o = document.createElement('option');
+                o.value = gmOwnerCur;
+                o.textContent = gmOwnerCur + '（当前归属）';
+                sel.appendChild(o);
+            }
+            sel.value = gmOwnerCur;
+            gmOwnerLoaded = true;
+        }).catch(function () { /* 失败保留兜底项 */ });
     }
 
     // 种子体积展示（B/KB/MB/GB 自适应，服务端回传 info 内文件总字节）
@@ -6695,6 +6747,11 @@
             status: parseInt($('gm-f-status').value, 10) || 0,
             download_method: dlmethod,
             torrent_path: gmTorrentPath, // 下载方式=2 必填（服务端二次校验存在性）；其余方式保留/不填均可
+            // 游戏归属（编辑态下拉：官方/商户账号；新建态恒空=官方，服务端创建强制官方）。
+            // owner_transfer=true 为转移显式开关：仅本通道（编辑表单保存）允许变更归属——
+            // 上下架全量回写（gmBuildPayload）与旧版前端缓存不带开关，服务端视为不动归属，防混布窗口期误清
+            owner_username: $('gm-f-owner').value,
+            owner_transfer: true,
             launch_name: $('gm-f-launch-name').value.trim(),
             launch_exe: $('gm-f-launch-exe').value.trim(),
             launch_args: $('gm-f-launch-args').value.trim(),
@@ -6755,6 +6812,7 @@
             sort: d.sort || 0,
             download_method: (d.download_method === 2 ? 2 : (d.download_method === 1 ? 1 : 0)), // 全量回写：防上架/下架切换把 BT 游戏重置为 HTTP
             torrent_path: d.torrent_path || '', // 全量回写：防状态切换丢失已上传种子关联
+            owner_username: d.owner_username || '', // 归属全量回写：服务端仅在显式 owner_transfer=true 时才评估变更，本通道（上下架）恒不携带=绝不动归属
             status: status,
             // 启动配置全量回写（列表/详情含字段）：防上架/下架切换时清空
             launch_name: d.launch_name || '',

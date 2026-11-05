@@ -717,6 +717,9 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	item["recharge_rate"] = g.RechargeRate
 	item["recharge_tiers"] = g.RechargeTiers
 	item["recharge_daily_max"] = g.RechargeDailyMax
+	// 归属/审核态回填（管理端编辑弹窗「游戏归属」下拉；与列表列同语义：空=官方，非空=商户账号）
+	item["owner_username"] = g.OwnerUsername
+	item["audit_status"] = g.AuditStatus
 	adminJSON(w, item)
 }
 
@@ -736,6 +739,10 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		TorrentPath string `json:"torrent_path"`
 		SavePaths   string `json:"save_paths"`
 		SaveExclude string `json:"save_exclude"`
+		// OwnerTransfer 归属转移显式开关（阶段二百九十七补丁）：仅新版前端编辑表单保存时携带 true。
+		// 缺省 false=完全不动归属——旧版前端缓存（payload 不带 owner_username）与上下架全量回写
+		// 通道在混布窗口期不会把商户游戏误判为"转官方"清掉归属（实测推演踩坑，防御性收口）
+		OwnerTransfer bool `json:"owner_transfer"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "参数错误")
@@ -862,8 +869,40 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		// BT·上传种子元信息全量回写（种子重扫结果）：换新种子保存即更新大小与版本日期
 		"size_bytes": u.SizeBytes, "latest_version": u.LatestVersion,
 	}
-	// 管理员代改商户游戏对外字段 → 回待审核（与商户侧编辑同语义；官方游戏 owner 空，不受影响）
-	if g.OwnerUsername != "" {
+	// 归属转移（受控放开，阶段二百九十七）：仅当请求携带显式开关 owner_transfer=true 才评估归属变更
+	//（仅新版前端编辑表单保存时携带）——u.OwnerUsername 随 model.Game 嵌入解码，与库内值相等视为
+	// 未变更（表单全量回写零影响）：
+	//   目标空 = 转官方：清审核字段回官方免审，玩家端即时恢复可见；
+	//   目标非空 = 转商户：目标必须是 users.role=2 商户账号（不存在/非商户整单拒绝并提示），
+	//   转移即回待审核——玩家侧过滤墙只放行 audit IN (0,2)，官方转商户后游戏即时从玩家端隐藏，
+	//   商户管理「游戏审核」通过后自动重新上架（商户后台按 owner 过滤，转移后立即可见可编辑）
+	ownTarget := strings.TrimSpace(u.OwnerUsername)
+	if req.OwnerTransfer && ownTarget != g.OwnerUsername {
+		if ownTarget == "" {
+			updates["owner_username"] = ""
+			updates["audit_status"] = model.GameAuditOfficial
+			updates["audit_remark"] = ""
+			// audit_time 清 NULL 须用显式表达式：GORM map 更新对裸 nil 跳过赋值（实测踩坑）
+			updates["audit_time"] = gorm.Expr("NULL")
+			updates["audited_by"] = ""
+			logger.Info("游戏转官方: %s (%s), 原归属=%s, 操作人=%s", u.Name, g.Slug, g.OwnerUsername, adminUserFromCtx(r))
+		} else {
+			var mCnt int64
+			store.DB.Model(&model.User{}).Where("username = ? AND role = ?", ownTarget, 2).Count(&mCnt)
+			if mCnt == 0 {
+				adminFail(w, http.StatusBadRequest, "归属目标账号不存在或不是商户账号（请在商户管理中先创建）")
+				return
+			}
+			nowOwn := time.Now()
+			updates["owner_username"] = ownTarget
+			updates["audit_status"] = model.GameAuditPending
+			updates["audit_remark"] = ""
+			updates["audit_time"] = &nowOwn
+			updates["audited_by"] = ""
+			logger.Info("游戏归属转移: %s (%s), %s → %s, 操作人=%s", u.Name, g.Slug, g.OwnerUsername, ownTarget, adminUserFromCtx(r))
+		}
+	} else if g.OwnerUsername != "" {
+		// 管理员代改商户游戏对外字段（归属未变）→ 回待审核（与商户侧编辑同语义；官方游戏不受影响）
 		now := time.Now()
 		updates["audit_status"] = model.GameAuditPending
 		updates["audit_remark"] = ""

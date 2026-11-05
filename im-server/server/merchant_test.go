@@ -505,6 +505,94 @@ func TestMerchantVersionOwnership(t *testing.T) {
 	_ = v
 }
 
+// TestAdminGameOwnershipTransfer 管理端编辑接口归属转移（阶段二百九十七）：
+// 官方→商户（回待审核）/ 商户→官方（清审核回免审）/ 非商户目标拒绝 / 归属未变编辑不误清
+func TestAdminGameOwnershipTransfer(t *testing.T) {
+	merchantTestCleanup(t)
+	merchantTestSeed(t, "mtest_own", 0, 100)
+	t.Cleanup(func() { merchantTestCleanup(t) })
+	s := dbwServer(t)
+	// 官方测试游戏（owner 空、免审、上架；slug mtest- 前缀供 cleanup 精确回收）
+	g := model.Game{Slug: "mtest-official", Name: "官方转移测试", AuditStatus: model.GameAuditOfficial, Status: 0, GameSecret: gameRandomSecret()}
+	if err := store.DB.Create(&g).Error; err != nil {
+		t.Fatalf("官方测试游戏创建失败：%v", err)
+	}
+
+	// ① 官方 → 商户（显式开关 owner_transfer=true，同新版前端编辑表单口径）：owner 落库 + 回待审核
+	body, _ := json.Marshal(map[string]interface{}{"name": "官方转移测试", "owner_username": "mtest_own", "owner_transfer": true})
+	req := httptest.NewRequest("PUT", "/admin/api/game/"+fmt.Sprint(g.ID), bytes.NewReader(body))
+	req.SetPathValue("id", fmt.Sprint(g.ID))
+	rec := httptest.NewRecorder()
+	s.handleAdminGameUpdate(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("官方转商户应 200：%d %s", rec.Code, rec.Body.String())
+	}
+	store.DB.First(&g, g.ID)
+	if g.OwnerUsername != "mtest_own" || g.AuditStatus != model.GameAuditPending {
+		t.Fatalf("转商户后应 owner=mtest_own 且待审核：%+v", g)
+	}
+
+	// ② 归属未变的编辑（管理员代改对外字段）→ 保持回待审核语义，owner 不丢
+	body, _ = json.Marshal(map[string]interface{}{"name": "官方转移测试V2", "owner_username": "mtest_own", "owner_transfer": true})
+	req = httptest.NewRequest("PUT", "/admin/api/game/"+fmt.Sprint(g.ID), bytes.NewReader(body))
+	req.SetPathValue("id", fmt.Sprint(g.ID))
+	rec = httptest.NewRecorder()
+	s.handleAdminGameUpdate(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("归属未变编辑应 200：%d %s", rec.Code, rec.Body.String())
+	}
+	store.DB.First(&g, g.ID)
+	if g.OwnerUsername != "mtest_own" || g.AuditStatus != model.GameAuditPending || g.Name != "官方转移测试V2" {
+		t.Fatalf("归属未变编辑应保持商户归属+待审核：%+v", g)
+	}
+
+	// ②补 混布兼容：不带 owner_transfer 开关（旧版前端缓存/上下架全量回写口径）→ 归属绝不变更，
+	//   即便 payload 缺失 owner_username（解码为空串）也不得误判为"转官方"清掉归属
+	body, _ = json.Marshal(map[string]interface{}{"name": "官方转移测试V2"})
+	req = httptest.NewRequest("PUT", "/admin/api/game/"+fmt.Sprint(g.ID), bytes.NewReader(body))
+	req.SetPathValue("id", fmt.Sprint(g.ID))
+	rec = httptest.NewRecorder()
+	s.handleAdminGameUpdate(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("无开关编辑应 200：%d %s", rec.Code, rec.Body.String())
+	}
+	var g3 model.Game // 全新结构体变量回读（复用旧变量时指针字段 NULL 回填有残留，实测踩坑）
+	store.DB.First(&g3, g.ID)
+	if g3.OwnerUsername != "mtest_own" || g3.AuditStatus != model.GameAuditPending {
+		t.Fatalf("无开关编辑不得变更归属：%+v", g3)
+	}
+
+	// ③ 目标账号不是商户（role=0）→ 整单 400，归属不变
+	body, _ = json.Marshal(map[string]interface{}{"name": "官方转移测试V2", "owner_username": "mtest_noperm", "owner_transfer": true})
+	req = httptest.NewRequest("PUT", "/admin/api/game/"+fmt.Sprint(g.ID), bytes.NewReader(body))
+	req.SetPathValue("id", fmt.Sprint(g.ID))
+	rec = httptest.NewRecorder()
+	s.handleAdminGameUpdate(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("非商户目标应 400，实得 %d：%s", rec.Code, rec.Body.String())
+	}
+	store.DB.First(&g, g.ID)
+	if g.OwnerUsername != "mtest_own" {
+		t.Fatalf("拒绝后归属应不变：%+v", g)
+	}
+
+	// ④ 商户 → 官方：owner 清空 + 审核字段归官方免审
+	body, _ = json.Marshal(map[string]interface{}{"name": "官方转移测试V2", "owner_username": "", "owner_transfer": true})
+	req = httptest.NewRequest("PUT", "/admin/api/game/"+fmt.Sprint(g.ID), bytes.NewReader(body))
+	req.SetPathValue("id", fmt.Sprint(g.ID))
+	rec = httptest.NewRecorder()
+	s.handleAdminGameUpdate(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("商户转官方应 200：%d %s", rec.Code, rec.Body.String())
+	}
+	// 回读统一用全新结构体变量（复用旧变量时 GORM 对已置值指针字段的 NULL 回填存在残留，实测踩坑）
+	var g4 model.Game
+	store.DB.First(&g4, g.ID)
+	if g4.OwnerUsername != "" || g4.AuditStatus != model.GameAuditOfficial || g4.AuditTime != nil || g4.AuditedBy != "" {
+		t.Fatalf("转官方后应清归属+审核字段归零：%+v", g4)
+	}
+}
+
 func TestGatewayPackageBuild(t *testing.T) {
 	exe := ""
 	for _, p := range gatewayExeCandidates() {
