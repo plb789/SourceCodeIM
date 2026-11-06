@@ -124,16 +124,41 @@
     function loadMine() {
         if (!u()) return;
         if (isPC()) {
-            window.desktop.rcGetInstallInfo().then(function (info) {
-                if (!info || !info.install_uuid) { renderMine(null, T('本机标识获取失败')); return; }
-                apiPost('device/register', { install_uuid: info.install_uuid, device_name: info.device_name || '' }, function (err) {
-                    fetchMy(err ? null : info.install_uuid);
-                });
-            }, function () { fetchMy(null); });
+            rcRegister(function (err, info) {
+                if (!info) { renderMine(null, T('本机标识获取失败')); return; }
+                fetchMy(err ? null : info.install_uuid);
+            });
         } else {
             fetchMy(null);
         }
     }
+
+    // 被控端引擎能力版本：服务端 rc_connect 据此拒绝无被控能力的旧客户端（否则控制端会空等"连接中"）
+    var RC_CLIENT_VER = 1;
+    var rcHbBusy = false;
+
+    // 本机设备心跳：同机重装/换机/双开会让 install_uuid 变化，服务端按 (username, install_uuid)
+    // 各插一行 → 面板出现多张同名设备卡，旧ID对应的电脑已不存在但账号级"在线"仍显示在线，
+    // 用户（或被连接方）选到失效ID时被控端静默过滤 rc_ready，控制端永久"连接中"。
+    // 服务端已改为按 last_seen 判定设备级在线：登录后每 60s 上报一次 register，旧行无心跳即离线。
+    function rcRegister(cb) {
+        if (!u() || !isPC()) { if (cb) cb(null); return; }
+        window.desktop.rcGetInstallInfo().then(function (info) {
+            if (!info || !info.install_uuid) { if (cb) cb(null); return; }
+            apiPost('device/register', {
+                install_uuid: info.install_uuid,
+                device_name: info.device_name || '',
+                rc_ver: RC_CLIENT_VER
+            }, function (err) { if (cb) cb(err, info); });
+        }, function () { if (cb) cb(null); });
+    }
+    function rcHeartbeat() {
+        if (rcHbBusy || !u() || !isPC()) return;
+        rcHbBusy = true;
+        rcRegister(function () { rcHbBusy = false; });
+    }
+    setInterval(rcHeartbeat, 60000);
+    setTimeout(rcHeartbeat, 3000);
     function fetchMy(myInstallUuid) {
         apiGet('device/my', function (err, data) {
             if (err) { renderMine(null, err.message); return; }
@@ -165,7 +190,20 @@
         }
         mineEmpty.classList.add('hidden');
         var now = Math.floor(Date.now() / 1000);
-        items.forEach(function (d) {
+        // 本机卡片置顶：同一台电脑重装/换机后可能残留多条设备行（不同 install_uuid），
+        // 置顶 + "本机"标记让用户/被连接方优先读到真实有效的设备ID
+        var list = items.slice();
+        if (myInstallUuid) {
+            list.sort(function (a, b) {
+                var al = a.install_uuid === myInstallUuid ? 0 : 1;
+                var bl = b.install_uuid === myInstallUuid ? 0 : 1;
+                return al - bl;
+            });
+        }
+        var nameCount = {};
+        list.forEach(function (d) { var n = d.device_name || ''; nameCount[n] = (nameCount[n] || 0) + 1; });
+        list.forEach(function (d) {
+            var isSelf = !!(myInstallUuid && d.install_uuid === myInstallUuid);
             var card = document.createElement('div');
             card.className = 'rc-device-card';
             var left = d.dyn_code ? (d.dyn_expire - now) : 0;
@@ -173,13 +211,14 @@
             card.innerHTML =
                 '<div class="rc-dev-head">' +
                 '<span class="rc-dev-name">' + esc(d.device_name || T('未命名设备')) + '</span>' +
+                (isSelf ? '<span class="rc-dev-self">' + T('本机') + '</span>' : '') +
                 '<span class="rc-dev-dot ' + (d.online ? 'on' : '') + '"></span><span class="rc-dev-online">' + onlineTxt + '</span>' +
                 '</div>' +
                 '<div class="rc-dev-row"><span class="rc-dev-label">' + T('设备ID') + '</span>' +
                 '<span class="rc-dev-id" data-copy="' + esc(d.device_id) + '">' + esc(d.device_id) + '<span class="rc-copy-ico" title="' + T('复制') + '">⧉</span></span></div>' +
                 '<div class="rc-dev-row"><span class="rc-dev-label">' + T('验证码') + '</span>' +
                 '<span class="rc-dev-code">' + esc(d.dyn_code || '—') +
-                (d.dyn_code ? ' <span class="rc-code-left" data-expire="' + d.dyn_expire + '">' + T('剩余') + ' ' + fmtLeft(left) + '</span>' : '') +
+                (d.dyn_code ? ' <span class="rc-code-left" data-expire="' + (d.dyn_expire || 0) + '">' + T('剩余') + ' ' + fmtLeft(left) + '</span>' : '') +
                 '</span></div>' +
                 '<div class="rc-dev-actions">' +
                 // 阶段二百六十二：一键直连——携带当前动态码/过期时间，点击即连免手输
@@ -187,6 +226,10 @@
                 (d.online ? '<button class="rc-tb-btn rc-btn-refresh">' + T('刷新验证码') + '</button>' : '') +
                 '<button class="rc-tb-btn rc-btn-pw" data-enabled="' + (d.static_pw_enabled ? '1' : '') + '">' + (d.static_pw_enabled ? T('修改访问密码') : T('设置访问密码')) + '</button>' +
                 '<button class="rc-tb-btn rc-btn-trust" data-id="' + esc(d.device_id) + '">' + T('信任名单') + '</button>' +
+                // 历史残留设备行（重装/换机/双开留下，install_uuid 已不存在）：离线且同名多行/长期未上报才可删除
+                (!isSelf && !d.online && d.install_uuid &&
+                    (!d.last_seen || (now - d.last_seen) > 86400 || (nameCount[d.device_name || ''] || 0) > 1)
+                    ? '<button class="rc-tb-btn rc-btn-del" data-uuid="' + esc(d.install_uuid) + '">' + T('删除设备') + '</button>' : '') +
                 '</div>' +
                 '<div class="rc-pw-form hidden">' +
                 '<input class="rc-input rc-pw-input" type="text" maxlength="32" placeholder="' + T('6-32 位字母或数字，留空=清除') + '">' +
@@ -199,7 +242,7 @@
         });
         // 非 PC 端"我的电脑"仅展示 + 连接预填（刷新码/静态密码需 install_uuid，仅本机 PC 可操作）
         if (!isPC()) {
-            mineWrap.querySelectorAll('.rc-btn-refresh,.rc-btn-pw,.rc-pw-form').forEach(function (el) { el.remove(); });
+            mineWrap.querySelectorAll('.rc-btn-refresh,.rc-btn-pw,.rc-btn-del,.rc-pw-form').forEach(function (el) { el.remove(); });
         }
         // 倒计时归零静默刷新（换新码）
         codeTimer = setInterval(function () {
@@ -230,6 +273,28 @@
             btn.addEventListener('click', function () {
                 // 阶段二百六十二：一键直连——自动用卡片当前动态码（免手输）；过期/离线回退连接页预填
                 oneClickConnect(btn);
+            });
+        });
+        // 失效设备删除（自绘二次确认：同一按钮 3s 内再点一次生效，禁系统弹窗）
+        mineWrap.querySelectorAll('.rc-btn-del').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                if (btn.getAttribute('data-armed') !== '1') {
+                    btn.setAttribute('data-armed', '1');
+                    btn.textContent = T('确认删除');
+                    setTimeout(function () {
+                        if (btn.getAttribute('data-armed') === '1') {
+                            btn.removeAttribute('data-armed');
+                            btn.textContent = T('删除设备');
+                        }
+                    }, 3000);
+                    return;
+                }
+                btn.removeAttribute('data-armed');
+                apiPost('device/remove', { install_uuid: btn.getAttribute('data-uuid') }, function (err) {
+                    if (err) { toast(err.message); btn.textContent = T('删除设备'); return; }
+                    toast(T('设备已删除'));
+                    loadMine();
+                });
             });
         });
         mineWrap.querySelectorAll('.rc-device-card').forEach(function (card) {

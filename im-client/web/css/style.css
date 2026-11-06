@@ -20083,6 +20083,19 @@ html.m .message .message-bubble.bubble-game-invite { width: 200px; }
 }
 .rc-dev-dot.on { background: var(--primary); }
 .rc-dev-online { font-size: 12px; color: var(--text-light); flex-shrink: 0; }
+/* 本机设备标记（同账号多行设备时区分真实本机，避免选到重装/换机残留的失效设备ID） */
+.rc-dev-self {
+    font-size: 11px;
+    line-height: 16px;
+    padding: 0 4px;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+/* 失效设备删除（同按钮二次确认态高亮） */
+.rc-btn-del { color: #e64340; border-color: rgba(230, 67, 64, 0.45); }
+.rc-btn-del[data-armed="1"] { color: #fff; background: #e64340; border-color: #e64340; }
 .rc-dev-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .rc-dev-label { font-size: 13px; color: var(--text-light); width: 48px; flex-shrink: 0; }
 .rc-dev-id {

@@ -349,6 +349,17 @@ func (s *Server) remoteRCConnect(c *Client, msg *protocol.Message, from string, 
 		s.remoteSendError(from, p.SessionID, "对方设备不在线或不在 PC 客户端登录状态")
 		return
 	}
+	// 设备级在线：设备行须有本机心跳。重装/换机/双开会让同一台电脑留下多条历史设备行（install_uuid 变更），
+	// 旧行账号级显示"在线"但本机静默过滤 rc_ready —— 控制端会永久"连接中"空等。此处前置拒绝并给出明确文案。
+	if !s.rcDeviceOnline(&dev) {
+		s.remoteSendError(from, p.SessionID, "该设备ID已失效（电脑重装或更换过设备标识），请让对方在“我的电脑”中核对带“本机”标记的最新设备ID")
+		return
+	}
+	// 被控端能力版本：旧客户端无被控引擎，收到 rc_ready 静默忽略同样会让控制端空等
+	if dev.RCVer < rcMinSharerVer {
+		s.remoteSendError(from, p.SessionID, "对方客户端版本过低，无法接受远程控制，请升级到最新版本后重试")
+		return
+	}
 	// 忙互斥：与通话双向 + 协助会话（同账号自控时 from==peer，检查一次即可）
 	if callUserBusyAny(from, peer) {
 		s.remoteSendError(from, p.SessionID, "对方忙，请稍后再试")

@@ -109,7 +109,10 @@ type Device struct {
 	// DynCode 动态验证码（6位数字；rc_connect 时惰性刷新，TTL 内有效；被控端经 rc_info 推送展示）
 	DynCode   string    `gorm:"column:dyn_code;type:varchar(8);default:''" json:"dyn_code"`
 	DynExpire time.Time `gorm:"column:dyn_expire;type:datetime;default:CURRENT_TIMESTAMP" json:"dyn_expire"`
-	LastSeen  time.Time `gorm:"column:last_seen;type:datetime;default:CURRENT_TIMESTAMP;index" json:"last_seen"` // 最近在线时间（面板展示用）
+	LastSeen  time.Time `gorm:"column:last_seen;type:datetime;default:CURRENT_TIMESTAMP;index" json:"last_seen"` // 最近在线时间（设备级在线判定/面板展示）
+	// RCVer 被控端引擎能力版本（0=旧客户端未上报）：客户端 register 心跳时上报；rc_connect 据此
+	// 拒绝无被控引擎的旧版客户端（旧版收到 rc_ready 静默忽略会让控制端永久"连接中"）
+	RCVer int `gorm:"column:rc_ver;type:int;not null;default:0" json:"rc_ver"`
 }
 
 // TableName 表名沿用 im_ 前缀约定

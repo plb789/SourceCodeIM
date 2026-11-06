@@ -143,7 +143,7 @@ func rcNewDeviceID() string {
 
 // rcEnsureDevice 设备注册归口：按 (username, install_uuid) 查找或分配设备行，
 // 刷新 last_seen/device_name，并确保动态码可用（过期重生成）。返回设备行（含最新动态码）
-func rcEnsureDevice(username, installUUID, deviceName string) (*model.Device, error) {
+func rcEnsureDevice(username, installUUID, deviceName string, rcVer int) (*model.Device, error) {
 	var dev model.Device
 	err := store.DB.Where("username = ? AND install_uuid = ?", username, installUUID).First(&dev).Error
 	if err != nil {
@@ -158,6 +158,7 @@ func rcEnsureDevice(username, installUUID, deviceName string) (*model.Device, er
 			DeviceID:    id,
 			DeviceName:  deviceName,
 			LastSeen:    time.Now(),
+			RCVer:       rcVer,
 		}
 		if derr := store.DB.Create(&dev).Error; derr != nil {
 			// 极端竞态（同 uuid 并发注册）：回读既有行
@@ -171,6 +172,10 @@ func rcEnsureDevice(username, installUUID, deviceName string) (*model.Device, er
 		upd := map[string]interface{}{"last_seen": time.Now()}
 		if deviceName != "" && deviceName != dev.DeviceName {
 			upd["device_name"] = deviceName
+		}
+		if rcVer > dev.RCVer {
+			upd["rc_ver"] = rcVer
+			dev.RCVer = rcVer
 		}
 		store.DB.Model(&model.Device{}).Where("id = ?", dev.ID).Updates(upd)
 		dev.LastSeen = time.Now()
@@ -315,6 +320,7 @@ func RegisterRCRoutes(s *Server, cfg config.RCConfig) {
 	}
 	http.HandleFunc("POST /api/rc/device/register", s.guardRC(s.handleRCDeviceRegister))
 	http.HandleFunc("GET /api/rc/device/my", s.guardRC(s.handleRCDeviceMy))
+	http.HandleFunc("POST /api/rc/device/remove", s.guardRC(s.handleRCDeviceRemove))
 	http.HandleFunc("POST /api/rc/device/static_pw", s.guardRC(s.handleRCStaticPW))
 	http.HandleFunc("POST /api/rc/device/refresh_code", s.guardRC(s.handleRCRefreshCode))
 	http.HandleFunc("GET /api/rc/records", s.guardRC(s.handleRCRecords))
@@ -336,14 +342,30 @@ func RegisterRCRoutes(s *Server, cfg config.RCConfig) {
 	logger.Info("远程控制（设备ID+验证码）路由已注册")
 }
 
+// rcDeviceOnlineTTL 设备级在线判定窗口：客户端登录后每 60s 上报一次 register 心跳刷新 last_seen。
+// 超窗口未上报即视为该设备行已失效（重装/换机/双开产生的历史重复设备ID），面板显示离线且连接前置拒绝
+const rcDeviceOnlineTTL = 10 * time.Minute
+
+// rcMinSharerVer 被控端引擎能力最低版本（客户端 register 上报 rc_ver；0=旧客户端未上报）
+const rcMinSharerVer = 1
+
+// rcDeviceOnline 设备级在线：账号有 PC 端连接且该设备行心跳新鲜（区别于旧的账号级在线判定）
+func (s *Server) rcDeviceOnline(d *model.Device) bool {
+	if !s.hub.HasPC(d.Username) {
+		return false
+	}
+	return time.Since(d.LastSeen) <= rcDeviceOnlineTTL
+}
+
 // handleRCDeviceRegister 设备注册 POST /api/rc/device/register?username=xxx
-// 入参 {install_uuid, device_name}；返回 {device_id, device_name, dyn_code, dyn_expire, static_pw_enabled}
-// 客户端（PC）登录成功后调用；手机控制端不调用（无被控语义）
+// 入参 {install_uuid, device_name, rc_ver}；返回 {device_id, device_name, dyn_code, dyn_expire, static_pw_enabled}
+// 客户端（PC）登录成功后调用并每 60s 心跳一次（服务端据 last_seen 做设备级在线判定）
 func (s *Server) handleRCDeviceRegister(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	var body struct {
 		InstallUUID string `json:"install_uuid"`
 		DeviceName  string `json:"device_name"`
+		RCVer       int    `json:"rc_ver"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		driveFail(w, http.StatusBadRequest, "请求格式错误")
@@ -357,7 +379,7 @@ func (s *Server) handleRCDeviceRegister(w http.ResponseWriter, r *http.Request) 
 	if len([]rune(name)) > 64 {
 		name = string([]rune(name)[:64])
 	}
-	dev, err := rcEnsureDevice(username, body.InstallUUID, name)
+	dev, err := rcEnsureDevice(username, body.InstallUUID, name, body.RCVer)
 	if err != nil {
 		driveFail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -372,14 +394,15 @@ func (s *Server) handleRCDeviceRegister(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleRCDeviceMy 我的设备列表 GET /api/rc/device/my?username=xxx
-// 返回本账号全部已注册设备（含在线状态：归属账号 PC 端在线=在线）与动态码
+// 返回本账号全部已注册设备；在线按设备行判定（账号 PC 在线 + 该设备心跳新鲜），
+// 重装/换机遗留的历史重复设备ID因此显示离线，避免被误选后连接空等
 func (s *Server) handleRCDeviceMy(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	var devs []model.Device
 	store.DB.Where("username = ?", username).Order("id asc").Find(&devs)
 	items := make([]map[string]interface{}, 0, len(devs))
-	online := s.hub.HasPC(username)
 	for _, d := range devs {
+		online := s.rcDeviceOnline(&d)
 		code := d.DynCode
 		expire := d.DynExpire
 		// 在线设备的动态码惰性刷新（离线设备保留旧码，重连后由 register 刷新）
@@ -391,7 +414,9 @@ func (s *Server) handleRCDeviceMy(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]interface{}{
 			"device_id":         d.DeviceID,
 			"device_name":       d.DeviceName,
+			"install_uuid":      d.InstallUUID, // 面板据此标记"本机"/清理历史重复设备
 			"online":            online,
+			"rc_ver":            d.RCVer,
 			"dyn_code":          code,
 			"dyn_expire":        expire.Unix(),
 			"static_pw_enabled": d.StaticPWHash != "",
@@ -399,6 +424,35 @@ func (s *Server) handleRCDeviceMy(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	rcWriteJSON(w, map[string]interface{}{"items": items})
+}
+
+// handleRCDeviceRemove 删除设备 POST /api/rc/device/remove?username=xxx
+// 入参 {install_uuid}；仅允许删除离线设备（在线设备由心跳维持，误删会让本机失去设备ID）。
+// 用途：重装/换机/双开导致 install_uuid 变化后遗留的重复设备卡片清理（同机多行会误导用户选到失效ID）
+func (s *Server) handleRCDeviceRemove(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var body struct {
+		InstallUUID string `json:"install_uuid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		driveFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	var dev model.Device
+	if err := store.DB.Where("username = ? AND install_uuid = ?", username, body.InstallUUID).First(&dev).Error; err != nil {
+		driveFail(w, http.StatusBadRequest, "设备未注册")
+		return
+	}
+	if s.rcDeviceOnline(&dev) {
+		driveFail(w, http.StatusBadRequest, "设备在线，无法删除")
+		return
+	}
+	store.DB.Where("id = ?", dev.ID).Delete(&model.Device{})
+	// 关联数据同步清理：该设备ID的信任对与自定义卡片不再有归属
+	store.DB.Where("owner_username = ? AND device_id = ?", username, dev.DeviceID).Delete(&model.RemoteTrust{})
+	store.DB.Where("username = ? AND device_id = ?", username, dev.DeviceID).Delete(&model.RemoteCard{})
+	logger.Info("远程控制设备删除：%s 删除设备 %s（用户 %s）", dev.DeviceName, dev.DeviceID, username)
+	rcWriteJSON(w, map[string]interface{}{"ok": true})
 }
 
 // handleRCStaticPW 设置/清除静态访问密码 POST /api/rc/device/static_pw?username=xxx
@@ -634,7 +688,7 @@ func (s *Server) handleRCCardList(w http.ResponseWriter, r *http.Request) {
 		}
 		if ok {
 			item["device_name"] = dev.DeviceName
-			item["online"] = s.hub.HasPC(dev.Username) // 在线为账号级（多 PC 账号以主账号 PC 登录为准）
+			item["online"] = s.rcDeviceOnline(&dev) // 设备级在线（心跳新鲜才在线，防失效ID误导）
 			item["trusted"] = rcTrusted(dev.Username, c.DeviceID, username)
 		}
 		items = append(items, item)
@@ -740,7 +794,7 @@ func (s *Server) handleRCVisits(w http.ResponseWriter, r *http.Request) {
 		}
 		if ok {
 			item["device_name"] = dev.DeviceName
-			item["online"] = s.hub.HasPC(dev.Username)
+			item["online"] = s.rcDeviceOnline(&dev) // 设备级在线（心跳新鲜才在线）
 			item["trusted"] = rcTrusted(dev.Username, v.DeviceID, username)
 		}
 		items = append(items, item)
