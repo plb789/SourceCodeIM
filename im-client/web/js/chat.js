@@ -2069,7 +2069,9 @@
     function davIsPC() { return !!(window.desktop && window.desktop.getDavStatus); }
     // 挂载凭据拉取（guardDrive 在线水位；失败置空，复制/挂载按钮各自兜底提示）
     function davFetchPass() {
-        return fetch('/api/drive/webdav/info?username=' + encodeURIComponent(IMSocket.getUsername()))
+        var hdrs = {};
+        try { var dt = localStorage.getItem('drive_token'); if (dt) hdrs['X-Drive-Token'] = dt; } catch (e) {}
+        return fetch('/api/drive/webdav/info?username=' + encodeURIComponent(IMSocket.getUsername()), { headers: hdrs })
             .then(function (r) { return r.json(); })
             .then(function (j) {
                 davPassVal = (j && j.dav_password) || '';
@@ -2836,9 +2838,11 @@
                         showToast(I18N.t('已保存到网盘') + '：' + ((data.item && data.item.name) || ''));
                     };
                     if (dsUrl.indexOf('/static/upload/') === 0 && msgId > 0) {
+                        var saveHdrs = { 'Content-Type': 'application/json' };
+                        try { var st = localStorage.getItem('drive_token'); if (st) saveHdrs['X-Drive-Token'] = st; } catch (e) {}
                         fetch('/api/drive/chat/save', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: saveHdrs,
                             body: JSON.stringify({ username: IMSocket.getUsername(), msg_id: msgId })
                         }).then(function (res) {
                             res.json().then(function (data) {
@@ -2854,8 +2858,10 @@
                         }).then(function (dsBlob) {
                             var dsFd = new FormData();
                             dsFd.append('file', dsBlob, dsName);
+                            var upHdrs = {};
+                            try { var ut = localStorage.getItem('drive_token'); if (ut) upHdrs['X-Drive-Token'] = ut; } catch (e) {}
                             return fetch('/api/drive/upload?username=' + encodeURIComponent(IMSocket.getUsername()) + '&parent_id=0',
-                                { method: 'POST', body: dsFd });
+                                { method: 'POST', body: dsFd, headers: upHdrs });
                         }).then(function (dsRes) {
                             dsRes.json().then(function (data) {
                                 if (!dsRes.ok) { showToast(I18N.t(data.error || '保存失败，请稍后再试')); return; }

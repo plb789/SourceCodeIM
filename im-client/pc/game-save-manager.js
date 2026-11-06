@@ -94,15 +94,14 @@ function mapToObj(m) {
 }
 
 // 拼请求地址：serverBase + 逻辑路径 + 查询参数（跳过 null/undefined；均做 URL 编码）。
-// 登录会话 token（X-Drive-Token）经 dt 查询参数注入：服务端 guardGame 对云存档全家桶强校验
-// （主进程无渲染进程 localStorage，token 由渲染进程 saveSyncPayload.driveToken 经 IPC 携带）
-var saveAuthToken = '';
-function buildUrl(serverBase, urlPath, params) {
+// dtToken 单独传参而非模块级变量：消除多 async 方法并发（sync push 被 manifest 打断等）时的竞态覆盖风险。
+function buildUrl(serverBase, urlPath, params, dtToken) {
     var base = String(serverBase || '').replace(/\/+$/, '');
     var p = String(urlPath || '');
     if (p.charAt(0) !== '/') p = '/' + p;
     var qs = [];
-    if (saveAuthToken) qs.push('dt=' + encodeURIComponent(saveAuthToken));
+    var dt = String(dtToken || '').trim();
+    if (dt) qs.push('dt=' + encodeURIComponent(dt));
     Object.keys(params || {}).forEach(function (k) {
         var v = params[k];
         if (v === undefined || v === null) return;
@@ -184,13 +183,14 @@ class GameSaveManager extends EventEmitter {
         var serverBase = String(payload.serverBase || '');
         var username = String(payload.username || '');
         var slot = String(payload.slot || '');
+        var driveToken = String(payload.driveToken || '');
         var scanRes = await this._scanInternal(payload);
         // 本地无存档时不 finalize（避免误清云端）
         if (!scanRes.files.length) {
             return { ok: true, uploaded: 0, skipped: scanRes.skipped.length, revision: null, note: '本地无存档，跳过上传' };
         }
         var localMap = this._fileMap(scanRes.files);
-        var man = await this._getManifest({ serverBase: serverBase, gameId: gameId, username: username, slot: slot });
+        var man = await this._getManifest({ serverBase: serverBase, gameId: gameId, username: username, slot: slot, driveToken: driveToken });
         var cloudMap = this._fileMap((man && man.files) || []);
         if (!payload.force) {
             var conflict = this._conflictOf(localMap, cloudMap, man, scanRes, payload.baseline);
@@ -214,13 +214,13 @@ class GameSaveManager extends EventEmitter {
             var f = changed[i];
             var baseBytes = bytesDone;
             this._progress({ gameId: gameId, mode: 'push', phase: 'upload', fileIndex: i, filesCount: changed.length, fileRelPath: f.relPath, bytesDone: bytesDone, bytesTotal: bytesTotal, percent: bytesTotal ? Math.round(bytesDone / bytesTotal * 100) : 0, final: true });
-            await this._uploadFile({ serverBase: serverBase, gameId: gameId, username: username, slot: slot, file: f }, function (sent) {
+            await this._uploadFile({ serverBase: serverBase, gameId: gameId, username: username, slot: slot, driveToken: driveToken, file: f }, function (sent) {
                 self._progress({ gameId: gameId, mode: 'push', phase: 'upload', fileIndex: i, filesCount: changed.length, fileRelPath: f.relPath, bytesDone: baseBytes + sent, bytesTotal: bytesTotal, percent: bytesTotal ? Math.round((baseBytes + sent) / bytesTotal * 100) : 100 });
             });
             bytesDone += Number(f.size) || 0;
             uploaded++;
         }
-        var revision = await this._finalize({ serverBase: serverBase, gameId: gameId, username: username, slot: slot, relPaths: scanRes.files.map(function (x) { return x.relPath; }) });
+        var revision = await this._finalize({ serverBase: serverBase, gameId: gameId, username: username, slot: slot, driveToken: driveToken, relPaths: scanRes.files.map(function (x) { return x.relPath; }) });
         this._progress({ gameId: gameId, mode: 'push', phase: 'done', fileIndex: changed.length, filesCount: changed.length, fileRelPath: '', bytesDone: bytesTotal, bytesTotal: bytesTotal, percent: 100, final: true });
         return { ok: true, uploaded: uploaded, skipped: scanRes.skipped.length, revision: revision, baseline: { revision: revision, files: mapToObj(localMap), at: Date.now() } };
     }
@@ -236,9 +236,10 @@ class GameSaveManager extends EventEmitter {
         var serverBase = String(payload.serverBase || '');
         var username = String(payload.username || '');
         var slot = String(payload.slot || '');
+        var driveToken = String(payload.driveToken || '');
         var scanRes = await this._scanInternal(payload);
         var localMap = this._fileMap(scanRes.files);
-        var man = await this._getManifest({ serverBase: serverBase, gameId: gameId, username: username, slot: slot });
+        var man = await this._getManifest({ serverBase: serverBase, gameId: gameId, username: username, slot: slot, driveToken: driveToken });
         if (!man || !man.exists) return { ok: true, downloaded: 0, skipped: 0, revision: null, note: '云端无存档' };
         var cloudFiles = Array.isArray(man.files) ? man.files : [];
         var cloudMap = this._fileMap(cloudFiles);
@@ -280,7 +281,7 @@ class GameSaveManager extends EventEmitter {
             // 防目录穿越：目标必须位于该模式 baseDir 内
             var destAbs = path.resolve(mode.baseDir, parts.join('/'));
             if (destAbs !== mode.baseDir && !destAbs.startsWith(mode.baseDir + path.sep)) { skipped++; continue; }
-            var url = buildUrl(serverBase, '/api/game/save/download/' + encodeURIComponent(cf.id), { username: username });
+            var url = buildUrl(serverBase, '/api/game/save/download/' + encodeURIComponent(cf.id), { username: username }, driveToken);
             var baseBytes = bytesDone;
             this._progress({ gameId: gameId, mode: 'pull', phase: 'download', fileIndex: i, filesCount: todo.length, fileRelPath: cf.rel_path, bytesDone: bytesDone, bytesTotal: bytesTotal, percent: bytesTotal ? Math.round(bytesDone / bytesTotal * 100) : 0, final: true });
             await this._downloadFile(url, destAbs, function (sent) {
@@ -305,14 +306,14 @@ class GameSaveManager extends EventEmitter {
 
     // 统一入口（主进程 game:save-sync 归口）：pull | push | auto（auto=本地空且云端有则下载，否则上传）
     async sync(payload) {
-        saveAuthToken = String((payload && payload.driveToken) || ''); // 本轮请求全部 buildUrl 注入 dt
+        var dt = String((payload && payload.driveToken) || '');
         var mode = String((payload && payload.mode) || 'push');
         if (mode === 'pull') return await this.pull(payload);
         if (mode === 'push') return await this.push(payload);
         var scanRes = await this._scanInternal(payload);
         if (!scanRes.files.length) {
             var gameId = String((payload && payload.gameId) || '').trim();
-            var man = await this._getManifest({ serverBase: String((payload && payload.serverBase) || ''), gameId: gameId, username: String((payload && payload.username) || ''), slot: String((payload && payload.slot) || '') });
+            var man = await this._getManifest({ serverBase: String((payload && payload.serverBase) || ''), gameId: gameId, username: String((payload && payload.username) || ''), slot: String((payload && payload.slot) || ''), driveToken: dt });
             if (man && man.exists) return await this.pull(payload);
             return { ok: true, uploaded: 0, downloaded: 0, note: '无本地/云端存档' };
         }
@@ -322,32 +323,28 @@ class GameSaveManager extends EventEmitter {
     // 云端版本历史（P2）：{ok,exists,slot,current_revision,revisions:[{revision,total_size,file_count,create_time,current}]}
     async history(payload) {
         payload = payload || {};
-        saveAuthToken = String(payload.driveToken || '');
-        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/history/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot });
+        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/history/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot }, payload.driveToken);
         return await this._json('GET', url);
     }
 
     // 版本回滚（P2）：payload.revision=目标修订 → {ok,revision,restored_from}
     async rollback(payload) {
         payload = payload || {};
-        saveAuthToken = String(payload.driveToken || '');
-        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/rollback/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot });
+        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/rollback/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot }, payload.driveToken);
         return await this._json('POST', url, { revision: Number(payload.revision) || 0 });
     }
 
     // 槽位列表（P3）：{ok,slots:[{slot,revision,total_size,file_count,update_time}]}
     async slots(payload) {
         payload = payload || {};
-        saveAuthToken = String(payload.driveToken || '');
-        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/slots/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username });
+        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/slots/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username }, payload.driveToken);
         return await this._json('GET', url);
     }
 
     // 删除某槽位云端存档（P3）：{ok}
     async deleteSlot(payload) {
         payload = payload || {};
-        saveAuthToken = String(payload.driveToken || '');
-        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/data/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot });
+        var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/data/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot }, payload.driveToken);
         return await this._json('DELETE', url);
     }
 
@@ -527,14 +524,14 @@ class GameSaveManager extends EventEmitter {
     // 云端清单摘要（供 UI 展示云端存档状态）
     async manifest(payload) {
         payload = payload || {};
-        saveAuthToken = String(payload.driveToken || '');
         var gameId = String(payload.gameId || '').trim();
         if (!gameId) return { ok: false, error: '参数缺失' };
         var man = await this._getManifest({
             serverBase: String(payload.serverBase || ''),
             gameId: gameId,
             username: String(payload.username || ''),
-            slot: String(payload.slot || '')
+            slot: String(payload.slot || ''),
+            driveToken: String(payload.driveToken || '')
         });
         return {
             ok: true,
@@ -548,12 +545,12 @@ class GameSaveManager extends EventEmitter {
     }
 
     async _getManifest(p) {
-        var url = buildUrl(p.serverBase, '/api/game/save/manifest/' + encodeURIComponent(p.gameId), { username: p.username, slot: p.slot });
+        var url = buildUrl(p.serverBase, '/api/game/save/manifest/' + encodeURIComponent(p.gameId), { username: p.username, slot: p.slot }, p.driveToken);
         return await this._json('GET', url);
     }
 
     async _finalize(p) {
-        var url = buildUrl(p.serverBase, '/api/game/save/finalize/' + encodeURIComponent(p.gameId), { username: p.username, slot: p.slot });
+        var url = buildUrl(p.serverBase, '/api/game/save/finalize/' + encodeURIComponent(p.gameId), { username: p.username, slot: p.slot }, p.driveToken);
         var res = await this._json('POST', url, { rel_paths: p.relPaths || [] });
         return res ? res.revision : null;
     }
@@ -562,7 +559,7 @@ class GameSaveManager extends EventEmitter {
     _uploadFile(p, onBytes) {
         var f = p.file;
         return new Promise(function (resolve, reject) {
-            var url = buildUrl(p.serverBase, '/api/game/save/file/' + encodeURIComponent(p.gameId), { username: p.username, slot: p.slot, rel_path: f.relPath, sha256: f.sha256, size: f.size });
+            var url = buildUrl(p.serverBase, '/api/game/save/file/' + encodeURIComponent(p.gameId), { username: p.username, slot: p.slot, rel_path: f.relPath, sha256: f.sha256, size: f.size }, p.driveToken);
             var u;
             try { u = new URL(url); } catch (e) { reject(new Error('地址非法')); return; }
             var mod = u.protocol === 'https:' ? https : http;
