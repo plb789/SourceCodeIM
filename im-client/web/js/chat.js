@@ -19417,13 +19417,10 @@
             if (!ev || !ev.step) return;
             if (activeExec && activeExec.step === ev.step) window.desktop.agentBg(IMSocket.getUsername());
         });
-        // 阶段九十：本机 MCP 工具清单上报的服务端确认帧（下行回执：{ok,count}）；
-        // count=0 表示清除注入（空清单），无实质内容不弹 toast 免打扰
+        // 阶段九十：本机 MCP 工具清单上报的服务端确认帧（下行回执：{ok,count}）。
+        // 上行上报逻辑与确认帧无关：此处仅静默确认，不再弹 toast 打扰用户
         IMSocket.on(MSG.AGENT_PC_TOOLS, function (msg) {
             if (msg.to_user !== IMSocket.getUsername()) return;
-            var ev;
-            try { ev = JSON.parse(msg.content); } catch (e) { return; }
-            if (ev && ev.ok && (ev.count || 0) > 0) showToast(I18N.t('本机 MCP 工具已上报（') + (ev.count || 0) + I18N.t(' 个）'));
         });
         // 阶段七十六：工作区文件面板本地操作桥（服务端下行 msg 64 → 主进程 fs → 结果经 65 回传）
         IMSocket.on(MSG.PC_FILE_REQ, function (msg) {
