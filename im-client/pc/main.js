@@ -5948,6 +5948,94 @@ ipcMain.on('tray:flash', function () {
 // Chromium 以 muted 降级授予（track.muted=true 设备级静音，通话与录制均无声，社区标准解法）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
+// 阶段二百九十五：安装目录跟随运行 exe——NSIS 一键安装器更新时按注册表
+// HKCU\Software\<appGuid>\InstallLocation 决定覆盖安装目录（electron-builder multiUser.nsh），
+// 与"当前运行的 exe"无关：正式分发安装器为 Inno Setup 5（卸载键在其自有 AppId 下），终端机器
+// 可能从未跑过 NSIS 安装器，GUID 键不存在；或副本在 bin/D 盘等位置运行，登记目录仍指首次 NSIS
+// 安装处（实测更新落到 C 盘旧目录、运行中的副本仍是旧版，用户实测反馈 2026-11-06）。
+// 启动时将 InstallLocation 无条件改写/创建为当前运行目录，并 toast 提示一次。
+// GUID 确定性推导：v5(appId, electron-builder 固定命名空间)
+var nsisAppGuid = (function () {
+    var ns = Buffer.from('50e065bc313411e69bab38c9862bdaf3', 'hex'); // ELECTRON_BUILDER_NS_UUID
+    var h = crypto.createHash('sha1'); h.update(ns); h.update(Buffer.from('com.im.client', 'utf8'));
+    var d = h.digest();
+    d[6] = (d[6] & 0x0f) | 0x50; d[8] = (d[8] & 0x3f) | 0x80; // v5 版本/变体位
+    var s = d.slice(0, 16).toString('hex');
+    return s.substr(0, 8) + '-' + s.substr(8, 4) + '-' + s.substr(12, 4) + '-' + s.substr(16, 4) + '-' + s.substr(20, 12);
+})();
+var installDirNotice = null; // 更正后待 toast 的文案（主窗口页面就绪后发出）
+function regQueryValue(keyPath, valueName) {
+    return execFileP('reg', ['query', keyPath, '/v', valueName]).then(function (r) {
+        var m = String(r.stdout || '').match(new RegExp(valueName + '\\s+REG_SZ\\s+(.+)'));
+        return m ? m[1].trim() : null;
+    }).catch(function () { return null; }); // 键/值不存在（exit 1）按未安装处理
+}
+function regSetValue(keyPath, valueName, data) {
+    return execFileP('reg', ['add', keyPath, '/v', valueName, '/t', 'REG_SZ', '/d', data, '/f'])
+        .then(function () { return true; }).catch(function () { return false; });
+}
+function sameDirPath(a, b) {
+    var n = function (p) { return path.resolve(String(p || '')).replace(/[\\/]+$/, '').toLowerCase(); };
+    return n(a) === n(b);
+}
+function pushInstallDirNotice() {
+    if (!installDirNotice) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    var wc = mainWindow.webContents;
+    if (wc.isLoading()) { wc.once('did-finish-load', pushInstallDirNotice); return; }
+    wc.send('main:toast', installDirNotice); // 渲染层 onMainToast 自绘 toast（禁系统弹窗）
+    installDirNotice = null;
+}
+function regKeyExists(keyPath) {
+    return execFileP('reg', ['query', keyPath]).then(function () { return true; })
+        .catch(function () { return false; });
+}
+function syncInstallLocation() {
+    if (process.platform !== 'win32' || !app.isPackaged) return; // 仅 Windows 打包形态
+    var exeDir = path.dirname(process.execPath);
+    var installKey = 'HKCU\\Software\\' + nsisAppGuid;
+    var uninstallKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + nsisAppGuid;
+    regQueryValue(installKey, 'InstallLocation').then(function (regDir) {
+        if (regDir && sameDirPath(regDir, exeDir)) return; // 已一致（正常路径，静默）
+        // 实测（2026-11-06）：正式分发安装器是 Inno Setup 5（iss/BattlePlatform.iss，卸载器
+        // unins000.exe、卸载键在 Inno 自己的 AppId 下），终端机器可能从未跑过 NSIS 安装器——
+        // electron-builder 的 GUID 键根本不存在；而 NSIS 更新器只读 InstallLocation 定位覆盖目录，
+        // 查不到就装去默认目录 %LOCALAPPDATA%\Programs，导致"更新装到别的目录、运行的还是旧版"。
+        // 故 InstallLocation 无条件改写/创建为当前运行目录（HKCU 写入无需提权），不做任何文件存在判断
+        regSetValue(installKey, 'InstallLocation', exeDir).then(function (ok) {
+            if (!ok) { mainLog('[boot] 安装目录更正失败（InstallLocation 写入失败）'); return; }
+            mainLog('[boot] 安装目录已更正：' + (regDir || '(未登记)') + ' -> ' + exeDir);
+            installDirNotice = '检测到运行目录与登记安装目录不一致，已更正为当前目录，后续更新将应用到：' + exeDir;
+            pushInstallDirNotice();
+        });
+        // 卸载入口不凭空捏造：仅当 NSIS 卸载键已存在且当前目录确有 NSIS 卸载器（NSIS 完整安装副本
+        // 被移动的场景）才同步改写；否则留待下次 NSIS 更新落地后由安装器自愈重写，
+        // 避免在 Inno 安装的机器上产生指向不存在卸载器的坏卸载记录
+        var uninstaller = path.join(exeDir, 'Uninstall im-client.exe');
+        if (!fs.existsSync(uninstaller)) return;
+        regKeyExists(uninstallKey).then(function (exists) {
+            if (!exists) return;
+            var ico = path.join(exeDir, 'uninstallerIcon.ico');
+            Promise.all([
+                regSetValue(uninstallKey, 'UninstallString', '"' + uninstaller + '" /currentuser'),
+                regSetValue(uninstallKey, 'QuietUninstallString', '"' + uninstaller + '" /currentuser /S'),
+                regSetValue(uninstallKey, 'DisplayIcon', fs.existsSync(ico) ? ico : process.execPath)
+            ]).then(function (rs) {
+                if (!rs.every(Boolean)) mainLog('[boot] 卸载入口更正失败（reg add 未全部成功）');
+            });
+        });
+    });
+}
+
+// 阶段二百九十五补丁：设置页「关于」展示登记安装目录/当前运行目录（排查更新落位用；
+// 复用上方 regQueryValue + nsisAppGuid，非 Windows/未打包形态 registered 返回 null）
+ipcMain.handle('app:install-dirs', async function () {
+    var current = path.dirname(process.execPath);
+    if (process.platform !== 'win32' || !app.isPackaged) return { registered: null, current: current };
+    var registered = await regQueryValue('HKCU\\Software\\' + nsisAppGuid, 'InstallLocation');
+    return { registered: registered, current: current };
+});
+
 app.whenReady().then(async function () {
     console.log('[BOOT] whenReady +' + (Date.now() - BOOT_T0) + 'ms');
     // 阶段一百三十四：单实例锁二次守卫——非首实例 app.quit() 异步执行期间 whenReady 仍会触发，
@@ -6006,6 +6094,9 @@ app.whenReady().then(async function () {
     var syncResult = await webCache.sync();
     console.log('[BOOT] 启动增量同步返回 +' + (Date.now() - BOOT_T0) + 'ms');
     createTray();
+    // 阶段二百九十五：安装目录跟随运行 exe（更正注册表 InstallLocation 后再初始化自动更新，
+    // 保证后续 quitAndInstall 触发的 NSIS 安装覆盖到当前运行目录而非历史登记目录）
+    syncInstallLocation();
     // 阶段二百六十：自动更新初始化（electron-updater generic feed 指向服务端 win 安装包目录；
     // dev/未打包形态内部静默跳过，不影响开发调试）
     updater.init({

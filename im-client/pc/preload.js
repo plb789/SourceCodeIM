@@ -965,6 +965,10 @@ contextBridge.exposeInMainWorld('desktop', {
     updaterDismiss: function () {
         ipcRenderer.send('updater:dismiss');
     },
+    // 阶段二百九十五补丁：关于页读取登记安装目录/当前运行目录（主进程查注册表归口）
+    getInstallDirs: function () {
+        return ipcRenderer.invoke('app:install-dirs');
+    },
     onUpdaterInfo: function (callback) {
         ipcRenderer.on('updater:info', function (event, data) {
             callback(data);

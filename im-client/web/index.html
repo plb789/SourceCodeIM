@@ -2112,6 +2112,16 @@
                         <span class="settings-card-label">功能阶段</span>
                         <span class="settings-card-value">阶段一百零五</span>
                     </div>
+                    <!-- 阶段二百九十五：安装目录信息（仅 PC 客户端由 app-update.js 填充并显示，
+                         排查"更新装到别的目录"问题；登记目录=NSIS 更新器读取的注册表 InstallLocation） -->
+                    <div class="settings-card-row hidden" id="settings-install-dir-row">
+                        <span class="settings-card-label">登记安装目录</span>
+                        <span class="settings-card-value" id="settings-install-dir">-</span>
+                    </div>
+                    <div class="settings-card-row hidden" id="settings-run-dir-row">
+                        <span class="settings-card-label">当前运行目录</span>
+                        <span class="settings-card-value" id="settings-run-dir">-</span>
+                    </div>
                 </div>
                 <!-- 阶段二百六十：检查更新（APP 原生壳 / PC 客户端显示，浏览器 WEB 端由脚本旁路隐藏；
                      APP 走自绘更新弹窗下载 APK，PC 触发主进程 electron-updater 手动检查） -->

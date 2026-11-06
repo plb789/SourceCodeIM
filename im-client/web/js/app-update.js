@@ -219,6 +219,26 @@
             if (isPC) window.desktop.updaterCheck();
             else runCheck(true);
         });
+        // 阶段二百九十五：关于页展示登记安装目录/当前运行目录（仅 PC；不一致或未登记标红，
+        // 直观暴露"更新将装到别的目录"的风险位）
+        if (isPC && window.desktop.getInstallDirs) {
+            window.desktop.getInstallDirs().then(function (d) {
+                if (!d) return;
+                var rowA = document.getElementById('settings-install-dir-row');
+                var rowB = document.getElementById('settings-run-dir-row');
+                var elA = document.getElementById('settings-install-dir');
+                var elB = document.getElementById('settings-run-dir');
+                if (!rowA || !rowB || !elA || !elB) return;
+                rowA.classList.remove('hidden');
+                rowB.classList.remove('hidden');
+                elA.textContent = d.registered || '（未登记，首次更新时将登记到运行目录）';
+                elB.textContent = d.current || '-';
+                var norm = function (p) { return String(p || '').replace(/[\\/]+$/, '').toLowerCase(); };
+                if (!d.registered || norm(d.registered) !== norm(d.current)) {
+                    elA.style.color = 'var(--danger, #fa5151)'; // 主题变量跟随深浅色
+                }
+            }).catch(function () { });
+        }
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', bindAboutBtn);
