@@ -238,11 +238,12 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.send('recbar:stop');
     },
     // GDI 帧录制兜底（提权录屏）：主进程只抓选区矩形（30fps 含光标）JPEG 推流；启动/停止/帧订阅
-    recGdiStart: function (x, y, w, h) {
-        return ipcRenderer.invoke('rec:gdi-start', x, y, w, h);
+    // owner：循环属主（'rec'=录屏 / 'remote'=远程协助）——单例抓屏循环双用途互斥（启动 'busy' 拒绝/停止按属主保护）
+    recGdiStart: function (x, y, w, h, owner) {
+        return ipcRenderer.invoke('rec:gdi-start', x, y, w, h, owner);
     },
-    recGdiStop: function () {
-        ipcRenderer.send('rec:gdi-stop');
+    recGdiStop: function (owner) {
+        ipcRenderer.send('rec:gdi-stop', owner);
     },
     onRecGdiFrame: function (callback) {
         ipcRenderer.on('rec:gdi-frame', function (event, buf) {

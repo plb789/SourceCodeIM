@@ -19,7 +19,7 @@
     'use strict';
     var LANG_KEY = 'im_lang';                       // 偏好存储键（与 im_theme 同风格）
     var BASE = 'zh';                                // 基准语言（key 即中文原文，零查表）
-    var PACK_VER = '3.33';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：游戏中心独立窗口全量接入 i18n）
+    var PACK_VER = '3.35';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：远程协助收口/抓屏兜底错误文案）
     var lang = BASE;                                // 当前语言
     var packs = { zh: {}, en: {} };                 // 语言包缓存（zh 包同时充当静态文本反查基准）
 
@@ -165,6 +165,8 @@
     window.addEventListener('storage', function (e) {
         if (e.key === LANG_KEY && (e.newValue === 'zh' || e.newValue === 'en') && e.newValue !== lang) {
             lang = e.newValue;
+            // 中文模式下未预载英文包：其他窗口切到英文时补一次同步加载，保证后续动态文本可翻译
+            if (lang !== BASE && !Object.keys(packs.en).length) packs.en = loadSync('en-US.json');
             fire();
         }
     });
@@ -172,7 +174,9 @@
     // ---------- 初始化：同步加载语言包（在 head 中最先执行，任何文本渲染前就绪） ----------
     lang = detect();
     packs.zh = loadSync('zh-CN.json');
-    packs.en = loadSync('en-US.json');
+    // 阶段三百零三：英文包只在英文模式加载（中文模式省一次约 300KB 的同步解析；
+    // 英文模式仍需 zh 基准包做静态文本反查，故保持双包）
+    if (lang !== BASE) packs.en = loadSync('en-US.json');
     document.documentElement.setAttribute('data-lang', lang);
     // DOM 就绪后对静态文本做一次反查替换（英文模式；app-booting 揭幕前完成，无首绘闪烁）
     if (document.readyState === 'loading') {

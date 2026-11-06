@@ -67,6 +67,10 @@ var (
 type remoteSignalPayload struct {
 	Action    string `json:"action"`
 	SessionID string `json:"session_id"`
+	// 阶段三百零四：客户端收口原因透传（capture=被控端抓屏失败 / timeout=等 answer 超时 /
+	// media=媒体断连 / user=主动停止共享）——原服务端构造轻量 disconnect 帧会丢该字段，
+	// 控制端只能看到"对方已断开协助"，无法判断是被控端抓屏失败还是网络问题
+	Cause string `json:"cause"`
 }
 
 // HandleRemoteSignal 远程协助信令入口（msg_type=90）
@@ -500,7 +504,7 @@ func (s *Server) remoteDisconnect(from string, p *remoteSignalPayload) {
 	if !isParty {
 		return
 	}
-	s.remoteFinish(sess, "connected", true, from)
+	s.remoteFinishCause(sess, "connected", true, p.Cause, from)
 }
 
 // remoteRelayMedia 媒体协商中继（offer/answer/candidate）：仅校验会话存在与参与者身份，content 原样透传
@@ -526,6 +530,12 @@ func (s *Server) remoteRelayMedia(msg *protocol.Message, from string, p *remoteS
 // notify=true 时向对方转发结束信令（reject/cancel/disconnect 由客户端发起，content 已带语义；
 // timeout/missed 由服务端发起，构造 timeout/ended 帧通知双方）
 func (s *Server) remoteFinish(sess *remoteSession, status string, notify bool, sender ...string) {
+	s.remoteFinishCause(sess, status, notify, "", sender...)
+}
+
+// remoteFinishCause 同 remoteFinish，额外透传客户端收口原因（阶段三百零四：disconnect 场景
+// 控制端据此区分"对方抓屏失败/超时/断网/主动停止"，其余结束类型 cause 恒空行为不变）
+func (s *Server) remoteFinishCause(sess *remoteSession, status string, notify bool, cause string, sender ...string) {
 	remoteMu.Lock()
 	if cur, ok := remoteSessions[sess.ID]; !ok || cur != sess {
 		remoteMu.Unlock()
@@ -556,7 +566,7 @@ func (s *Server) remoteFinish(sess *remoteSession, status string, notify bool, s
 			s.remoteForwardByUser("timeout", sess.Controller, string(timeout))
 			s.remoteForwardByUser("timeout", sess.Sharer, string(timeout))
 		} else if len(sender) > 0 && sender[0] != "" {
-			s.remoteForward(sender[0], remotePeerOf(sess, sender[0]), remoteMapFinishContent(status, sess.ID))
+			s.remoteForward(sender[0], remotePeerOf(sess, sender[0]), remoteMapFinishContent(status, sess.ID, cause))
 		}
 	}
 
@@ -586,14 +596,19 @@ func remotePeerOf(sess *remoteSession, from string) string {
 }
 
 // remoteMapFinishContent 客户端发起结束时构造轻量结束帧（服务端归口语义，避免依赖客户端原始 content 字段完整性）
-func remoteMapFinishContent(status, sessionID string) string {
+// 阶段三百零四：cause 为白名单业务原因（仅 disconnect 生效），随帧下发供控制端分辨收口场景
+func remoteMapFinishContent(status, sessionID, cause string) string {
 	action := "reject"
 	if status == "canceled" {
 		action = "cancel"
 	} else if status == "connected" {
 		action = "disconnect"
 	}
-	b, _ := json.Marshal(map[string]string{"action": action, "session_id": sessionID})
+	m := map[string]string{"action": action, "session_id": sessionID}
+	if action == "disconnect" && cause != "" {
+		m["cause"] = cause
+	}
+	b, _ := json.Marshal(m)
 	return string(b)
 }
 

@@ -1,6 +1,7 @@
 // ===== Office 文档在线预览归口（网盘浮层 / 分享页共用；渲染核心与聊天工作台同款三库） =====
-// docx=mammoth / 表格(xls/xlsx/csv)=SheetJS / pptx=PptxViewJS——index.html 已全局引入，
-// 分享页缺库时按需懒加载（首次预览才拉取，不拖首屏）；渲染失败/组件缺失均友好降级提示
+// docx=mammoth / 表格(xls/xlsx/csv)=SheetJS / pptx=PptxViewJS(+Chart+JSZip)——
+// 阶段三百零三：首屏不再全局引入（约 2.8MB），全部改为首次用到时按需懒加载，
+// 启动只付聊天核心的代价；渲染失败/组件缺失均友好降级提示
 // 全程 fetch arrayBuffer + Blob 装载（禁 FileReader——PptxViewJS 对 window.FileReader 全局污染规避归口）
 // 护栏：单文件 >50MB 拒解析提示下载；表格 sheetRows 截断 2000 行防超大表卡顿（附截断提示条）
 (function () {
@@ -9,12 +10,14 @@
     var SHEET_ROWS = 2000;
     var seq = 0; // 迟到响应序号：每次 render 递增，回调校验丢弃（快速关闭/切换预览防旧内容覆盖新开预览）
 
-    // 库地址表（与 index.html 全局引入同源同版本；分享页按需懒加载归口）
+    // 库地址表（阶段三百零三：index.html 不再全局引入，统一由此按需懒加载）
     var LIBS = {
+        chart: '/js/lib/Chart.min.js?v=4.4.9',      // PptxViewJS 非 AMD 环境从 window.Chart 取图表实现，须先于其加载
         jszip: '/js/lib/jszip.min.js?v=3.10',
         mammoth: '/js/lib/mammoth.browser.min.js?v=1.0',
         pptx: '/js/lib/PptxViewJS.min.js?v=1.0',
-        xlsx: '/js/lib/xlsx.full.min.js?v=0.20'
+        xlsx: '/js/lib/xlsx.full.min.js?v=0.20',
+        pptxgen: '/js/lib/pptxgen.bundle.js?v=1.0'  // AI 回复导出 PPT（bundle 内含 JSZip，无外部依赖）
     };
     var libState = {}; // url -> 1 加载中 / 2 完成 / 0 失败
     var libCbs = {};   // url -> [cb...]（加载中合并回调，防重复注入 script）
@@ -31,20 +34,27 @@
         document.head.appendChild(s);
     }
     function flush(url) { var cbs = libCbs[url] || []; delete libCbs[url]; cbs.forEach(function (c) { c(); }); }
-    // 按渲染种类确保依赖库就绪（全部成功走 ok，任一失败走 fail）
+    // 顺序加载（PptxViewJS 依赖顺序：Chart → JSZip → PptxViewJS，并行会取不到 window.Chart/JSZip）
+    function loadSeq(urls, idx, ok, fail) {
+        if (idx >= urls.length) return ok();
+        loadScript(urls[idx], function () {
+            if (libState[urls[idx]] !== 2) return fail();
+            loadSeq(urls, idx + 1, ok, fail);
+        });
+    }
+    // 按用途确保依赖库就绪（全部成功走 ok，任一失败走 fail）
+    // kind：docx / sheet / pptx / pptgen（与聊天页共用同一份加载状态，避免重复注入）
     function ensureLibs(kind, ok, fail) {
         var need = kind === 'docx' ? [LIBS.mammoth]
             : kind === 'sheet' ? [LIBS.xlsx]
-                : [LIBS.jszip, LIBS.pptx];
-        var n = need.length, bad = false;
-        if (!n) return ok();
-        need.forEach(function (u) {
-            loadScript(u, function () {
-                if (libState[u] !== 2) bad = true;
-                if (--n === 0) (bad ? fail : ok)();
-            });
-        });
+                : kind === 'pptx' ? [LIBS.chart, LIBS.jszip, LIBS.pptx]
+                    : kind === 'pptgen' ? [LIBS.pptxgen]
+                        : [];
+        if (!need.length) return ok();
+        loadSeq(need, 0, ok, fail);
     }
+    // 阶段三百零三：暴露给 chat.js（工作台 Office 预览 / AI 导出 PPT）共用，加载状态全局唯一
+    window.OfficeLibs = { ensure: ensureLibs, LIBS: LIBS };
 
     // 扩展名归口：返回 office 渲染种类 docx/sheet/pptx，非 office 返回 ''
     // （img/pdf/音视频/文本为浏览器原生可渲染类型，各页自判；doc/xls 老二进制格式不支持照常走下载）

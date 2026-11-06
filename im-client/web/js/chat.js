@@ -498,9 +498,27 @@
             send: function (obj) {
                 if (remotePeerUser) remoteSignalSend(remotePeerUser, obj);
             },
-            onStop: function () {
+            onStop: function (reason) {
+                // 阶段三百零四：收口原因归口（capture:xxx=抓屏失败 / timeout=等 answer 超时 /
+                // media=媒体断连 / user=被控端用户主动停止）——原静默收条，被控端只看到悬浮条一闪、
+                // 控制端只看到"对方已断开协助"，两端都无从判断原因
+                var raw = reason ? String(reason) : '';
+                var code = raw ? raw.split(':')[0] : '';
+                var detail = raw.indexOf(':') >= 0 ? raw.slice(raw.indexOf(':') + 1) : '';
                 if (remoteRole === 'sharer' && remoteOpenId && remotePeerUser) {
-                    remoteSignalSend(remotePeerUser, { action: 'disconnect', session_id: remoteOpenId, reason: 'sharer-stop' });
+                    remoteSignalSend(remotePeerUser, {
+                        action: 'disconnect', session_id: remoteOpenId, reason: 'sharer-stop', cause: code
+                    });
+                }
+                if (remoteRole === 'sharer' && (code === 'capture' || code === 'timeout' || code === 'media')) {
+                    if (window.desktop && window.desktop.clientLog) {
+                        window.desktop.clientLog('[rc-sharer] 收口原因=' + raw);
+                    }
+                    var txt = code === 'capture'
+                        ? I18N.t('屏幕捕获失败，无法共享画面') + (detail ? '：' + detail : '')
+                        : code === 'timeout' ? I18N.t('远程协助连接超时，已结束')
+                            : I18N.t('远程协助连接中断，已结束');
+                    if (typeof showToast === 'function') showToast(txt);
                 }
                 remoteEndLocal();
             }
@@ -7437,8 +7455,14 @@
                 if (recState.gdiFrame) { clearInterval(iv); resolve(); }
                 else if (waited > 2000) { clearInterval(iv); reject(new Error(I18N.t('GDI 帧通道无数据'))); }
             }, 50);
-            // 主进程只抓选区矩形（屏幕物理像素坐标 = 冻结底图坐标），帧即选区内容，渲染层无需再裁
-            window.desktop.recGdiStart(Math.round(sel.x), Math.round(sel.y), recState.gdiW, recState.gdiH).catch(function (err) {
+            // 主进程只抓选区矩形（屏幕物理像素坐标 = 冻结底图坐标），帧即选区内容，渲染层无需再裁；
+            // owner='rec'：与远程协助共用单例抓屏循环（属主互斥，被占时主进程返 'busy'）
+            window.desktop.recGdiStart(Math.round(sel.x), Math.round(sel.y), recState.gdiW, recState.gdiH, 'rec').then(function (ok) {
+                if (ok !== true) {
+                    clearInterval(iv);
+                    reject(new Error(ok === 'busy' ? I18N.t('屏幕通道被占用（远程协助进行中）') : I18N.t('GDI 抓屏启动失败')));
+                }
+            }).catch(function (err) {
                 clearInterval(iv);
                 reject(err);
             });
@@ -7519,7 +7543,7 @@
     function onRecStopped() {
         if (recState.raf) cancelAnimationFrame(recState.raf);
         if (recState.stream) recState.stream.getTracks().forEach(function (t) { t.stop(); });
-        if (recState.gdi && window.desktop.recGdiStop) window.desktop.recGdiStop(); // GDI 推帧循环随录制结束停止
+        if (recState.gdi && window.desktop.recGdiStop) window.desktop.recGdiStop('rec'); // GDI 推帧循环随录制结束停止（属主 'rec'）
         var blob = new Blob(recState.chunks, { type: 'video/webm' });
         var durationMs = Date.now() - recState.startedAt;
         recState.chunks = [];
@@ -7546,7 +7570,7 @@
         recState.active = false;
         clearTimeout(recState.maxTimer);
         if (window.desktop.recActive) window.desktop.recActive(false);
-        if (recState.gdi && window.desktop.recGdiStop) window.desktop.recGdiStop(); // GDI 推帧循环随录制停止
+        if (recState.gdi && window.desktop.recGdiStop) window.desktop.recGdiStop('rec'); // GDI 推帧循环随录制停止（属主 'rec'）
         recState.chunks = [];
         recState.recorder = null;
         recState.video = null;
@@ -8423,7 +8447,9 @@
             // 重报，造成 mcp_pc_ 工具注入静默空窗（断线自动重登场景必现），清空后首轮强制重报
             if (agentMcpSupported()) {
                 agentMcpLastReport = '';
-                startPcMcpReportLoop(12);
+                // 阶段三百零三：登录即建连会 spawn 本机 MCP 子进程，与首屏渲染/登录数据加载抢 CPU 磁盘，
+                // 是启动期忙碌光标的放大器；延后 2.5s 等界面稳定后再拉起（设置面板内的保存/启停仍即时上报）
+                schedulePcMcpReport(2500);
             }
         } else {
             // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
@@ -9611,7 +9637,18 @@
     // 阶段四十五：AI 回复生成 PPT（前端 pptxgenjs 本地转档 → 复用 /upload/file 直传回会话，
     // 本地气泡 + 服务端落库 + FILE_PERSISTED 回填 msg_id 全走既有链路）
     function generateAIPpt(agent, text) {
-        if (typeof PptxGenJS === 'undefined') { showToast(I18N.t('PPT 组件未加载，请刷新重试')); return; }
+        if (typeof PptxGenJS === 'undefined') {
+            // 阶段三百零三：pptxgen 改为按需懒加载（首屏不再引入），拉取成功后重入本函数
+            if (window.OfficeLibs && typeof window.OfficeLibs.ensure === 'function') {
+                window.OfficeLibs.ensure('pptgen', function () {
+                    if (typeof PptxGenJS === 'undefined') { showToast(I18N.t('PPT 组件未加载，请刷新重试')); return; }
+                    generateAIPpt(agent, text);
+                }, function () { showToast(I18N.t('PPT 组件未加载，请刷新重试')); });
+            } else {
+                showToast(I18N.t('PPT 组件未加载，请刷新重试'));
+            }
+            return;
+        }
         var slides = parseMarkdownSlides(text);
         if (!slides.length) { showToast(I18N.t('没有可生成演示文稿的内容')); return; }
         showToast(I18N.t('正在生成 PPT…'));
@@ -10328,10 +10365,22 @@
         }).catch(function () { return false; /* 主进程异常时静默，下轮重试 */ });
     }
 
+    // 阶段三百零三：登录后延迟启动 MCP 上报窗口（避免与首屏渲染抢资源；重复登录只保留最后一次）
+    var pcMcpStartTimer = null;
+    function schedulePcMcpReport(delay) {
+        if (pcMcpStartTimer) { clearTimeout(pcMcpStartTimer); pcMcpStartTimer = null; }
+        pcMcpStartTimer = setTimeout(function () {
+            pcMcpStartTimer = null;
+            startPcMcpReportLoop(12);
+        }, delay || 2500);
+    }
+
     // 建连/保存后的上报窗口：会话建连异步，窗口期内每秒快照一次，清单稳定即自动停报；
     // 建连中跳过的轮次不消耗有效窗口（left 回补），总轮数绝对上限 times+60 兜底——
     // 防"回补恰好抵消递减导致 left 永不归零"的会话挂死无限轮询（实测推演修正）
     function startPcMcpReportLoop(times) {
+        // 阶段三百零三：进入上报窗口时取消登录延迟任务，避免"设置面板即时上报"与延迟任务并行起两轮循环
+        if (pcMcpStartTimer) { clearTimeout(pcMcpStartTimer); pcMcpStartTimer = null; }
         var left = times; // 剩余有效轮数
         var total = 0;    // 总轮数（含建连跳过轮，绝对上限）
         (function tick() {
@@ -17931,8 +17980,17 @@
                 if (typeof mammoth === 'undefined') {
                     var noLib = document.createElement('div');
                     noLib.className = 'ws-panel-hint';
-                    noLib.textContent = I18N.t('文档组件未加载，无法预览');
+                    noLib.textContent = I18N.t('加载中…');
                     wsPanel.viewBody.appendChild(noLib);
+                    // 阶段三百零三：mammoth 首屏不再引入，首次预览按需懒加载，就绪后重绘本标签
+                    if (window.OfficeLibs && typeof window.OfficeLibs.ensure === 'function') {
+                        window.OfficeLibs.ensure('docx', function () {
+                            if (typeof mammoth === 'undefined') { noLib.textContent = I18N.t('文档组件未加载，无法预览'); return; }
+                            if (wsPanel.tabs[path] && wsPanel.activeTab === path) wsPanelRenderTab();
+                        }, function () { noLib.textContent = I18N.t('文档组件未加载，无法预览'); });
+                    } else {
+                        noLib.textContent = I18N.t('文档组件未加载，无法预览');
+                    }
                     return;
                 }
                 if (!t.b64) {
@@ -17976,8 +18034,17 @@
             if (typeof XLSX === 'undefined') {
                 var noX = document.createElement('div');
                 noX.className = 'ws-panel-hint';
-                noX.textContent = I18N.t('表格组件未加载，无法预览');
+                noX.textContent = I18N.t('加载中…');
                 wsPanel.viewBody.appendChild(noX);
+                // 阶段三百零三：SheetJS 首屏不再引入，首次预览按需懒加载，就绪后重绘本标签
+                if (window.OfficeLibs && typeof window.OfficeLibs.ensure === 'function') {
+                    window.OfficeLibs.ensure('sheet', function () {
+                        if (typeof XLSX === 'undefined') { noX.textContent = I18N.t('表格组件未加载，无法预览'); return; }
+                        if (wsPanel.tabs[path] && wsPanel.activeTab === path) wsPanelRenderTab();
+                    }, function () { noX.textContent = I18N.t('表格组件未加载，无法预览'); });
+                } else {
+                    noX.textContent = I18N.t('表格组件未加载，无法预览');
+                }
                 return;
             }
             if (!t.b64) {
@@ -18044,8 +18111,17 @@
             if (typeof PptxViewJS === 'undefined' || typeof JSZip === 'undefined') {
                 var noP = document.createElement('div');
                 noP.className = 'ws-panel-hint';
-                noP.textContent = I18N.t('幻灯片组件未加载，无法预览');
+                noP.textContent = I18N.t('加载中…');
                 wsPanel.viewBody.appendChild(noP);
+                // 阶段三百零三：PptxViewJS/JSZip/Chart 首屏不再引入，首次预览按需懒加载，就绪后重绘本标签
+                if (window.OfficeLibs && typeof window.OfficeLibs.ensure === 'function') {
+                    window.OfficeLibs.ensure('pptx', function () {
+                        if (typeof PptxViewJS === 'undefined' || typeof JSZip === 'undefined') { noP.textContent = I18N.t('幻灯片组件未加载，无法预览'); return; }
+                        if (wsPanel.tabs[path] && wsPanel.activeTab === path) wsPanelRenderTab();
+                    }, function () { noP.textContent = I18N.t('幻灯片组件未加载，无法预览'); });
+                } else {
+                    noP.textContent = I18N.t('幻灯片组件未加载，无法预览');
+                }
                 return;
             }
             if (!t.b64) {

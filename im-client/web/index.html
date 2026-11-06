@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="/js/i18n.js?v=3.33"></script>
+    <script src="/js/i18n.js?v=3.34"></script>
     <script src="/js/branding.js?v=1.1"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
@@ -2867,23 +2867,16 @@
     <script src="/js/screenshot.js?v=1.11"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
     <script src="/js/lib/highlight.min.js?v=11.9"></script>
-    <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
-    <script src="/js/lib/pptxgen.bundle.js?v=1.0"></script>
-    <!-- 阶段七十六：mammoth.js（docx→HTML 本地转换，Word 文档面板预览用；内网/离线可用） -->
-    <script src="/js/lib/mammoth.browser.min.js?v=1.0"></script>
-    <!-- 阶段七十六：SheetJS（xlsx 解析，Excel 表格面板预览）+ JSZip/PptxViewJS（pptx Canvas 渲染预览），均本地化 -->
-    <script src="/js/lib/jszip.min.js?v=3.10"></script>
-    <!-- 阶段一百三十四：Chart.js UMD——PptxViewJS 非 AMD 环境从全局取 window.Chart（图表渲染依赖），
-         缺失导致含图表的 PPT 预览报 "Chart is required but was not found"；必须在 PptxViewJS 之前加载 -->
-    <script src="/js/lib/Chart.min.js?v=4.4.9"></script>
-    <script src="/js/lib/PptxViewJS.min.js?v=1.0"></script>
-    <script src="/js/lib/xlsx.full.min.js?v=0.20"></script>
+    <!-- 阶段三百零三：Office 预览/导出五库（pptxgen / mammoth / jszip / PptxViewJS / xlsx）与 Chart.js
+         原为全局同步引入（合计约 2.8MB，全部阻塞首屏解析），现统一由 office-preview.js 暴露的
+         window.OfficeLibs 在首次预览或导出 PPT 时按需懒加载（顺序：Chart → JSZip → PptxViewJS）；
+         聊天页启动不再付这份体积代价，库加载完成后由使用方就地重绘 -->
     <!-- 阶段一百五十五：远程协助被控端屏幕共享引擎（getDisplayMedia + RTCPeerConnection + DataChannel），
          先于 chat.js 加载（chat.js 初始化时注入信令上行回调） -->
-    <script src="/js/remote-engine.js?v=1.1"></script>
+    <script src="/js/remote-engine.js?v=1.2"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.12"></script>
-    <script src="/js/chat.js?v=3.198"></script>
+    <script src="/js/chat.js?v=3.200"></script>
     <!-- 阶段二百九十二 M8：联机引擎（gn-net.js）与房间层（gn-room.js）已迁入游戏中心窗
          （game-store.html 加载），主窗口仅保留 109/110/112 跨窗中继（socket.js）与 111 邀请卡片（chat.js）；
          两窗同持房间状态会脑裂，故此处不得再引入 -->
@@ -2892,7 +2885,7 @@
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>
-    <script src="/js/office-preview.js?v=1.1"></script>
+    <script src="/js/office-preview.js?v=1.2"></script>
     <script src="/js/drive.js?v=2.34"></script>
     <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；须在 chat.js 之后加载，
          复用 _osbInit 自绘滚动条与 window.rcConnect 发起 API；Tab 切换经 window.IMRC.open/close 联动） -->

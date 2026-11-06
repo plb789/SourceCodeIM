@@ -1197,18 +1197,25 @@ ipcMain.on('rec:active', function (e, on) {
 // 实测（2026-11-02 提权对照实验）：getUserMedia 桌面流在管理员进程 WGC CreateForMonitor 恒返
 // E_ACCESSDENIED（禁 WGC 特性/禁 GPU/禁沙箱均无效），而 GDI BitBlt 可靠（截图已验证）。主进程
 // GDI 逐帧抓屏 → JPEG 推渲染层 → 画 canvas → captureStream → MediaRecorder，录制链路其余复用
-var recGdiLoop = { timer: null, frames: 0, sx: 0, sy: 0, sw: 0, sh: 0, warnAt: 0 };
-function stopRecGdiLoop() {
+var recGdiLoop = { timer: null, frames: 0, sx: 0, sy: 0, sw: 0, sh: 0, warnAt: 0, owner: '' };
+// owner：循环属主（'rec'=录屏 / 'remote'=远程协助被控端抓屏）——单例循环双用途互斥归口：
+// 启动按属主拒绝（返回 'busy'），停止按属主保护（录屏清理路径不得误停远程协助的推帧循环）
+function stopRecGdiLoop(owner) {
+    if (recGdiLoop.owner === 'remote' && owner !== 'remote') return; // 远程协助占用中：录屏侧清理路径无权停
     if (recGdiLoop.timer) {
         clearInterval(recGdiLoop.timer);
         recGdiLoop.timer = null;
-        mainLog('[rec] GDI 推帧循环停止，共推 ' + recGdiLoop.frames + ' 帧');
+        mainLog('[rec] GDI 推帧循环停止（属主 ' + recGdiLoop.owner + '），共推 ' + recGdiLoop.frames + ' 帧');
         recGdiLoop.frames = 0;
     }
+    recGdiLoop.owner = '';
 }
-ipcMain.handle('rec:gdi-start', function (e, sx, sy, sw, sh) {
+ipcMain.handle('rec:gdi-start', function (e, sx, sy, sw, sh, owner) {
     if (!mainWindow || e.sender !== mainWindow.webContents) return false; // 只接受主窗口来源
-    stopRecGdiLoop();
+    var own = owner === 'remote' ? 'remote' : 'rec'; // 缺省按录屏（兼容旧调用）
+    if (recGdiLoop.timer && recGdiLoop.owner !== own) return 'busy'; // 属主互斥：另一用途占用中
+    stopRecGdiLoop(own);
+    recGdiLoop.owner = own;
     recGdiLoop.frames = 0;
     recGdiLoop.sx = Math.round(sx); recGdiLoop.sy = Math.round(sy);
     recGdiLoop.sw = Math.max(2, Math.round(sw)); recGdiLoop.sh = Math.max(2, Math.round(sh));
@@ -1233,7 +1240,7 @@ ipcMain.handle('rec:gdi-start', function (e, sx, sy, sw, sh) {
     mainLog('[rec] GDI 推帧循环启动（选区 ' + recGdiLoop.sw + 'x' + recGdiLoop.sh + ' @30fps 含光标）');
     return true;
 });
-ipcMain.on('rec:gdi-stop', function () { stopRecGdiLoop(); });
+ipcMain.on('rec:gdi-stop', function (e, owner) { stopRecGdiLoop(owner === 'remote' ? 'remote' : owner); });
 // 提权状态查询：渲染层据此跳过 getUserMedia（提权下 WGC 必失败）直走 GDI 通道，省白试延迟
 ipcMain.handle('sys:is-elevated', function () { return procElevated; });
 
@@ -4717,7 +4724,7 @@ function ensureRemoteWindow() {
             nodeIntegration: false
         }
     });
-    remoteWin.loadURL(SERVER_URL + 'remote-window.html?v=1552');
+    remoteWin.loadURL(SERVER_URL + 'remote-window.html?v=1553');
     remoteWin.on('close', function (e) {
         if (app.isQuitting || remoteWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
         // Alt+F4/点关闭转断开语义：通知页面走 disconnect 信令收口后自行 remoteClose，
@@ -6069,21 +6076,46 @@ app.whenReady().then(async function () {
     // （原 app:// 方案需 migrateLegacyStorage，实测跨协议导航稳定性问题后整体回退）
     // 阶段一百三十六：注入加密密钥（resolveSecureKey 归口）——启用后磁盘只落密文、内存解密
     registerDisplayMediaHandler(); // 阶段一百四十四：会议桌面共享放行（session 须 ready 后注册）
+    // 阶段三百零三：网页资源"静默换新"调度——同步到新资源后不再立即 reload 打断启动，
+    // 首载未完成则等加载完成；用户聚焦使用中则等切后台/最小化再换新；未聚焦则直接换新
+    var pendingWebReload = false;
+    var quietReloadArmed = false;
+    function quietReloadWhenIdle() {
+        if (!pendingWebReload) return;
+        if (!mainWindow || mainWindow.isDestroyed()) { pendingWebReload = false; return; }
+        var wc = mainWindow.webContents;
+        if (wc.isLoading()) { wc.once('did-finish-load', quietReloadWhenIdle); return; }
+        if (mainWindow.isFocused()) {
+            if (quietReloadArmed) return;
+            quietReloadArmed = true;
+            mainWindow.once('blur', function () {
+                quietReloadArmed = false;
+                setTimeout(quietReloadWhenIdle, 500);
+            });
+            setTimeout(quietReloadWhenIdle, 30000); // 兜底：偶发 blur 丢失时 30s 后重新判断窗口状态
+            return;
+        }
+        pendingWebReload = false;
+        // 阶段三百零三：换新前探测未发送内容（聊天输入框 / 工作台编辑草稿），
+        // 有未保存内容则放弃本轮换新——缓存已更新，下次启动自然加载新版本，绝不吞用户输入；
+        // 探测失败按"有内容"保守处理（通话窗口为独立窗口，不受主窗换新影响）
+        wc.executeJavaScript("(function(){try{var m=document.getElementById('message-input');if(m&&m.value&&m.value.trim())return true;var t=document.querySelector('textarea.ws-edit-ta');if(t&&t.value&&t.value.trim())return true;return false;}catch(e){return true;}})()")
+            .then(function (hasDraft) {
+                if (hasDraft) return;
+                try { wc.reload(); } catch (e) { /* 窗口销毁竞态：忽略 */ }
+            })
+            .catch(function () { /* 探测失败：保守放弃本次换新，留待下次启动 */ });
+    }
     webCache.init({
         serverUrl: SERVER_URL,
         secureKey: resolveSecureKey(),
         // 阶段一百四十：同步变更刷新主窗口（启动轮/失败重试轮共用出口——重试自愈成功后页面同样自动换新）
-        // reload 时机守卫：页面仍在首次加载（isLoading）时先等加载完成再重载——原实现 sync 完成即 reload，
-        // 与首载竞态时页面"加载到一半重来"，用户感知启动慢/闪断（实测 2026-10-19）
-        onSynced: function (r) {
-            if (!mainWindow || mainWindow.isDestroyed()) return;
-            if (mainWindow.webContents.isLoading()) {
-                mainWindow.webContents.once('did-finish-load', function () {
-                    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
-                });
-            } else {
-                mainWindow.webContents.reload();
-            }
+        // 阶段三百零三：原实现同步完成即 reload，启动阶段等于整套首屏再解析一遍（约 5.7MB 脚本），
+        // 是"启动后鼠标转圈"的另一来源；现改为静默换新：页面仍在首载则等加载完成，
+        // 用户正在使用（窗口聚焦）则等切到后台/最小化时再 reload，未聚焦则稍延迟直接换新
+        onSynced: function () {
+            pendingWebReload = true;
+            quietReloadWhenIdle();
         }
     });
     webCache.installInterceptor();

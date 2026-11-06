@@ -38,6 +38,16 @@
 
     function log() {
         try { console.log.apply(console, ['[remote-page]'].concat([].slice.call(arguments))); } catch (e) { }
+        // 阶段三百零四：观看窗排障日志落 userData/main.log（打包形态 console 不可见；
+        // 控制端"连接已断开/连接失败"原因此前无任何留痕，两侧都排不出）
+        try {
+            var parts = [].slice.call(arguments).map(function (x) {
+                if (x === null || x === undefined) return '';
+                if (typeof x === 'string') return x;
+                try { return JSON.stringify(x); } catch (e) { return String(x); }
+            });
+            if (d.clientLog) d.clientLog('[remote-page] ' + parts.join(' '));
+        } catch (e) { }
     }
     function setMode(text) { elMode.textContent = text; }
     function showMask(text) { elMaskText.textContent = text; elMask.classList.add('visible'); }
@@ -127,6 +137,7 @@
         pc.onconnectionstatechange = function () {
             if (st.ended || !st.pc) return;
             var s = st.pc.connectionState;
+            log('连接状态：' + s);
             if (s === 'connected') {
                 st.connected = true;
                 reportActOther(); // 联机二期 §9.4-5：媒体链路一接通即标记本机「远程协助中」（供游戏中心窗反查）
@@ -172,7 +183,14 @@
             try { st.pc.addIceCandidate(new RTCIceCandidate(p.candidate)); } catch (e) { }
         } else if (p.action === 'disconnect') {
             // 对端主动断开（chat.js 下行转发归口，毫秒级收口）
-            finish('对方已断开协助', false);
+            // 阶段三百零四：透传被控端收口原因（原一律"对方已断开协助"，排障无从判断——
+            // 抓屏失败/等 answer 超时/媒体断连/对方主动停共享四种场景区分提示）
+            var causeText = p.cause === 'capture' ? '对方屏幕捕获失败，无法共享画面'
+                : p.cause === 'timeout' ? '对方未收到连接请求，协助已超时'
+                    : p.cause === 'media' ? '对方网络连接中断，协助已结束'
+                        : p.cause === 'user' ? '对方已停止共享'
+                            : '对方已断开协助';
+            finish(causeText, false);
         } else if (p.action === 'ended' || p.action === 'timeout') {
             // 服务端归口收口（对端下线宽限 30s / 60s 未响应）：观看窗同步终结，防卡媒体层检测
             finish(p.reason || (p.action === 'timeout' ? '对方未响应，协助已取消' : '对方已断线，协助结束'), false);
