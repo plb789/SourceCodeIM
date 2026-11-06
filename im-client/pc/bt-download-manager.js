@@ -27,6 +27,15 @@ const QUIT_GRACE = 2000;          // shutdown 时等待引擎优雅退出宽限�
 const ESC_PREFIX = '__x__';       // 种子内转义文件名前缀（与服务端 gametorrent.go torrentEscPrefix 同规）
 const SEED_MAX_MS = 12 * 3600 * 1000; // 做种上限：下载完成后引擎任务保留供种，最长 12h 自动释放；
                                       // 进程退出即停（引擎 PreShutdown 通知 Tracker Stop），重启不恢复
+// 阶段二百九十七：BT 下载空闲/卡死检测——引擎一直发进度帧但速度=0、received 不增长（没 peer 可连），
+// 或引擎停发进度帧（内部卡死但进程不退出），页面永远显示"下载中"。双超时兜底：
+//   IDLE_SPEED_TIMEOUT: 引擎进度帧持续 speed=0 且 received 不增长超过此时长 → 自动发 resume 尝试恢复，
+//                       再持续同时长则置 error 提示"无可用下载源"
+//   PROGRESS_SILENT_TIMEOUT: 引擎停止发 progress 帧超过此时长 → 任务置 error（引擎卡死/崩溃未触发 exit）
+const IDLE_SPEED_TIMEOUT = 180 * 1000;    // 3 分钟速度为 0 → 发 resume 恢复
+const IDLE_SPEED_ERROR_TIMEOUT = 360 * 1000; // 6 分钟仍无进度 → 置 error
+const PROGRESS_SILENT_TIMEOUT = 120 * 1000; // 2 分钟收不到 progress 帧 → 引擎卡死
+const IDLE_CHECK_INTERVAL = 15000;        // 空闲检测扫描周期（15s）
 
 // 转义名映射（与服务端 gametorrent.go torrentEscName 同规）：rel 含非 ASCII →
 // "__x__"+sha1(utf8(rel)) 前 16 hex。DLBT 引擎落盘时把种子内文件名字节按系统 ANSI 代码页
@@ -47,7 +56,12 @@ function mapEngineState(s) {
         case 'downloading': return 'downloading';
         case 'paused': return 'paused';
         case 'checking': return 'verifying'; // 引擎启动时校验已有文件（续传场景）
-        default: return null;                // queued/metainfo/allocating 等中间态不刷页面态
+        case 'queued':
+        case 'metainfo':
+        case 'allocating':
+            return 'connecting'; // 阶段二百九十七：引擎在找 peer / 取种子元信息 / 分配磁盘
+                                 // → 页面显示"连接中"，让用户知道正在工作而非卡死
+        default: return null;
     }
 }
 
@@ -64,6 +78,9 @@ class BtDownloadManager extends EventEmitter {
         this._quitting = false;
         this._limits = { down: 0, up: 0 };      // 全局限速（B/s，0=不限速）：ready 前暂存，就绪/重启后补发
         this._limitsApplied = false;            // 主进程是否显式下发过限速（未下发时保持宿主内置 2MB/s 上传默认）
+        // 阶段二百九十七：空闲/卡死检测定时器（周期性扫描全部进行中任务）
+        this._idleTimer = setInterval(() => this._checkIdleTasks(), IDLE_CHECK_INTERVAL);
+        if (this._idleTimer && this._idleTimer.unref) this._idleTimer.unref();
     }
 
     // 全局下载/上传限速（字节/秒，0=不限速）：引擎级共享配额（全部任务+做种上传统一受限），
@@ -106,6 +123,21 @@ class BtDownloadManager extends EventEmitter {
         }
         const root = directRoot || path.join(installDir, slug); // BT 安装根（游戏根口径：done 事件/exe 探测/库 install_path）
         const engineOut = directRoot ? path.dirname(directRoot) : installDir; // 引擎落盘目录（安装根，内部路径含 info.name 根）
+        // 安全校验（致命防呆）：root（游戏根）必须是 engineOut（安装根）的子目录且末级目录名等于 slug。
+        // 历史 bug：库 install_path 误存安装根被当作 finalDir 直传，导致 root=安装根、engineOut=盘根，
+        // 引擎把文件下载到盘根或覆盖整个安装根。末级目录名校验可精准区分安装根与游戏根。
+        try {
+            const rNorm = path.resolve(root);
+            const eNorm = path.resolve(engineOut);
+            const rel = path.relative(eNorm, rNorm);
+            const leaf = path.basename(rNorm);
+            if (rNorm === eNorm || rel === '' || rel.startsWith('..') || path.isAbsolute(rel) ||
+                leaf.toLowerCase() !== slug.toLowerCase()) {
+                return { ok: false, error: '安装目录参数异常：游戏根不是安装根的子目录或与 slug 不匹配，已拒绝执行以防数据丢失' };
+            }
+        } catch (e) {
+            return { ok: false, error: '安装目录校验失败：' + e.message };
+        }
         // 防目录穿越：rel_path 解析后必须位于安装根内，越界条目丢弃（与 HTTP 管理器同水位）
         const list = [];
         let total = 0;
@@ -154,6 +186,11 @@ class BtDownloadManager extends EventEmitter {
             task._torReady = false;
             task._torPath = this._torPathOf(taskId);
             task._statusDir = this._statusDirOf(taskId);
+            // 阶段二百九十七：空闲/卡死检测字段重置
+            task._lastProgressAt = Date.now();
+            task._lastReceived = 0;
+            task._idleSince = 0;
+            task._resumeAttempted = false;
         } else {
             task = {
                 taskId: taskId,
@@ -175,7 +212,12 @@ class BtDownloadManager extends EventEmitter {
                 _lastEmit: 0,
                 _torReady: false,
                 _torPath: this._torPathOf(taskId),
-                _statusDir: this._statusDirOf(taskId)
+                _statusDir: this._statusDirOf(taskId),
+                // 阶段二百九十七：空闲/卡死检测字段
+                _lastProgressAt: Date.now(),   // 上次收到引擎 progress 帧的时间
+                _lastReceived: 0,              // 上次 progress 帧的 received 值（检测 received 是否增长）
+                _idleSince: 0,                 // 速度持续为 0 的起始时间戳（0=当前有进度）
+                _resumeAttempted: false        // 是否已尝试过自动 resume 恢复
             };
             this.tasks.set(taskId, task);
         }
@@ -187,10 +229,13 @@ class BtDownloadManager extends EventEmitter {
     pause(taskId) {
         const task = this.tasks.get(String(taskId || ''));
         if (!task) return { ok: false, error: '任务不存在' };
-        if (task.state === 'downloading' || task.state === 'queued') {
+        if (task.state === 'downloading' || task.state === 'queued' || task.state === 'connecting') {
             task.state = 'paused';
             task._speed = 0;
             task._upSpeed = 0;
+            // 阶段二百九十七：暂停时重置空闲检测（避免暂停中被误判为卡死）
+            task._idleSince = 0;
+            task._resumeAttempted = false;
             this._send({ cmd: 'pause', id: task.taskId });
             this._emit(task, true); // 暂停终态必发一条
         }
@@ -204,6 +249,11 @@ class BtDownloadManager extends EventEmitter {
             task.state = 'downloading';
             task._speed = 0;
             task._upSpeed = 0;
+            // 阶段二百九十七：resume 时重置空闲检测
+            task._lastProgressAt = Date.now();
+            task._lastReceived = task.received || 0;
+            task._idleSince = 0;
+            task._resumeAttempted = false;
             this._emit(task, true);
             if (task._torReady) {
                 this._send({ cmd: 'resume', id: task.taskId }); // 引擎侧错误态自动走 ResumeInError
@@ -245,6 +295,7 @@ class BtDownloadManager extends EventEmitter {
     // 宽限超时强杀，不阻塞退出
     shutdown() {
         this._quitting = true;
+        if (this._idleTimer) { clearInterval(this._idleTimer); this._idleTimer = null; }
         if (!this._proc) return;
         try { this._send({ cmd: 'quit' }); } catch (e) { /* 管道已断，直接杀 */ }
         const proc = this._proc;
@@ -387,6 +438,27 @@ class BtDownloadManager extends EventEmitter {
             task.total = total;
             task._speed = Number(m.down) || 0;
             task._upSpeed = Number(m.up) || 0; // BT 上传速率（给 peer 供速），页面与下载速率分示
+            // 阶段二百九十八：引擎 peer 数量（引擎 progress 帧新增字段）
+            task._conn = Number(m.conn) || 0;            // 已连接 peer 数
+            task._seeds = Number(m.seeds) || 0;          // 已连接 seed 数
+            task._totalSeeds = Number(m.totalSeeds);     // Tracker 通告总 seed 数（-1=Tracker 不支持 scrap）
+            task._totalPeers = Number(m.totalPeers);     // Tracker 通告总 peer 数
+            // 引擎返回的 error 文本（任何状态都可能有——progress 帧带 tracker 超时等临时错误）
+            // 仅非空时覆盖（引擎空串保持上值，避免进度帧抖动反复清空）
+            if (m.error && String(m.error).length > 0 && String(m.error) !== 'null') {
+                task._engineError = String(m.error);
+            }
+            // 阶段二百九十七：更新空闲检测字段
+            const now = Date.now();
+            task._lastProgressAt = now;
+            const speedZero = task._speed === 0 && received === task._lastReceived;
+            if (speedZero) {
+                if (!task._idleSince) task._idleSince = now; // 首次检测到无进度 → 记录起始时间
+            } else {
+                task._idleSince = 0;      // 有进度了 → 重置空闲计时器 + resume 尝试标志
+                task._resumeAttempted = false;
+            }
+            task._lastReceived = received;
             const mapped = mapEngineState(String(m.state || ''));
             if (mapped && task.state !== 'done' && task.state !== 'error') {
                 if (task.state !== mapped) { task.state = mapped; this._emit(task, true); return; }
@@ -559,7 +631,7 @@ class BtDownloadManager extends EventEmitter {
         const now = Date.now();
         if (!force && now - task._lastEmit < EMIT_INTERVAL) return;
         task._lastEmit = now;
-        this.emit('progress', {
+        const payload = {
             taskId: task.taskId,
             gameId: task.gameId,
             received: task.received,
@@ -569,8 +641,15 @@ class BtDownloadManager extends EventEmitter {
             upSpeed: task._upSpeed || 0, // BT 上传速率（HTTP 通道无此字段，页面按 via 区分展示）
             state: stateOverride || task.state,
             fileRelPath: '', // BT 通道引擎不回报单文件粒度，页面展示整体进度
-            error: error || null
-        });
+            error: error || null,
+            // 阶段二百九十八：BT 引擎 peer 数量（HTTP 通道无此字段，前端只在 via='bt' 时展示）
+            conn: task._conn || 0,
+            seeds: task._seeds || 0,
+            totalSeeds: typeof task._totalSeeds === 'number' ? task._totalSeeds : undefined,
+            totalPeers: typeof task._totalPeers === 'number' ? task._totalPeers : undefined,
+            engineError: task._engineError || null // 引擎原始错误文本（非 ERROR 态也可能有）
+        };
+        this.emit('progress', payload);
     }
 
     _summary(task) {
@@ -593,6 +672,52 @@ class BtDownloadManager extends EventEmitter {
     _safeUnlink(p) {
         if (!p) return;
         try { fs.unlink(p, function () { }); } catch (e) { }
+    }
+
+    // 阶段二百九十七：周期性空闲/卡死检测（每 IDLE_CHECK_INTERVAL 秒扫描）
+    // 检测维度：
+    //   1. PROGRESS_SILENT_TIMEOUT：引擎超过此时长未发 progress 帧 → 引擎内部卡死/崩溃未触发 exit → 置 error
+    //   2. IDLE_SPEED_TIMEOUT：速度=0 且 received 不增长超过此时长 → 自动发 resume 尝试恢复（重连 DHT/Tracker）
+    //   3. IDLE_SPEED_ERROR_TIMEOUT：resume 后仍空闲超过此时长 → 置 error（无可用下载源）
+    _checkIdleTasks() {
+        if (this._quitting) return;
+        const now = Date.now();
+        const self = this;
+        this.tasks.forEach(function (task, taskId) {
+            // 只检查进行中的任务（queued/downloading/connecting/verifying）
+            if (task.state === 'done' || task.state === 'error' || task.state === 'paused' || task.state === 'cancelled') return;
+            // 引擎 ready 但种子尚未就绪 → 属于正常启动等待期，不判定卡死
+            if (!task._torReady) return;
+
+            // 检测 1：progress 帧断流（引擎卡死）
+            if (task._lastProgressAt && now - task._lastProgressAt > PROGRESS_SILENT_TIMEOUT) {
+                console.warn('[bt] 任务 progress 帧断流超过', Math.round((now - task._lastProgressAt) / 1000), 's，置 error：', taskId);
+                task.state = 'error';
+                task._speed = 0;
+                task._upSpeed = 0;
+                self._emit(task, true, 'BT 引擎无响应（进度中断 ' + Math.round((now - task._lastProgressAt) / 1000) + ' 秒），请重试');
+                return;
+            }
+
+            // 检测 2/3：速度=0 且 received 不增长（无 peer 可连）
+            if (task._idleSince && now - task._idleSince > IDLE_SPEED_TIMEOUT) {
+                if (!task._resumeAttempted) {
+                    // 首次空闲超时：尝试 resume 恢复（让引擎重新 announce Tracker + DHT 发现新 peer）
+                    task._resumeAttempted = true;
+                    self._send({ cmd: 'resume', id: taskId });
+                    // 同时重置 idleSince 给引擎一段恢复时间（IDLE_SPEED_ERROR_TIMEOUT - IDLE_SPEED_TIMEOUT ≈ 3 分钟）
+                    task._idleSince = now;
+                    console.warn('[bt] 任务速度为 0 超过', Math.round(IDLE_SPEED_TIMEOUT / 1000), 's，发 resume 恢复：', taskId);
+                } else if (now - task._idleSince > IDLE_SPEED_ERROR_TIMEOUT) {
+                    // resume 后仍无进度 → 置 error
+                    console.warn('[bt] resume 后仍空闲超过', Math.round(IDLE_SPEED_ERROR_TIMEOUT / 1000), 's，置 error：', taskId);
+                    task.state = 'error';
+                    task._speed = 0;
+                    task._upSpeed = 0;
+                    self._emit(task, true, '无可用下载源（BT 网络无 peer 连接，P2SP 直链源不可用），请检查网络或稍后重试');
+                }
+            }
+        });
     }
 }
 

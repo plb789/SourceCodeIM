@@ -87,6 +87,10 @@ table.m-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .m-p code { background: rgba(255,255,255,.06); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 
 .m-mask { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 100; display: flex; align-items: center; justify-content: center; }
+/* 商户端确认弹窗置顶：#m-modal-mask 与 #m-ver-mask/#m-game-mask 等同属 .m-mask（z-index:100），
+   同层级时 DOM 靠后者在上——版本/游戏编辑弹窗会把确认框整个压住导致"删除确认点不到"。
+   提到 3350（与管理端 #admin-confirm-mask 对齐），确保确认框始终在最上层 */
+#m-modal-mask { z-index: 3350; }
 .m-mask.hidden, .hidden { display: none !important; }
 .m-modal {
     width: 680px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); overflow-y: auto;

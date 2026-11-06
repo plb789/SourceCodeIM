@@ -2524,6 +2524,11 @@ html.m .mobile-plus-panel:not(.hidden) {
 #modal-mask {
     z-index: 3350;
 }
+/* 管理端确认弹窗同样置顶：admin-confirm-mask 的 DOM（admin.html 1840行）早于 gm-ver-mask
+   等同级业务遮罩，同 z-index:2000 时被后者压住导致"删除确认框点不到"。提到 3350 与 #modal-mask 对齐 */
+#admin-confirm-mask {
+    z-index: 3350;
+}
 
 .modal-box {
     width: 300px;

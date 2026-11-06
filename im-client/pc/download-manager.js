@@ -84,6 +84,21 @@ class GameDownloadManager extends EventEmitter {
         if (!slug || slug === '.' || slug === '..') return { ok: false, error: '缺少游戏标识 slug' };
         const finalDir = directRoot || path.join(root, slug);
         const stagingDir = path.join(root, STAGING_DIRNAME, slug);
+        // 安全校验（致命防呆）：finalDir（游戏根）必须是 root（安装根）的子目录且末级目录名等于 slug。
+        // 历史 bug：库 install_path 误存安装根被当作 finalDir 直传，导致 root=盘根、finalDir=安装根，
+        // _commit 把整个安装根 rename 清空。末级目录名校验可精准区分安装根与游戏根。
+        try {
+            const fNorm = path.resolve(finalDir);
+            const rNorm = path.resolve(root);
+            const rel = path.relative(rNorm, fNorm);
+            const leaf = path.basename(fNorm);
+            if (fNorm === rNorm || rel === '' || rel.startsWith('..') || path.isAbsolute(rel) ||
+                leaf.toLowerCase() !== slug.toLowerCase()) {
+                return { ok: false, error: '安装目录参数异常：游戏根不是安装根的子目录或与 slug 不匹配，已拒绝执行以防数据丢失' };
+            }
+        } catch (e) {
+            return { ok: false, error: '安装目录校验失败：' + e.message };
+        }
         // 防目录穿越：rel_path 解析后必须位于暂存目录内，越界条目丢弃
         const list = [];
         for (let i = 0; i < files.length; i++) {
@@ -107,14 +122,18 @@ class GameDownloadManager extends EventEmitter {
             task = exist;
             task.installDir = finalDir;
             task.stagingDir = stagingDir;
-            task.root = root; // 安装根（对外摘要/库 install_path 口径，恢复/更新复用即此）
+            task.root = root; // 安装根（暂存目录父级；摘要/done 对外报 installDir=游戏根）
+            task.slug = slug; // 游戏标识（_commit 末级目录名校验用）
             task.username = String(payload.username || '');
             task.serverBase = String(payload.serverBase || '');
             task.files = list;
             task.total = this._calcTotal(list);
             task.fileIndex = 0;
             task.retries = 0;
-            task.received = 0;
+            task.received = 0;          // 总处理字节（下载+去重复用，用于整体进度条）
+            task.netReceived = 0;       // 实际网络下载字节（速度/净下载量统计）
+            task.dedupedCount = 0;      // 去重复用文件数
+            task.dedupedBytes = 0;      // 去重复用总字节
             task._speed = 0;
             task._currentRel = '';
         } else {
@@ -123,12 +142,16 @@ class GameDownloadManager extends EventEmitter {
                 gameId: String(payload.gameId || ''),
                 installDir: finalDir,   // 正式目录（done 事件对外即此，供主进程探测 .exe 登记启动）
                 stagingDir: stagingDir, // 暂存目录（下载全程落此，完成后换入 installDir）
-                root: root,             // 安装根（摘要 installDir 口径 / 库 install_path，恢复/更新复用即此）
+                root: root,             // 安装根（暂存目录父级；摘要/done 对外报 installDir=游戏根）
+                slug: slug,             // 游戏标识（_commit 末级目录名校验用）
                 username: String(payload.username || ''),
                 serverBase: String(payload.serverBase || ''),
                 files: list,
                 state: 'queued',
-                received: 0,
+                received: 0,          // 总处理字节（下载+去重复用，用于整体进度条）
+                netReceived: 0,       // 实际网络下载字节（速度/净下载量统计）
+                dedupedCount: 0,      // 去重复用文件数
+                dedupedBytes: 0,      // 去重复用总字节
                 total: this._calcTotal(list),
                 fileIndex: 0,
                 startedAt: 0,
@@ -272,11 +295,54 @@ class GameDownloadManager extends EventEmitter {
         return new Promise(function (resolve, reject) {
             const abs = path.resolve(task.stagingDir, file.rel_path);
             const partAbs = abs + '.part';
-            // 上次会话已完整落盘且校验过的文件（rename 前提即校验通过）直接跳过，秒级恢复
+            // 上次会话已完整落盘且校验过的文件（rename 前提即校验通过）直接跳过，秒级恢复。
+            // 重启恢复时 netReceived 已归零，需补计已落盘字节，避免进度条与 "X MB / total" 文本脱节。
             try {
                 const st0 = fs.statSync(abs);
-                if (st0.isFile() && file.size > 0 && st0.size === file.size) { resolve(); return; }
+                if (st0.isFile() && file.size > 0 && st0.size === file.size) {
+                    task.netReceived += file.size;
+                    resolve();
+                    return;
+                }
             } catch (e) { /* 正式文件不存在，正常下载 */ }
+            // 增量去重：已安装目录下同路径同大小同 SHA 文件直接硬链接/复制到暂存目录，跳过下载。
+            // 补丁更新核心——只下载变更文件，未变更文件从本地复用；_commit 全量替换时暂存目录已
+            // 含全部文件（变更的下载 + 未变更的复用），不会丢文件。
+            const localAbs = path.resolve(task.installDir, file.rel_path);
+            let dedupTried = false;
+            try {
+                const lst = fs.statSync(localAbs);
+                if (lst.isFile() && file.size > 0 && lst.size === file.size) {
+                    dedupTried = true;
+                    const lh = crypto.createHash('sha256');
+                    const lrs = fs.createReadStream(localAbs);
+                    lrs.on('data', function (c) { lh.update(c); });
+                    lrs.on('error', function () { go(); });
+                    lrs.on('end', function () {
+                        const localSha = lh.digest('hex');
+                        if (file.sha256 && localSha === file.sha256) {
+                            // 内容一致：硬链接优先（同盘 O(1) 不占额外空间），失败回退复制
+                            task.dedupedCount++;
+                            task.dedupedBytes += file.size;
+                            fs.mkdir(path.dirname(abs), { recursive: true }, function (mkErr2) {
+                                if (mkErr2) { go(); return; }
+                                try { fs.unlinkSync(abs); } catch (e) { /* 不存在忽略 */ }
+                                fs.link(localAbs, abs, function (lkErr) {
+                                    if (!lkErr) { resolve(); return; }
+                                    const cin = fs.createReadStream(localAbs);
+                                    const cout = fs.createWriteStream(abs);
+                                    cin.pipe(cout);
+                                    cout.on('finish', function () { resolve(); });
+                                    cout.on('error', function () { go(); });
+                                    cin.on('error', function () { go(); });
+                                });
+                            });
+                        } else { go(); }
+                    });
+                }
+            } catch (e) { /* 本地不存在或异常，走下载 */ }
+            if (!dedupTried) go();
+            function go() {
             fs.mkdir(path.dirname(abs), { recursive: true }, function (mkErr) {
                 if (mkErr) { reject({ message: '创建目录失败：' + mkErr.message }); return; }
                 let base = 0;
@@ -315,7 +381,7 @@ class GameDownloadManager extends EventEmitter {
                             return;
                         }
                         let written = append ? base : 0; // 最终文件字节数（含断点已有部分）
-                        if (!append && base > 0) task.received -= base; // 200 重头写：扣除旧断点计数
+                        if (!append && base > 0) { task.received -= base; task.netReceived -= base; } // 200 重头写：扣除旧断点计数
                         const hash = crypto.createHash('sha256'); // 本次会话接收字节哈希（无断点时即全量）
                         const stream = fs.createWriteStream(partAbs, { flags: append ? 'a' : 'w' });
                         let settled = false;
@@ -396,6 +462,7 @@ class GameDownloadManager extends EventEmitter {
                         };
                         res.on('data', function (chunk) {
                             task.received += chunk.length;
+                            task.netReceived += chunk.length;
                             written += chunk.length;
                             hash.update(chunk);
                             self._tick(task); // 速度计算 + 500ms 节流推送
@@ -449,6 +516,7 @@ class GameDownloadManager extends EventEmitter {
                 };
                 attempt(url, 0);
             });
+            }
         });
     }
 
@@ -478,6 +546,7 @@ class GameDownloadManager extends EventEmitter {
         }
         task.received = sum;
         task._lastBytes = sum;
+        task._lastNetBytes = task.netReceived;
         task._lastTime = 0;
         task._lastDiskBytes = task._diskBytes; // 磁盘写入窗口基准同步重置（暂停恢复/重试基线校准）
     }
@@ -485,12 +554,14 @@ class GameDownloadManager extends EventEmitter {
     // 速度计算 + 进度节流推送（500ms 窗口字节差；数据回调高频触发，窗口内不 emit）
     _tick(task) {
         const now = Date.now();
-        if (!task._lastTime) { task._lastTime = now; task._lastBytes = task.received; task._lastDiskBytes = task._diskBytes; return; }
+        if (!task._lastTime) { task._lastTime = now; task._lastBytes = task.received; task._lastNetBytes = task.netReceived; task._lastDiskBytes = task._diskBytes; return; }
         const dt = now - task._lastTime;
         if (dt >= EMIT_INTERVAL) {
-            task._speed = Math.max(0, Math.round((task.received - task._lastBytes) / (dt / 1000)));
+            // 速度按实际网络下载字节计算（去重复用文件不产生网络流量，不计入速度）
+            task._speed = Math.max(0, Math.round((task.netReceived - (task._lastNetBytes || 0)) / (dt / 1000)));
             task._diskSpeed = Math.max(0, Math.round((task._diskBytes - task._lastDiskBytes) / (dt / 1000))); // 落盘吞吐（写盘字节窗口差）
             task._lastBytes = task.received;
+            task._lastNetBytes = task.netReceived;
             task._lastDiskBytes = task._diskBytes;
             task._lastTime = now;
             task._lastEmit = now;
@@ -511,10 +582,13 @@ class GameDownloadManager extends EventEmitter {
         return {
             taskId: task.taskId,
             gameId: task.gameId,
-            received: task.received,
+            received: task.received,        // 总处理字节（下载+去重复用）
+            netReceived: task.netReceived,  // 实际网络下载字节
             total: task.total,
-            speed: task._speed,
+            speed: task._speed,             // 网络下载速度（基于 netReceived）
             diskSpeed: task._diskSpeed || 0, // 磁盘写入速率（落盘吞吐曲线）
+            dedupedCount: task.dedupedCount || 0,
+            dedupedBytes: task.dedupedBytes || 0,
             state: stateOverride || task.state,
             fileRelPath: rel || task._currentRel || '',
             error: error || null
@@ -547,7 +621,25 @@ class GameDownloadManager extends EventEmitter {
     _commit(task) {
         const finalDir = task.installDir;
         const stagingDir = task.stagingDir;
+        const root = task.root;
         if (!stagingDir || !fs.existsSync(stagingDir)) return { ok: true }; // 无暂存内容（全部秒跳）：正式目录已就绪
+        // 安全校验（致命防呆）：finalDir 必须是 root 的子目录且末级目录名等于 slug。
+        // 历史 bug：库记录 install_path 误存安装根（H:\CdonlgameApp）被当作 finalDir 直传，
+        // 导致 renameSync 把整个安装根挪走、所有游戏丢失。此处若校验失败直接拒绝。
+        try {
+            const fNorm = path.resolve(finalDir);
+            const rNorm = path.resolve(root);
+            const rel = path.relative(rNorm, fNorm);
+            const leaf = path.basename(fNorm);
+            const slug = String(task.slug || '');
+            // slug 必须非空（start 已校验），为空说明 task 元数据异常，宁拒勿放行
+            if (!slug || fNorm === rNorm || rel === '' || rel.startsWith('..') || path.isAbsolute(rel) ||
+                leaf.toLowerCase() !== slug.toLowerCase()) {
+                return { ok: false, message: '安装目录参数异常：finalDir 不是安装根的子目录或与 slug 不匹配，已拒绝执行以防数据丢失' };
+            }
+        } catch (e) {
+            return { ok: false, message: '安装目录校验失败：' + e.message };
+        }
         let bak = '';
         try {
             if (fs.existsSync(finalDir)) {
@@ -576,21 +668,24 @@ class GameDownloadManager extends EventEmitter {
         } catch (e) { /* 目录非空或不存在，忽略 */ }
     }
 
-    // 任务摘要（对外返回/status 数组条目）。installDir 报安装根（页面持久化 install_path 复用，
-    // 与 BT 通道 installDir 口径差异由页面归一到根），实际落盘由 done 事件 installDir 承载
+    // 任务摘要（对外返回/status 数组条目）。installDir 报游戏根（与 BT 通道/done 事件同口径），
+    // 页面持久化 install_path 即此值；root 仅作为内部安装根（暂存目录父级）不对外暴露
     _summary(task) {
         return {
             taskId: task.taskId,
             gameId: task.gameId,
-            installDir: task.root || task.installDir,
+            installDir: task.installDir,
             username: task.username,
             state: task.state,
             received: task.received,
+            netReceived: task.netReceived || 0,
             total: task.total,
             fileIndex: task.fileIndex,
             filesCount: task.files.length,
             speed: task._speed,
             diskSpeed: task._diskSpeed || 0,
+            dedupedCount: task.dedupedCount || 0,
+            dedupedBytes: task.dedupedBytes || 0,
             startedAt: task.startedAt,
             via: 'http' // 通道标识（与 BT 摘要同口径；页面去重采纳/徽标展示按此区分）
         };

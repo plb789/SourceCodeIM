@@ -1891,19 +1891,41 @@ function gameDownloadBroadcast(evt) {
 gameDownloads.on('progress', gameDownloadBroadcast);
 btDownloads.on('progress', gameDownloadBroadcast);
 
-// 任务全部文件完成：探测安装目录根下唯一 .exe 自动登记启动注册表（用户手动登记过则不覆盖；
+// 任务全部文件完成：探测安装目录下唯一 .exe 自动登记启动注册表（用户手动登记过则不覆盖；
 // 0 个或多个 exe 不猜，交商店页 needExe 分支由用户手动选择，符合"禁止猜测"原则）。
-// BT 任务的 info.installDir 已是安装根（installDir+slug），与 HTTP 布局归一
+// 递归扫描（限定深度）以兼容"版本目录名与 slug 不一致"导致 exe 落在子目录的场景
+// （例：slug=warz3，版本目录=War3 → exe 在 warz3\War3\War3.exe）。BT 任务的 info.installDir
+// 已是安装根（installDir+slug），与 HTTP 布局归一。
 function gameDownloadDone(info) {
-    try {
-        if (!info || !info.gameId || !info.installDir) return;
-        var exes = fs.readdirSync(info.installDir).filter(function (n) { return /\.exe$/i.test(n); });
-        if (exes.length !== 1) return;
-        var reg = gameLaunchRegLoad();
-        if (reg[info.gameId]) return;
-        reg[info.gameId] = { installDir: info.installDir, exe: path.join(info.installDir, exes[0]), source: 'probe' };
-        gameLaunchRegSave(reg);
-    } catch (e) { /* 探测失败不影响任务完成状态，下次启动可手动登记 */ }
+    // 延后到下一个 tick 执行递归扫描，避免阻塞下载完成事件的即时 UI 刷新；
+    // 扫描为一次性操作（下载完成时执行一次），深度上限 5 防止过深目录树拖慢主进程。
+    setImmediate(function () {
+        try {
+            if (!info || !info.gameId || !info.installDir) return;
+            var root = info.installDir;
+            var exes = [];
+            (function walk(dir, depth) {
+                if (depth > 5) return;
+                var entries;
+                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i];
+                    var full = path.join(dir, e.name);
+                    if (e.isDirectory()) {
+                        walk(full, depth + 1);
+                    } else if (e.isFile() && /\.exe$/i.test(e.name)) {
+                        exes.push(full);
+                    }
+                }
+            })(root, 0);
+            if (exes.length !== 1) return; // 0 个或多个不猜，交用户手动选择
+            var reg = gameLaunchRegLoad();
+            if (reg[info.gameId] && reg[info.gameId].exe) return; // 已有有效 exe 登记则不覆盖（用户清除 exe 后允许重探测）
+            var exePath = exes[0];
+            reg[info.gameId] = { installDir: path.dirname(exePath), exe: exePath, source: 'probe' };
+            gameLaunchRegSave(reg);
+        } catch (e) { /* 探测失败不影响任务完成状态，下次启动可手动登记 */ }
+    });
 }
 gameDownloads.on('done', gameDownloadDone);
 btDownloads.on('done', gameDownloadDone);
@@ -2573,6 +2595,138 @@ function fwEnsureDlbtHost() {
     })();
 }
 
+// ===== 游戏启动"正在启动 → 运行中"窗口可见探测（Steam 同款：点击启动按钮后按钮先显示"正在启动"，
+// 游戏画面真正可见才切"运行中"）=====
+// 此前 spawn 成功即广播 game-start，按钮秒切"运行中"——大游戏解压/加载期窗口迟迟不出，用户误以为
+// 游戏已就绪。现改为：spawn 后先广播 launching 事件（按钮显示"正在启动"），由本助手探测到
+// "目标进程族拥有可见顶层窗口"后再广播 game-start。
+// 进程族归口（三层，覆盖启动器/包装器/存根重拉链）：
+//   1) 直启：spawn 的游戏 exe 即窗口宿主（商店游戏主路径）；
+//   2) 父链后代：启动器 CreateProcess 拉起真实游戏（SmartSteamEmu loader、injector --launch 包装），
+//      Toolhelp32 快照父链展开；探测集跨轮询累积——启动器中途退出不丢已发现的链路；
+//   3) exe 文件名匹配：个别启动器为"存根"模式（拉起真身后立即退出，父链断裂，实测 notepad.exe
+//      存根即如此），按启动 exe 的文件名兜底匹配窗口宿主进程名。
+// 探测期间进程 exit/error 走原有清理链，回调按"条目仍在且同实例"守卫，不与退出广播竞态。
+// 实现：优先调用原生探测工具 game-visible.exe（随包分发 game-visible 子目录，等价逻辑毫秒级
+// 启动，省掉 PowerShell 每次 Add-Type 约 1~2s 编译开销）；工具缺失（未编译/旧安装包）回退
+// PowerShell 实现（单进程内部自轮询 500ms 步进，上限 30s），行为一致。二者超时/失败一律按
+// "可见"回调——回退旧"立即运行中"行为，状态机绝不卡死在"正在启动"
+var GAME_VISIBLE_WAIT_MS = 30000;
+// 探测工具路径解析（与 sseSteamDir 同款双形态回退）：打包态 resources\game-visible\，dev 态
+// game-visible\ 子目录（源码+一键编译脚本同目录，见 game-visible/build.bat）；均无则返回空串
+// （调用方回退 PowerShell）
+function gameVisibleToolPath() {
+    try {
+        if (process.resourcesPath) {
+            var p = path.join(process.resourcesPath, 'game-visible', 'game-visible.exe');
+            if (fs.existsSync(p)) return p;
+        }
+        var dev = path.join(__dirname, 'game-visible', 'game-visible.exe');
+        if (fs.existsSync(dev)) return dev;
+    } catch (e) { }
+    return '';
+}
+// opts.excludeRoot=true：排除根进程（spawn 的直接子进程）自身的窗口——SmartSteamEmu loader 常驻
+// 且自带 484x201 可见主窗（实测标题"SmartSteamEmu"），不排除会让 SSE 游戏在 loader 窗口出现时
+// （早于游戏窗口）误切"运行中"；SSE 路径语义=等真实游戏窗口可见，直启游戏根进程即游戏本体不排除
+function waitGameWindowVisible(pid, exePath, cb, opts) {
+    if (typeof exePath === 'function') { cb = exePath; exePath = ''; } // 兼容不传 exePath 的调用
+    var excludeRoot = !!(opts && opts.excludeRoot);
+    var leaf = '';
+    try { leaf = path.basename(String(exePath || '')); } catch (e) { }
+    var done = false;
+    var guard = setTimeout(function () { finish(true); }, GAME_VISIBLE_WAIT_MS + 15000); // 探测卡死兜底（自身 30s 上限 + 启动/编译余量）
+    var ps = null;
+    function finish(vis) {
+        if (done) return;
+        done = true;
+        clearTimeout(guard);
+        if (ps) { try { ps.kill(); } catch (e) { } }
+        cb(vis);
+    }
+    // 原生工具优先：argv 传参不经 shell（Node 负责引号转义），leaf 原样传递无注入面；
+    // 输出 "1"=可见 / "0"=超时
+    var tool = gameVisibleToolPath();
+    try {
+        if (tool) {
+            ps = spawn(tool, [String(Number(pid)), leaf, String(GAME_VISIBLE_WAIT_MS), excludeRoot ? '1' : '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        } else {
+            // 回退 PowerShell：单进程内部自轮询（等价逻辑；此处才需要 PS 双引号串注入加固）
+            var psLeaf = String(leaf).replace(/[`$"]/g, '');
+            var cs = buildGameVisiblePs();
+            var ps1 = [
+                "$ErrorActionPreference='SilentlyContinue'",
+                "Add-Type -TypeDefinition @'\n" + cs + "\n'@",
+                '$root=' + Number(pid),
+                '$leaf="' + psLeaf + '"',
+                '$excl=' + (excludeRoot ? '$true' : '$false'),
+                '$dl=(Get-Date).AddMilliseconds(' + GAME_VISIBLE_WAIT_MS + ')',
+                '$set=New-Object System.Collections.Generic.HashSet[uint32]',
+                '$ok=$false',
+                'while((Get-Date) -lt $dl){',
+                '  [GW]::Expand($set,$root,$leaf)',
+                '  if([GW]::HasVisible($set,$root,$excl)){$ok=$true;break}',
+                '  Start-Sleep -Milliseconds 500',
+                '}',
+                "if($ok){Write-Output '1'}else{Write-Output '0'}"
+            ].join('\n');
+            ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps1], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        }
+    } catch (e) { finish(true); return; }
+    var out = '';
+    ps.stdout.on('data', function (d) { out += d; });
+    ps.once('close', function () { finish(String(out).indexOf('1') === 0); });
+    ps.once('error', function () { finish(true); }); // 探测链路失败：回退"立即运行中"，不卡"正在启动"
+}
+
+// PowerShell 回退实现的 C# 源（等价逻辑：进程族 Expand + 可见窗口 HasVisible，含 excludeRoot）
+function buildGameVisiblePs() {
+    // 窗口判定：IsWindowVisible + 矩形 ≥150x100（滤掉 0 尺寸消息窗/隐藏辅助窗），命中即视为画面可见
+    return [
+        'using System;using System.Collections.Generic;using System.Runtime.InteropServices;',
+        'public struct PE32 { public uint dwSize; public uint cntUsage; public uint th32ProcessID; public IntPtr th32DefaultHeapID; public uint th32ModuleID; public uint cntThreads; public uint th32ParentProcessID; public int pcPriClassBase; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string szExeFile; }',
+        'public struct WR { public int L; public int T; public int R; public int B; }',
+        'public class GW {',
+        '  [DllImport("kernel32.dll")] public static extern IntPtr CreateToolhelp32Snapshot(uint f,uint pid);',
+        '  [DllImport("kernel32.dll")] public static extern bool Process32First(IntPtr h,ref PE32 e);',
+        '  [DllImport("kernel32.dll")] public static extern bool Process32Next(IntPtr h,ref PE32 e);',
+        '  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);',
+        '  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb,IntPtr lp);',
+        '  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);',
+        '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);',
+        '  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out WR r);',
+        '  public delegate bool EnumProc(IntPtr h,IntPtr lp);',
+        // 每轮重建快照并扩展进程族集合（跨轮询持久，存根中途退出不丢链）：exe 名匹配 + 父链后代展开至不动点
+        '  public static void Expand(HashSet<uint> set, uint root, string leaf){',
+        '    var par=new Dictionary<uint,uint>();',
+        '    var names=new Dictionary<uint,string>();',
+        '    IntPtr s=CreateToolhelp32Snapshot(2,0);',
+        '    if(s!=IntPtr.Zero&&s!=(IntPtr)(-1)){',
+        '      PE32 e=new PE32(); e.dwSize=(uint)Marshal.SizeOf(typeof(PE32));',
+        '      if(Process32First(s,ref e)){do{par[e.th32ProcessID]=e.th32ParentProcessID; names[e.th32ProcessID]=e.szExeFile;}while(Process32Next(s,ref e));}',
+        '      CloseHandle(s);',
+        '    }',
+        '    if(!set.Contains(root)) set.Add(root);',
+        '    if(!string.IsNullOrEmpty(leaf)){ foreach(KeyValuePair<uint,string> kv in names){ if(string.Equals(kv.Value,leaf,StringComparison.OrdinalIgnoreCase)) set.Add(kv.Key); } }',
+        '    bool add=true; while(add){add=false; foreach(KeyValuePair<uint,uint> kv in par){ if(set.Contains(kv.Value)&&set.Add(kv.Key)) add=true; }}',
+        '  }',
+        '  public static bool HasVisible(HashSet<uint> set, uint root, bool exclRoot){',
+        '    bool hit=false;',
+        '    EnumWindows(delegate(IntPtr h,IntPtr lp){',
+        '      if(!IsWindowVisible(h)) return true;',
+        '      uint p; GetWindowThreadProcessId(h,out p);',
+        '      if(!set.Contains(p)) return true;',
+        '      if(exclRoot&&p==root) return true;',
+        '      WR r; GetWindowRect(h,out r);',
+        '      if(r.R-r.L>=150&&r.B-r.T>=100){ hit=true; return false; }',
+        '      return true;',
+        '    },IntPtr.Zero);',
+        '    return hit;',
+        '  }',
+        '}'
+    ].join('\n');
+}
+
 // 启动游戏：解析主程序（见 gameResolveLaunchExe 优先级）→ spawn 传入启动参数（页面已替换占位符）。
 // spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口。
 // 端口透传转发联动：管理端配置的 portForwards 规则在 spawn 前开启本机监听（任一失败中止启动——
@@ -2648,21 +2802,33 @@ ipcMain.handle('game:launch', async function (event, data) {
             });
         });
         child.unref();
-        runningGames.set(gameId, { proc: child, startedAt: startedAt, steamEmu: !!(data && data.steamEmu === 1) });
+        runningGames.set(gameId, { proc: child, startedAt: startedAt, steamEmu: !!(data && data.steamEmu === 1), launched: false });
         gameOverlay.onGameStart(gameId, child.pid); // 游戏内 Overlay：热键联动开启（预注册 Shift+Tab + 悬浮窗预热）
         if (spawned.native) ovReadGamePid(child, function (pid) { gameOverlay.onGamePid(gameId, pid); }); // 二期：真实游戏 pid 回读校正（pipe 名依赖）
-        gameStartBroadcast(info); // 全窗口广播：商店页即时把该游戏切为"运行中"
+        gameLaunchBroadcast(info); // 全窗口广播"正在启动"：游戏窗口尚未可见，页面按钮先切"正在启动"而非"运行中"
+        // 游戏窗口可见后才广播 game-start 切"运行中"（探测覆盖子孙 pid + exe 名兜底：启动器/包装器/存根链）；
+        // SSE 路径 excludeRoot：loader 常驻且自带可见主窗，必须排除根进程窗口、只认真实游戏窗口
+        // （否则 loader 窗口一出现就误切"运行中"，早于游戏画面）；
+        // 探测期间进程 exit/error 时条目已被清理，守卫跳过——不与退出广播竞态；
+        // 30s 超时兜底切"运行中"（个别游戏无常规可见窗口，不卡"正在启动"）
+        waitGameWindowVisible(child.pid, r.exe, function () {
+            var cur = runningGames.get(gameId);
+            if (!cur || cur.proc !== child || cur.launched) return;
+            cur.launched = true;
+            gameStartBroadcast(info);
+        }, { excludeRoot: !!(data && data.steamEmu === 1) });
         return { ok: true, startedAt: startedAt };
     } catch (e) {
         return { ok: false, error: (e && e.message) || '启动失败' };
     }
 });
 
-// 当前正在运行的游戏（页面加载/刷新/新开窗口后恢复"运行中"态）→ [{gameId, startedAt}]
+// 当前正在运行/正在启动的游戏（页面加载/刷新/新开窗口后恢复对应按钮态）→ [{gameId, startedAt, launching}]
+// launching=true：窗口可见探测中（恢复"正在启动"而非"运行中"）
 ipcMain.handle('game:running-list', function () {
     var out = [];
     runningGames.forEach(function (v, gid) {
-        out.push({ gameId: gid, startedAt: (v && v.startedAt) || 0 });
+        out.push({ gameId: gid, startedAt: (v && v.startedAt) || 0, launching: !(v && v.launched) });
     });
     return out;
 });
@@ -2699,6 +2865,15 @@ ipcMain.handle('game:set-launch-options', function (event, data) {
         return { ok: false, error: (e && e.message) || '保存失败' };
     }
 });
+// 游戏进程"正在启动"事件广播全部窗口（spawn 成功但游戏窗口未可见：页面按钮先切"正在启动"，
+// 窗口可见后 game-start 才切"运行中"；与 game-start/game-exit 全窗口广播同口径）
+function gameLaunchBroadcast(info) {
+    var wins = BrowserWindow.getAllWindows();
+    for (var i = 0; i < wins.length; i++) {
+        if (!wins[i].isDestroyed()) wins[i].webContents.send('game-launching', info);
+    }
+}
+
 // 游戏进程启动事件广播全部窗口（商店页订阅后即时切"运行中"；与 game-exit 全窗口广播同口径）
 function gameStartBroadcast(info) {
     var wins = BrowserWindow.getAllWindows();
@@ -2765,20 +2940,28 @@ ipcMain.handle('local-game:launch', async function (event, data) {
             });
         });
         child.unref();
-        runningLocalGames.set(id, { proc: child, startedAt: startedAt });
+        runningLocalGames.set(id, { proc: child, startedAt: startedAt, launched: false });
         gameOverlay.onGameStart('local_' + id, child.pid); // 游戏内 Overlay：热键联动开启（本地游戏同口径）
         if (spawned.native) ovReadGamePid(child, function (pid) { gameOverlay.onGamePid('local_' + id, pid); }); // 二期：真实游戏 pid 回读校正
-        localGameBroadcast('local-game-start', info);
+        localGameBroadcast('local-game-launching', info); // 全窗口广播"正在启动"（与 game:launch 同口径，窗口可见后才切"运行中"）
+        // 游戏窗口可见后才广播 local-game-start 切"运行中"（探测覆盖子孙 pid + exe 名兜底：启动器/存根链）；
+        // 30s 超时兜底切"运行中"（gn_room 联机房间启动同样走此链，页面侧按 id 过滤不归属库条目）
+        waitGameWindowVisible(child.pid, exe, function () {
+            var cur = runningLocalGames.get(id);
+            if (!cur || cur.proc !== child || cur.launched) return;
+            cur.launched = true;
+            localGameBroadcast('local-game-start', info);
+        });
         return { ok: true, startedAt: startedAt };
     } catch (e) {
         return { ok: false, error: (e && e.message) || '启动失败' };
     }
 });
-// 本地游戏运行态查询（页面加载/刷新后恢复"运行中"）→ [{id, startedAt}]
+// 本地游戏运行态查询（页面加载/刷新后恢复"运行中/正在启动"）→ [{id, startedAt, launching}]
 ipcMain.handle('local-game:running-list', function () {
     var out = [];
     runningLocalGames.forEach(function (v, id) {
-        out.push({ id: id, startedAt: (v && v.startedAt) || 0 });
+        out.push({ id: id, startedAt: (v && v.startedAt) || 0, launching: !(v && v.launched) });
     });
     return out;
 });
@@ -2837,6 +3020,22 @@ function gameSaveStateSave(st) {
 }
 function gameSaveStateKey(gameId, slot) { return String(gameId) + '|' + (String(slot || '').trim() || 'default'); }
 
+// 云存档 installDir 解析归口：优先取游戏启动注册表（game-launch.json）登记的 installDir——
+// 它是 exe 所在目录即真实游戏根（例：H:\CdonlgameApp\warz3\War3），而非库 install_path 的 slug 层
+// （H:\CdonlgameApp\warz3）。版本上传目录名与 slug 不一致时，slug 层下的 save/** 会指向错误位置。
+// 注册表无有效条目（未选 exe/未探测到）时回退页面传入的 install_path，仍走 slug 自适应兜底。
+function gameSaveResolveInstallDir(gameId, fallbackDir) {
+    var gid = String(gameId || '').trim();
+    var reg = {};
+    try { reg = gameLaunchRegLoad() || {}; } catch (e) { reg = {}; }
+    var item = reg[gid] || {};
+    var regDir = String(item.installDir || '').trim();
+    if (regDir) {
+        try { if (fs.existsSync(regDir) && fs.statSync(regDir).isDirectory()) return { installDir: regDir, isGameRoot: true }; } catch (e) { /* 条目损坏：回退 */ }
+    }
+    return { installDir: String(fallbackDir || ''), isGameRoot: false };
+}
+
 // 读取用户覆盖（paths/exclude 为空数组=未覆盖，回退管理端默认/内置兜底）
 ipcMain.handle('game:save-config-get', function (event, data) {
     try {
@@ -2880,8 +3079,10 @@ ipcMain.handle('game:save-paths-preview', function (event, payload) {
             userPaths = Array.isArray(item.paths) ? item.paths : [];
             userExclude = Array.isArray(item.exclude) ? item.exclude : [];
         }
+        var resolved = gameSaveResolveInstallDir(gameId, payload.installDir);
         return { ok: true, modes: gameSaves.resolvePathsPreview({
-            installDir: String(payload.installDir || ''),
+            installDir: resolved.installDir,
+            installDirIsGameRoot: resolved.isGameRoot,
             slug: String(payload.slug || ''),
             adminPaths: payload.adminPaths,
             adminExclude: payload.adminExclude,
@@ -2905,10 +3106,12 @@ ipcMain.handle('game:save-sync', async function (event, payload) {
         var slot = String(payload.slot || '');
         var key = gameSaveStateKey(gameId, slot);
         var stt = gameSaveStateLoad();
+        var resolvedDir = gameSaveResolveInstallDir(gameId, payload.installDir);
         var opts = {
             gameId: gameId,
             username: String(payload.username || ''),
-            installDir: String(payload.installDir || ''),
+            installDir: resolvedDir.installDir,
+            installDirIsGameRoot: resolvedDir.isGameRoot,
             slug: String(payload.slug || ''),
             adminPaths: payload.adminPaths,
             adminExclude: payload.adminExclude,
@@ -2918,7 +3121,8 @@ ipcMain.handle('game:save-sync', async function (event, payload) {
             mode: String(payload.mode || 'auto'),
             baseline: stt[key] || null,
             backupDir: GAME_SAVE_BACKUP,
-            serverBase: SERVER_URL
+            serverBase: SERVER_URL,
+            driveToken: String(payload.driveToken || '')
         };
         // 冲突解决归口：cloud=以云端为准（镜像拉取覆盖本地）；local=以本地为准（强制上传覆盖云端）；both=保留双份（本地备份后以云端为准）
         var resolve = String(payload.resolve || '');
@@ -2948,6 +3152,7 @@ ipcMain.handle('game:save-manifest', async function (event, payload) {
             gameId: gameId,
             username: String(payload.username || ''),
             slot: String(payload.slot || ''),
+            driveToken: String(payload.driveToken || ''),
             serverBase: SERVER_URL
         });
     } catch (e) {
@@ -2963,6 +3168,7 @@ ipcMain.handle('game:save-history', async function (event, payload) {
             gameId: String(payload.gameId || ''),
             username: String(payload.username || ''),
             slot: String(payload.slot || ''),
+            driveToken: String(payload.driveToken || ''),
             serverBase: SERVER_URL
         });
     } catch (e) {
@@ -2980,6 +3186,7 @@ ipcMain.handle('game:save-rollback', async function (event, payload) {
             username: String(payload.username || ''),
             slot: String(payload.slot || ''),
             revision: payload.revision,
+            driveToken: String(payload.driveToken || ''),
             serverBase: SERVER_URL
         });
         // 回滚后云端当前版本已变（revision+1）→ 本地基线失效，清除强制下次启动重新拉取
@@ -2999,6 +3206,7 @@ ipcMain.handle('game:save-slots', async function (event, payload) {
         return await gameSaves.slots({
             gameId: String(payload.gameId || ''),
             username: String(payload.username || ''),
+            driveToken: String(payload.driveToken || ''),
             serverBase: SERVER_URL
         });
     } catch (e) {
@@ -3015,6 +3223,7 @@ ipcMain.handle('game:save-slot-delete', async function (event, payload) {
             gameId: String(payload.gameId || ''),
             username: String(payload.username || ''),
             slot: String(payload.slot || ''),
+            driveToken: String(payload.driveToken || ''),
             serverBase: SERVER_URL
         });
         var stt = gameSaveStateLoad();
@@ -3032,8 +3241,10 @@ ipcMain.handle('game:save-open-dir', async function (event, payload) {
         payload = payload || {};
         var gameId = String(payload.gameId || '').trim();
         var item = gameId ? (gameSaveRegLoad()[gameId] || {}) : {};
+        var resolved = gameSaveResolveInstallDir(gameId, payload.installDir);
         var modes = gameSaves.resolvePathsPreview({
-            installDir: String(payload.installDir || ''),
+            installDir: resolved.installDir,
+            installDirIsGameRoot: resolved.isGameRoot,
             slug: String(payload.slug || ''),
             adminPaths: payload.adminPaths,
             adminExclude: payload.adminExclude,

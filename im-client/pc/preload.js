@@ -1026,6 +1026,12 @@ contextBridge.exposeInMainWorld('desktop', {
     localGameRunningList: function () {
         return ipcRenderer.invoke('local-game:running-list');
     },
+    // 订阅本地游戏进程"正在启动"（spawn 成功但游戏窗口未可见时广播全窗口 {id, startedAt}；页面即时切"正在启动"）
+    onLocalGameLaunching: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('local-game-launching', function (event, data) {
+            cb(data);
+        });
+    },
     // 订阅本地游戏进程启动（全窗口广播 {id, startedAt}）
     onLocalGameStart: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('local-game-start', function (event, data) {
@@ -1048,7 +1054,13 @@ contextBridge.exposeInMainWorld('desktop', {
     gameLaunch: function (payload) {
         return ipcRenderer.invoke('game:launch', payload);
     },
-    // 订阅游戏进程启动（主进程启动成功后广播全窗口；页面即时切"运行中"）
+    // 订阅游戏进程"正在启动"（spawn 成功但游戏窗口未可见时广播全窗口 {gameId, startedAt}；页面即时切"正在启动"）
+    onGameLaunching: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game-launching', function (event, data) {
+            cb(data);
+        });
+    },
+    // 订阅游戏进程启动（游戏窗口可见后主进程才广播全窗口；页面切"运行中"）
     onGameStart: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('game-start', function (event, data) {
             cb(data);

@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -1019,9 +1020,30 @@ func (s *Server) HandleGameLibraryState(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var lib model.GameLibrary
-	if err := store.DB.Where("username = ? AND game_id = ?", username, id).First(&lib).Error; err != nil {
-		adminFail(w, http.StatusNotFound, "该游戏不在你的库中")
-		return
+	q := store.DB.Where("username = ? AND game_id = ?", username, id)
+	if err := q.First(&lib).Error; err != nil {
+		// 阶段二百九十九：隐式入库——客户端下载时只调 PUT state，不先调 POST join。
+		// 没库记录时检查游戏是否存在且已上架，是则自动创建一条，避免 404 导致
+		// 后续云存档接口（gameSaveAccess）找不到归属记录。
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			var g model.Game
+			if gerr := store.DB.Where("id = ? AND status = 0", id).First(&g).Error; gerr != nil {
+				adminFail(w, http.StatusNotFound, "游戏不存在或未上架")
+				return
+			}
+			lib = model.GameLibrary{
+				Username: username,
+				GameID:   uint(id),
+				State:    0,
+			}
+			if cerr := store.DB.Create(&lib).Error; cerr != nil {
+				adminFail(w, http.StatusInternalServerError, "隐式入库失败")
+				return
+			}
+		} else {
+			adminFail(w, http.StatusInternalServerError, "库查询失败")
+			return
+		}
 	}
 	updates := map[string]interface{}{"state": req.State}
 	if req.InstalledVersion != "" {

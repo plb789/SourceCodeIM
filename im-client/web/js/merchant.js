@@ -419,9 +419,11 @@
     var verGame = null;
     var verFiles = []; // {file, rel_path, size, state}
     var verUploading = false, verCancelFlag = false, verStartedIds = [];
+    var verBaseDir = ''; // 最新版文件首段公共目录名（如 War3），单文件上传时自动前缀
     function openVersion(g) {
         verGame = g;
         verFiles = [];
+        verBaseDir = '';
         verCancelFlag = false;
         $('m-ver-game').textContent = g.name;
         $('m-ver-version').value = '';
@@ -440,6 +442,7 @@
         box.innerHTML = '<div class="m-empty">加载中…</div>';
         api('GET', '/api/merchant/games/' + verGame.id + '/versions').then(function (res) {
             var d = unwrap(res);
+            verBaseDir = String(d.base_dir || '').trim();
             var list = d.versions || [];
             if (!list.length) { box.innerHTML = '<div class="m-empty">暂无版本，上传第一个版本后游戏即可安装</div>'; return; }
             var html = '<table class="m-table"><tr><th>版本</th><th>大小</th><th>文件数</th><th>时间</th><th></th></tr>';
@@ -470,6 +473,9 @@
         fs.forEach(function (f) {
             if (f.size <= 0) return; // 空文件服务端跳过
             var rel = useRelPath ? (f.webkitRelativePath || f.name) : f.name;
+            // 单文件上传（非目录）时，自动前缀最新版的 base_dir，使更新文件落在与原版相同的客户端目录下。
+            // 例：原版文件全在 War3/ 下 → base_dir=War3 → 单文件 rel_path 变为 War3/filename
+            if (!useRelPath && verBaseDir) rel = verBaseDir + '/' + rel;
             verFiles.push({ file: f, rel_path: rel, size: f.size, state: 0 });
         });
         renderVerList();

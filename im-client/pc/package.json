@@ -60,7 +60,8 @@
       "!Driver/**",
       "!dll/**",
       "!elevator/**",
-      "!overlay-native/**"
+      "!overlay-native/**",
+      "!game-visible/**"
     ],
     "win": {
       "target": "nsis",
@@ -116,6 +117,10 @@
       {
         "from": "dlbt-host/p2p-host.exe",
         "to": "dlbt-host/p2p-host.exe"
+      },
+      {
+        "from": "game-visible/game-visible.exe",
+        "to": "game-visible/game-visible.exe"
       },
       {
         "from": "overlay-native/bin/",

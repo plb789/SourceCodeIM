@@ -127,13 +127,27 @@ static void pollLoop() {
             UINT down = DLBT_Downloader_GetDownloadSpeed(t.h);
             UINT up = DLBT_Downloader_GetUploadSpeed(t.h);
             float prog = DLBT_Downloader_GetProgress(t.h) / 100.0f; // 引擎返回 0-100 百分值，归一 0-1（E2E 实测口径）
-            std::string errText;
-            if (st == BTDS_ERROR) errText = lastErrorText(t.h);
-            char b[1024];
+            // 阶段二百九十八：peer 数量（引擎状态=queued/metainfo/connecting 时能知道是 0 peer 还是有 peer 但连不上）
+            int connectedCount = 0, totalSeedCount = -1, seedsConnected = 0, inCompleteCount = -1,
+                totalCurrentSeedCount = -1, totalCurrentPeerCount = -1;
+            if (st != BTDS_QUEUED && st != BTDS_CHECKING_FILES && st != BTDS_ALLOCATING) {
+                DLBT_Downloader_GetPeerNums(t.h,
+                    &connectedCount, &totalSeedCount, &seedsConnected, &inCompleteCount,
+                    &totalCurrentSeedCount, &totalCurrentPeerCount);
+            }
+            // 任何状态都取引擎错误文本（不仅限 ERROR 态）——progress 帧带临时错误（如 tracker 超时），
+            // 帮助前端在非 ERROR 态也能提示用户"临时网络问题"，而不是只给一个"连接中"
+            std::string errText = lastErrorText(t.h);
+            if (errText == "BT download error") errText.clear(); // 引擎返回默认无意义串时置空减少噪音
+            char b[1536];
             _snprintf_s(b, sizeof(b), _TRUNCATE,
-                "{\"evt\":\"progress\",\"id\":\"%s\",\"state\":\"%s\",\"progress\":%.4f,\"received\":%llu,\"total\":%llu,\"down\":%u,\"up\":%u,\"error\":\"%s\"}",
+                "{\"evt\":\"progress\",\"id\":\"%s\",\"state\":\"%s\",\"progress\":%.4f,"
+                "\"received\":%llu,\"total\":%llu,\"down\":%u,\"up\":%u,"
+                "\"conn\":%d,\"seeds\":%d,\"totalSeeds\":%d,\"totalPeers\":%d,"
+                "\"error\":\"%s\"}",
                 wideToUtf8(t.id).c_str(), stateName(st), prog,
                 (unsigned long long)done, (unsigned long long)total, down, up,
+                connectedCount, seedsConnected, totalSeedCount, totalCurrentPeerCount,
                 jsonEsc(errText).c_str());
             emitLine(b);
             if (isDoneState(st) && !t.doneSent) {

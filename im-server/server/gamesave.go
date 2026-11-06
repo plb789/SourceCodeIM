@@ -404,8 +404,15 @@ func (s *Server) gameSaveAccess(w http.ResponseWriter, r *http.Request) (string,
 	var cnt int64
 	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", username, gid).Count(&cnt)
 	if cnt == 0 {
-		adminFail(w, http.StatusForbidden, "请先将游戏加入库")
-		return "", 0, false
+		// 阶段二百九十九：兜底隐式入库——HandleGameLibraryState 已优先处理下载态，
+		// 这里给云存档接口直接命中（用户跳过下载直接进属性页）也能通。
+		var g model.Game
+		if store.DB.Where("id = ? AND status = 0", gid).First(&g).Error == nil {
+			store.DB.Create(&model.GameLibrary{Username: username, GameID: uint(gid), State: 0})
+		} else {
+			adminFail(w, http.StatusForbidden, "请先将游戏加入库")
+			return "", 0, false
+		}
 	}
 	return username, uint(gid), true
 }

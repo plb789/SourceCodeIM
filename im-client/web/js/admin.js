@@ -5482,6 +5482,7 @@
     var gmVidUploading = false; // 宣传视频分片上传进行中（防并发/保存归口拦截）
     var gmVerGame = null;  // 版本弹窗当前游戏详情（含 versions）
     var gmFiles = [];      // 待上传清单 [{rel_path,size,file,ui:{state,fill}}]
+    var gmBaseDir = '';    // 最新版文件首段公共目录名（如 War3），单文件上传时自动前缀
     var gmUploading = false;  // 版本上传进行中（关闭/重复提交归口拦截）
     // 下载方式=2（BT·上传种子）：暂存上传种子文件名与种子内元信息（保存时随表单提交 torrent_path）
     var GM_TORRENT_HINT = '上传自制 .torrent（≤8MB）：客户端按种子内 info.name 作为安装目录名下载，故种子内须包含完整游戏文件；该方式为纯 BT，不叠加服务器直链源';
@@ -6861,6 +6862,7 @@
         api('GET', '/admin/api/game/' + a.id).then(function (det) {
             if (!det.ok) { showToast(det.msg || '加载失败'); return; }
             gmVerGame = det.data;
+            gmBaseDir = String((det.data && det.data.base_dir) || '').trim();
             $('gm-ver-title').textContent = '版本管理 - ' + gmVerGame.name + '（' + gmVerGame.slug + '）';
             $('gm-pub-version').value = '';
             $('gm-pub-changelog').value = '';
@@ -6877,6 +6879,7 @@
         api('GET', '/admin/api/game/' + gmVerGame.id).then(function (det) {
             if (!det.ok) { showToast(det.msg || '加载失败'); return; }
             gmVerGame = det.data;
+            gmBaseDir = String((det.data && det.data.base_dir) || '').trim();
             gmRenderVersions();
         }).catch(function () { showToast('网络异常'); });
     }
@@ -7429,7 +7432,11 @@
     $('gm-file-multi').addEventListener('change', function () {
         var files = Array.prototype.slice.call(this.files || []);
         this.value = '';
-        files.forEach(function (f) { gmAddFile(f, f.name); });
+        files.forEach(function (f) {
+            // 单文件上传时自动前缀最新版 base_dir，使更新文件落在与原版相同的客户端目录下
+            var rel = gmBaseDir ? (gmBaseDir + '/' + f.name) : f.name;
+            gmAddFile(f, rel);
+        });
         gmRenderFiles();
     });
     // 上传与取消

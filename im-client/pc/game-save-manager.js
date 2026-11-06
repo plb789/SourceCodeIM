@@ -132,7 +132,7 @@ class GameSaveManager extends EventEmitter {
         var adminPaths = norm(opts.adminPaths);
         var userExclude = norm(opts.userExclude);
         var adminExclude = norm(opts.adminExclude);
-        var source = 'builtin', patterns = [this._builtinPattern(installDirRaw, opts.slug)];
+        var source = 'builtin', patterns = [this._builtinPattern(installDirRaw, opts.slug, opts.installDirIsGameRoot)];
         if (userPaths.length) { source = 'user'; patterns = userPaths; }
         else if (adminPaths.length) { source = 'admin'; patterns = adminPaths; }
         // 排除：用户覆盖优先，否则管理端默认（内置兜底无排除）
@@ -322,6 +322,7 @@ class GameSaveManager extends EventEmitter {
     // 云端版本历史（P2）：{ok,exists,slot,current_revision,revisions:[{revision,total_size,file_count,create_time,current}]}
     async history(payload) {
         payload = payload || {};
+        saveAuthToken = String(payload.driveToken || '');
         var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/history/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot });
         return await this._json('GET', url);
     }
@@ -329,6 +330,7 @@ class GameSaveManager extends EventEmitter {
     // 版本回滚（P2）：payload.revision=目标修订 → {ok,revision,restored_from}
     async rollback(payload) {
         payload = payload || {};
+        saveAuthToken = String(payload.driveToken || '');
         var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/rollback/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot });
         return await this._json('POST', url, { revision: Number(payload.revision) || 0 });
     }
@@ -336,6 +338,7 @@ class GameSaveManager extends EventEmitter {
     // 槽位列表（P3）：{ok,slots:[{slot,revision,total_size,file_count,update_time}]}
     async slots(payload) {
         payload = payload || {};
+        saveAuthToken = String(payload.driveToken || '');
         var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/slots/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username });
         return await this._json('GET', url);
     }
@@ -343,6 +346,7 @@ class GameSaveManager extends EventEmitter {
     // 删除某槽位云端存档（P3）：{ok}
     async deleteSlot(payload) {
         payload = payload || {};
+        saveAuthToken = String(payload.driveToken || '');
         var url = buildUrl(String(payload.serverBase || ''), '/api/game/save/data/' + encodeURIComponent(String(payload.gameId || '')), { username: payload.username, slot: payload.slot });
         return await this._json('DELETE', url);
     }
@@ -369,7 +373,10 @@ class GameSaveManager extends EventEmitter {
     //   ① install_path = 安装根（如 H:\CdonlgameApp）      → 游戏实际落盘 <installDir>/<slug>，取 <slug>/save/**
     //   ② install_path = 游戏目录（如 H:\CdonlgameApp\War3）→ 该层已含游戏目录，再追加 slug 会变成 \War3\war3 双层，故取 save/**
     // 判据：installDir 末级目录名（忽略大小写）等于 slug 即视为形态②。两形态均不跨游戏，无串档。
-    _builtinPattern(installDir, slug) {
+    //   ③ installDir 来自启动注册表（exe 所在目录，确认真实游戏根，如 H:\CdonlgameApp\warz3\War3）→
+    //      直接取 save/**（isGameRoot=true），不参与 slug 判定——因为游戏目录名可能与 slug 不一致。
+    _builtinPattern(installDir, slug, isGameRoot) {
+        if (isGameRoot) return BUILTIN_PATTERN;
         var s = String(slug || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').trim();
         if (!s || s === '.' || s === '..') return BUILTIN_PATTERN;
         var leaf = '';
@@ -520,6 +527,7 @@ class GameSaveManager extends EventEmitter {
     // 云端清单摘要（供 UI 展示云端存档状态）
     async manifest(payload) {
         payload = payload || {};
+        saveAuthToken = String(payload.driveToken || '');
         var gameId = String(payload.gameId || '').trim();
         if (!gameId) return { ok: false, error: '参数缺失' };
         var man = await this._getManifest({
