@@ -5554,7 +5554,9 @@
                         installed_version: t.prevInstalled || '',
                         install_path: t.installDir || ''
                     });
-                } else if (t.state === 'downloading' && prev === 'paused') {
+                } else if (t.state === 'downloading' && (prev === 'paused' || prev === 'verifying')) {
+                    // 恢复下载：paused→downloading 直达；经 verifying 过渡恢复（resume 后首帧恰逢
+                    // 文件校验，且 verifying↔downloading 已降级轻刷新）同样要把库状态从"已暂停"翻回
                     putLibState(t.gameId, {
                         state: 1,
                         installed_version: t.prevInstalled || '',
