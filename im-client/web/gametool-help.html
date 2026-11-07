@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GamePatchTool 补丁工具使用教程</title>
+<style>
+    /* 与商户后台同风格（跟随主题变量，缺省深色） */
+    :root { --bg:#1a1a1a; --panel:#242424; --border:rgba(255,255,255,.08); --text:#e8e8e8;
+            --text-light:#9a9a9a; --primary:#07c160; --code-bg:#111; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+           font-family:'Segoe UI','Microsoft YaHei',sans-serif; font-size:14px; line-height:1.8; }
+    .wrap { max-width:860px; margin:0 auto; padding:32px 24px 64px; }
+    h1 { font-size:22px; margin:0 0 6px; }
+    .sub { color:var(--text-light); font-size:13px; margin-bottom:28px; }
+    h2 { font-size:17px; margin:34px 0 12px; padding-left:10px; border-left:3px solid var(--primary); }
+    h3 { font-size:14px; margin:20px 0 8px; color:var(--text); }
+    p { margin:8px 0; color:var(--text); }
+    .tip { background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--primary);
+           border-radius:8px; padding:10px 14px; margin:12px 0; font-size:13px; color:var(--text-light); }
+    .warn { border-left-color:#e6a23c; }
+    code { background:var(--code-bg); border:1px solid var(--border); border-radius:4px;
+           padding:1px 7px; font-family:Consolas,monospace; font-size:12.5px; color:#d4d4d4; }
+    pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+          padding:14px 16px; overflow-x:auto; font-size:12.5px; line-height:1.7; }
+    pre code { background:none; border:none; padding:0; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+    th,td { border:1px solid var(--border); padding:8px 12px; text-align:left; }
+    th { background:var(--panel); color:var(--text-light); font-weight:600; white-space:nowrap; }
+    td code { white-space:nowrap; }
+    .step { display:flex; gap:12px; margin:18px 0; }
+    .step-no { flex:none; width:28px; height:28px; border-radius:50%; background:var(--primary);
+               color:#fff; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:14px; }
+    .step-body { flex:1; min-width:0; }
+    .cmd-copy { position:relative; }
+    ol li { margin:4px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>GamePatchTool 补丁工具使用教程</h1>
+    <div class="sub">游戏增量更新：老玩家只下载变更文件（秒级更新），新玩家照常全量安装 ｜ 工具版本随服务端发布</div>
+
+    <h2>一、补丁是什么</h2>
+    <p>全量更新 = 玩家重新下载整个游戏（可能几十 GB）；<b>补丁更新 = 玩家只下载有变化的文件</b>（通常只有几 MB～几百 MB）。
+    你用本工具对比「已上架的旧版本」和「准备发布的新版本」，生成一个补丁包 <code>patch.zip</code> 上传即可。
+    补丁在服务器上会自动合成为完整的新版本——新玩家不受任何影响，照常安装完整版。</p>
+
+    <div class="tip">前提：基底版本（要打补丁的旧版本）必须是「散文件」或「补丁」方式上架的版本。单 ZIP / 分卷 ZIP 方式的版本无法打补丁（发布时请直接用全量包更新）。</div>
+
+    <h2>二、准备工作</h2>
+    <table>
+        <tr><th>需要</th><th>说明</th></tr>
+        <tr><td>gametool.exe</td><td>本页顶部 / 商户后台"补丁包"模式里的「下载工具」按钮获取（Windows x64，无需安装）</td></tr>
+        <tr><td>新版游戏目录</td><td>准备发布的完整新版游戏文件夹（所有文件放好，和平时上架前的目录一样）</td></tr>
+        <tr><td>基底版本清单</td><td>商户后台 → 版本管理 → 目标旧版本行 → 点「导出清单」下载 <code>filelist-版本号.txt</code></td></tr>
+    </table>
+
+    <h2>三、操作步骤</h2>
+
+    <div class="step"><div class="step-no">1</div><div class="step-body">
+        <h3>导出基底版本清单</h3>
+        <p>商户后台 → 游戏管理 → 版本管理 → 找到要打补丁的旧版本（如 v1.0.0）→ 点「<b>导出清单</b>」，
+        得到 <code>filelist-1.0.0.txt</code>。这个清单记录了旧版本每个文件的 SHA256 校验值，是补丁的对比基准。</p>
+        <div class="tip">用清单而不是本地旧目录做基准，可以保证补丁和服务器上的版本精确对齐——你不需要保留旧版本地副本。</div>
+    </div></div>
+
+    <div class="step"><div class="step-no">2</div><div class="step-body">
+        <h3>生成补丁包</h3>
+        <p>打开命令行（在 gametool.exe 所在文件夹地址栏输入 <code>cmd</code> 回车），执行：</p>
+        <pre class="cmd-copy"><code>gametool diff -base-list filelist-1.0.0.txt -new D:\游戏新版目录 -out patch.zip -base 1.0.0 -ver 1.0.1</code></pre>
+        <table>
+            <tr><th>参数</th><th>说明</th></tr>
+            <tr><td><code>-base-list</code></td><td>第 1 步导出的基底版本清单文件</td></tr>
+            <tr><td><code>-new</code></td><td>新版游戏的完整目录</td></tr>
+            <tr><td><code>-out</code></td><td>输出的补丁包文件名（随便起，建议 patch.zip）</td></tr>
+            <tr><td><code>-base</code></td><td>基底版本号（与清单对应的版本号一致，上传时要选它）</td></tr>
+            <tr><td><code>-ver</code></td><td>补丁版本号（即你要发布的新版本号）</td></tr>
+            <tr><td><code>-list 新清单.txt</code></td><td>可选：同时输出新版本的完整清单（留档核对用）</td></tr>
+        </table>
+        <p>成功后会显示摘要，例如：</p>
+        <pre><code>补丁已生成: patch.zip (18.32MB)
+  变更/新增 12 个, 删除 3 个, 基准总量 14.62GB
+  体积节省: 全量的 0.1%</code></pre>
+        <div class="tip">如果显示「未检测到任何差异」，说明新版目录和服务器上的旧版本完全一致，不需要发补丁。</div>
+    </div></div>
+
+    <div class="step"><div class="step-no">3</div><div class="step-body">
+        <h3>复检补丁（可选但推荐）</h3>
+        <pre class="cmd-copy"><code>gametool verify -base-list filelist-1.0.0.txt -patch patch.zip</code></pre>
+        <p>输出「复检通过」即可上传。能提前发现清单与补丁不匹配、路径非法等问题。</p>
+    </div></div>
+
+    <div class="step"><div class="step-no">4</div><div class="step-body">
+        <h3>上传登记补丁版本</h3>
+        <ol>
+            <li>商户后台 → 版本管理 → 上传方式选「<b>补丁包</b>」；</li>
+            <li>基底版本下拉选择第 1 步的版本（如 v1.0.0）；</li>
+            <li>填写新版本号（与第 2 步 <code>-ver</code> 一致，如 1.0.1）；</li>
+            <li>选择 <code>patch.zip</code> → 「开始上传并登记版本」。</li>
+        </ol>
+        <p>登记成功后玩家端即时生效：装过 v1.0.0 的玩家更新时只下载变更文件，未安装过的玩家下载完整新版本。</p>
+    </div></div>
+
+    <h2>四、连续小更新（补丁链）</h2>
+    <p>补丁可以叠加：v1.0.0 → 1.0.1 → 1.0.2…… 每次以「上一个版本」为基底即可。做法完全相同——
+    在版本列表里对 v1.0.1 点「导出清单」，diff 后选基底 v1.0.1 上传。服务器会自动逐层合成，玩家从任何旧版本更新都能拿到正确结果。</p>
+
+    <h2>五、其他命令</h2>
+    <table>
+        <tr><th>命令</th><th>用途</th></tr>
+        <tr><td><code>gametool list -dir 目录 -out filelist.txt</code></td><td>给任意目录生成清单（同款格式，可用于本地留档）</td></tr>
+        <tr><td><code>gametool diff -old 旧目录 -new 新目录 -out patch.zip</code></td><td>离线模式：用本地旧目录代替清单做基准（无法联网时备用；推荐优先用清单模式）</td></tr>
+    </table>
+
+    <h2>六、常见错误对照</h2>
+    <table>
+        <tr><th>提示</th><th>原因与解决</th></tr>
+        <tr><td>delete 路径不在基底版本清单中</td><td>补丁里声明删除的文件在服务器旧版本里不存在——多半是基底版本选错了，或清单导出后又发过别的版本</td></tr>
+        <tr><td>patch.json change 与 zip 条目不一致</td><td>补丁包被改动过或生成不完整——重新执行第 2 步生成</td></tr>
+        <tr><td>基底版本必须为散文件版或补丁版</td><td>基底是「单 ZIP / 分卷 ZIP」方式上架的，无法打补丁——请发布全量包更新</td></tr>
+        <tr><td>补丁包解包失败 / 压缩包无法识别</td><td>patch.zip 损坏（上传中断或传输损坏）——重新生成并上传</td></tr>
+        <tr><td>基底版本不存在</td><td>选择的基底版本号在服务器上不存在（或已被删除）</td></tr>
+    </table>
+
+    <h2>七、注意事项</h2>
+    <div class="tip warn">
+        1. <code>patch.json</code> 是补丁包内的保留文件（工具自动生成），请不要手工改动或同名文件放入游戏目录；<br>
+        2. 临时文件（<code>*.tmp</code>、<code>~$*</code> 开头）和空文件会被自动跳过，不会进入补丁；<br>
+        3. 工具对比的是文件内容（SHA256），改了文件名但内容相同 = 旧路径删除 + 新路径新增；<br>
+        4. 补丁只支持 ZIP 格式（工具自动生成），不支持加密压缩包；<br>
+        5. 生成补丁前请确认新版目录是<b>完整</b>的——补丁只记录差异，缺失的旧文件不会自动补上（会当作"删除"处理）。
+    </div>
+</div>
+</body>
+</html>

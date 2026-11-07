@@ -1,0 +1,31 @@
+# 换行统一策略（防格式漂移）：gofmt 产出 LF，历史 CRLF 文件曾导致 gofmt -l 误报与
+# 语言服务器格式噪音——本文件强制仓库内文本文件一律 LF，检出时不转 CRLF。
+# 首次提交后如出现批量"行尾归一"改动属预期（一次性 renormalize），后续不再漂移。
+
+# 默认：文本自动识别 + 统一 LF（含 *.go / *.yaml / *.md / *.js / *.html / *.css / *.json 等）
+* text=auto eol=lf
+
+# Windows 专属脚本必须 CRLF（cmd/PowerShell 对 LF 兼容性差）
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# 二进制文件：禁止任何换行/编码转换
+*.exe   binary
+*.dll   binary
+*.apk   binary
+*.zip   binary
+*.7z    binary
+*.gz    binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.pdf   binary
+*.xdb   binary
+*.enc   binary
+*.ttf   binary
+*.woff  binary
+*.woff2 binary

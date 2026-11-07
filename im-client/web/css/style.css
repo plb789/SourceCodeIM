@@ -2557,6 +2557,7 @@ html.m .mobile-plus-panel:not(.hidden) {
     line-height: 1.6;
     margin-bottom: 8px;
     word-break: break-all;
+    white-space: pre-line; /* 支持 confirmBox 多行文案（\n 换行渲染；单行文本零变化） */
 }
 
 .modal-input {

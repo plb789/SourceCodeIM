@@ -151,6 +151,38 @@ type Config struct {
 
 	// IP 属地显示配置节（ip2region 离线解析，设计文档 docs/IP属地显示设计方案.md；server/ipregion.go 归口）
 	IPRegion IPRegionConfig `yaml:"ip_region"`
+
+	// 磁盘水位监控配置节（server/diskmonitor.go 归口：聊天上传/游戏数据/网盘本地目录
+	// 使用率告警，挂入既有 30s 告警评估器，管理后台仪表盘横幅展示）
+	DiskMonitor DiskMonitorConfig `yaml:"disk_monitor"`
+
+	// ClamAV 病毒扫描配置节（server/clamav.go 归口：clamd INSTREAM 协议，仅扫描商户上架
+	// 的版本文件；enabled=false 时零开销零行为变化）
+	ClamAV ClamAVConfig `yaml:"clamav"`
+}
+
+// DiskMonitorConfig 磁盘水位监控配置节（评估挂入 alerts.go 既有 30s 告警协程，无独立协程）
+type DiskMonitorConfig struct {
+	// Enabled 总开关（false 时完全旁路，不读磁盘零开销）
+	Enabled bool `yaml:"enabled"`
+	// WarnPercent 预警水位（使用率 %，0=默认 80）：达到触发 warn 告警
+	WarnPercent int `yaml:"warn_percent"`
+	// ErrorPercent 严重水位（使用率 %，0=默认 90）：达到升级 error 告警
+	ErrorPercent int `yaml:"error_percent"`
+}
+
+// ClamAVConfig ClamAV 病毒扫描配置节（clamd INSTREAM 协议；clamd 独立部署可同机可异机）
+type ClamAVConfig struct {
+	// Enabled 总开关（false 时全链路直通零开销；仅商户上架的版本文件参与扫描）
+	Enabled bool `yaml:"enabled"`
+	// Addr clamd TCP 地址（host:port，如 127.0.0.1:3310；Linux 部署 apt install clamav-daemon 后默认即 3310）
+	Addr string `yaml:"addr"`
+	// TimeoutSec 单文件扫描超时秒（0=默认 600；大游戏包单文件可能数 GB，过小会误超时）
+	TimeoutSec int `yaml:"timeout_sec"`
+	// Sync 同步扫描开关（默认 false=异步）：true 时商户版本登记前同步扫描落位文件——检出即
+	// 整版回滚拒绝、病毒文件不落库存（大包扫描分钟级会阻塞商户上架响应）；false 时登记后异步
+	// 扫描、检出自动驳回游戏（上架不阻塞，存在分钟级下发窗口）。两种模式 clamd 异常均 fail-open
+	Sync bool `yaml:"sync"`
 }
 
 // IPRegionConfig IP 属地显示配置节（ip2region 离线解析，微信同款资料卡「IP属地」标签）
@@ -180,6 +212,10 @@ type GameConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// MaxFileSize 单文件大小上限（字节，0=50GB；游戏包单文件可能很大，上限需远超聊天文件）
 	MaxFileSize int64 `yaml:"max_file_size"`
+	// MaxUnpackSize ZIP 打包版本（pack_type=1/2）解压后总大小上限（字节，0=100GB）：
+	// 版本登记时校验（单 ZIP 服务端读 central directory 实算；分卷按商户填写的 pack_size），
+	// 防 ZIP 炸弹（高压缩比包解压后撑爆磁盘）
+	MaxUnpackSize int64 `yaml:"max_unpack_size"`
 	// ChunkSize 分片上传单片大小（字节，0=8MB，上限 64MB；单片过大放大失败重传粒度）
 	ChunkSize int64 `yaml:"chunk_size"`
 	// LocalDir 游戏数据根目录（空=exe目录/game_data；相对路径基于 exe 所在目录解析）
@@ -190,6 +226,10 @@ type GameConfig struct {
 	// 正常派生走每游戏独立密钥（im_game.game_secret，创建/补种自动生成，单游戏泄露/轮换
 	// 半径=该游戏互不影响）；本值仅在该游戏密钥缺失且补种写回失败时兜底使用
 	LaunchSecret string `yaml:"launch_secret"`
+	// MerchantQuotaBytes 商户存储总量配额（字节）：该商户名下全部游戏全部版本
+	// size_bytes 之和的上限（版本登记前预检+落位后复检双保险；官方游戏不受限）。
+	// 0=默认 50GB（Load 兜底），-1=不限
+	MerchantQuotaBytes int64 `yaml:"merchant_quota_bytes"`
 	// Trackers 全局 BT Tracker 服务器地址列表（下载方式=BT·服务端生成种子时写入种子
 	// announce 与 announce-list，帮助客户端拿到可用 peer；留空=不写 announce，仅公网 DHT 发现）。
 	// 修改后需重启服务端生效（种子缓存锚点已并入 tracker 指纹，重启后自动重建新种子）
@@ -780,11 +820,14 @@ func Default() *Config {
 		},
 		// 游戏中心默认参数（默认启用；P1 文件本体落本地磁盘，storage 后端扩展预留）
 		Game: GameConfig{
-			Enabled:      true,
-			MaxFileSize:  50 << 30,                // 单文件上限 50GB（游戏包常见数 GB~数十 GB）
-			ChunkSize:    8 << 20,                 // 分片单片 8MB（与网盘大文件链路同量级）
-			VideoMaxSize: 200 << 20,               // 宣传视频单文件上限 200MB（详情页 <video> 内联播放用）
-			LaunchSecret: "im-game-launch-secret", // 启动参数专属密码派生密钥（生产建议在 config.yaml 覆写）
+			Enabled:       true,
+			MaxFileSize:   50 << 30,                // 单文件上限 50GB（游戏包常见数 GB~数十 GB）
+			MaxUnpackSize: 100 << 30,               // ZIP 打包版本解压后总大小上限 100GB（防 ZIP 炸弹）
+			ChunkSize:     8 << 20,                 // 分片单片 8MB（与网盘大文件链路同量级）
+			VideoMaxSize:  200 << 20,               // 宣传视频单文件上限 200MB（详情页 <video> 内联播放用）
+			LaunchSecret:  "im-game-launch-secret", // 启动参数专属密码派生密钥（生产建议在 config.yaml 覆写）
+			// 商户存储总量配额默认 50GB（-1 不限；0 由 Load 兜底回默认，显式 -1 直接生效）
+			MerchantQuotaBytes: 50 << 30,
 			// 云存档默认启用：config.yaml 缺 save 节（旧配置升级）时仍可用；
 			// 显式 enabled: false 才会关闭（yaml.v3 仅覆盖文件中出现的键）
 			Save: GameSaveConfig{Enabled: true},
@@ -1060,6 +1103,9 @@ func Load() *Config {
 	if cfg.Game.MaxFileSize <= 0 {
 		cfg.Game.MaxFileSize = 50 << 30
 	}
+	if cfg.Game.MaxUnpackSize <= 0 {
+		cfg.Game.MaxUnpackSize = 100 << 30 // ZIP 打包版本解压后总大小上限兜底（防 ZIP 炸弹）
+	}
 	if cfg.Game.ChunkSize <= 0 {
 		cfg.Game.ChunkSize = 8 << 20
 	}
@@ -1073,6 +1119,27 @@ func Load() *Config {
 	}
 	if cfg.Game.LaunchSecret == "" {
 		cfg.Game.LaunchSecret = "im-game-launch-secret" // 空值兜底（yaml 未配置时保证派生可用）
+	}
+	// 商户存储总量配额兜底（0/负值中仅 -1 有语义=不限，其余负数非法回默认；缺省=50GB）
+	if cfg.Game.MerchantQuotaBytes == 0 || (cfg.Game.MerchantQuotaBytes < 0 && cfg.Game.MerchantQuotaBytes != -1) {
+		cfg.Game.MerchantQuotaBytes = 50 << 30
+	}
+	// 磁盘水位监控兜底（水位百分比 1~99 夹取，避免误配 0/100 失效）
+	if cfg.DiskMonitor.WarnPercent <= 0 || cfg.DiskMonitor.WarnPercent >= 100 {
+		cfg.DiskMonitor.WarnPercent = 80
+	}
+	if cfg.DiskMonitor.ErrorPercent <= 0 || cfg.DiskMonitor.ErrorPercent >= 100 {
+		cfg.DiskMonitor.ErrorPercent = 90
+	}
+	if cfg.DiskMonitor.ErrorPercent < cfg.DiskMonitor.WarnPercent {
+		cfg.DiskMonitor.ErrorPercent = cfg.DiskMonitor.WarnPercent
+	}
+	// ClamAV 兜底（未配地址=本机默认端口；超时 0 或负数回默认 600s）
+	if cfg.ClamAV.Addr == "" {
+		cfg.ClamAV.Addr = "127.0.0.1:3310"
+	}
+	if cfg.ClamAV.TimeoutSec <= 0 {
+		cfg.ClamAV.TimeoutSec = 600
 	}
 	return cfg
 }

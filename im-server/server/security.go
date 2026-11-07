@@ -41,6 +41,22 @@ func isDangerousFile(filename string) bool {
 	return false
 }
 
+// staticInlineExts 静态托管 /static/upload/** 内联白名单扩展名（业务必须内联、浏览器可安全
+// 渲染的媒体类型）：图片（聊天气泡 <img>/商店封面/截图/公告图/admin 预览）+ 视频（商店详情页
+// <video> 宣传片）+ 音频（语音条/音频文件播放）。白名单之外（pdf/docx/zip/html/svg……）
+// 由 main.go 静态托管入口下发 Content-Disposition: attachment——浏览器直链打开即触发下载
+// 而非渲染执行，杜绝 .html/.svg 等可渲染文件绕过 isDangerousFile 黑名单的存储型 XSS 面
+var staticInlineExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".bmp": true,
+	".mp4": true, ".webm": true, ".mkv": true,
+	".mp3": true, ".wav": true, ".amr": true, ".aac": true, ".ogg": true, ".m4a": true,
+}
+
+// IsStaticInlineFile 判断扩展名（含点，大小写不敏感）是否允许浏览器内联渲染（main.go 归口调用）
+func IsStaticInlineFile(ext string) bool {
+	return staticInlineExts[strings.ToLower(ext)]
+}
+
 // ipLimitKey 单 IP 连接频率计数键
 const ipLimitKey = "im:ip:conn:"
 

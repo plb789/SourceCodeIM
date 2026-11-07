@@ -33,6 +33,15 @@
 .m-head-tip { font-size: 12px; color: var(--text-light); }
 .m-sub-title { font-size: 14px; color: var(--text-light); margin: 20px 0 8px; }
 
+/* 存储配额卡（安全加固）：已用/总量/占比 + 主题色进度条，≥80% 转警示色 */
+.m-quota-card { background: var(--panel-bg); border: 1px solid var(--border-color, rgba(255,255,255,.06)); border-radius: 10px; padding: 12px 16px; margin-bottom: 14px; }
+.m-quota-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.m-quota-title { font-size: 13px; color: var(--text-light); }
+.m-quota-txt { font-size: 13px; color: var(--text, #eee); font-weight: 600; }
+.m-quota-bar { height: 8px; border-radius: 4px; background: var(--border-color, rgba(255,255,255,.08)); overflow: hidden; }
+.m-quota-fill { height: 100%; border-radius: 4px; background: var(--primary); transition: width .3s ease; }
+.m-quota-fill.warn { background: var(--danger, #e5484d); }
+
 /* ===== 游戏卡片 ===== */
 .m-game-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
 .m-game-card {
@@ -106,6 +115,18 @@ table.m-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .m-form .m-row { margin-bottom: 12px; }
 .m-form label { display: block; font-size: 12px; color: var(--text-light); margin-bottom: 5px; }
 .m-form .admin-input { width: 100%; box-sizing: border-box; }
+/* 版本上传方式三选一（散文件/单ZIP/分卷ZIP）：分段按钮组，跟随主题色 */
+.m-packseg { display: inline-flex; border: 1px solid var(--border-color, rgba(255,255,255,.1)); border-radius: 8px; overflow: hidden; }
+.m-packseg-btn { appearance: none; border: none; background: transparent; color: var(--text-light);
+    font-size: 12px; padding: 7px 16px; cursor: pointer; transition: background .15s, color .15s; }
+.m-packseg-btn + .m-packseg-btn { border-left: 1px solid var(--border-color, rgba(255,255,255,.08)); }
+.m-packseg-btn:hover { color: var(--text, #eee); background: rgba(255,255,255,.05); }
+.m-packseg-btn.active { background: var(--primary); color: #fff; }
+/* 上传方式两级分类：大类（逐文件版 / ZIP 完整包）+ 组内子方式（m-packgrp 分组容器随大类显隐） */
+.m-catseg { margin-bottom: 6px; }
+.m-cat-btn { font-weight: 600; padding: 8px 18px; }
+.m-packgrp { display: inline-flex; }
+.m-warn-text { color: #e5a54d; }
 .m-cover-prev { height: 44px; border-radius: 6px; border: 1px solid var(--border-color, rgba(255,255,255,.1)); }
 .m-ss-preview { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .m-ss-preview img { height: 52px; border-radius: 6px; border: 1px solid var(--border-color, rgba(255,255,255,.1)); }

@@ -14,6 +14,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process'); // ZIP 打包版本解压阶段（7z 子进程，spawn 不经 shell）
+const { app } = require('electron'); // 打包态 resources 路径锚点（7z 组件定位，与 BT 引擎同构）
 
 const MAX_PARALLEL = 2;    // 跨任务并行下载上限，超出排队
 const EMIT_INTERVAL = 500; // 进度节流窗口（ms），同时作为速度计算窗口
@@ -101,6 +103,12 @@ class GameDownloadManager extends EventEmitter {
         }
         // 防目录穿越：rel_path 解析后必须位于暂存目录内，越界条目丢弃
         const list = [];
+        // ZIP 打包版本（新增通道）：0=散文件现状 1=单 ZIP（下载后自动解压） 2=分卷 ZIP（7z 分卷解压）。
+        // 3=补丁包（服务端已解包合成完整散文件清单，客户端按散文件语义走——dedup 硬链接天然增量，
+        // _commit 整目录换入使删除文件自动生效），归一为 0 防误入解压阶段
+        const pt = Number((payload && payload.packType) || 0);
+        const packType = (pt === 1 || pt === 2) ? pt : 0;
+        const packSize = Math.max(0, Number((payload && payload.packSize) || 0));
         for (let i = 0; i < files.length; i++) {
             const f = files[i] || {};
             const rel = String(f.rel_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -127,6 +135,11 @@ class GameDownloadManager extends EventEmitter {
             task.username = String(payload.username || '');
             task.serverBase = String(payload.serverBase || '');
             task.files = list;
+            task.packType = packType; // ZIP 打包方式（重试重下时一并刷新，解压标记复位）
+            task.packSize = packSize;
+            task._extracted = false;
+            task._phase = 'download';
+            task._extractProc = null;
             task.total = this._calcTotal(list);
             task.fileIndex = 0;
             task.retries = 0;
@@ -147,6 +160,8 @@ class GameDownloadManager extends EventEmitter {
                 username: String(payload.username || ''),
                 serverBase: String(payload.serverBase || ''),
                 files: list,
+                packType: packType,     // ZIP 打包方式（0=散文件 1=单 ZIP 2=分卷 ZIP；>0 下载后走解压阶段）
+                packSize: packSize,     // 解压后总大小（磁盘余量预检 + 解压进度条总量换算；0=未知）
                 state: 'queued',
                 received: 0,          // 总处理字节（下载+去重复用，用于整体进度条）
                 netReceived: 0,       // 实际网络下载字节（速度/净下载量统计）
@@ -177,6 +192,9 @@ class GameDownloadManager extends EventEmitter {
     pause(taskId) {
         const task = this.tasks.get(String(taskId || ''));
         if (!task) return { ok: false, error: '任务不存在' };
+        if (task.state === 'downloading' && task._phase === 'extract') {
+            return { ok: false, error: '解压阶段不支持暂停（可取消，已下载的压缩包会保留）' };
+        }
         if (task.state === 'downloading' || task.state === 'queued') {
             task._paused = true;
             task.state = 'paused';
@@ -209,6 +227,7 @@ class GameDownloadManager extends EventEmitter {
         const wasActive = task.state === 'downloading';
         task.state = 'cancelled'; // 中断标记：进行中的下载 Promise 按外部中断处理
         if (task._req) { try { task._req.destroy(); } catch (e) { } }
+        if (task._extractProc) { try { task._extractProc.kill(); } catch (e) { } } // 解压阶段：杀 7z（压缩包保留，重试免重下）
         const self = this;
         const pend = task.files.map(function (f) {
             return self._safeUnlink(path.resolve(task.stagingDir, f.rel_path) + '.part');
@@ -577,12 +596,12 @@ class GameDownloadManager extends EventEmitter {
         this.emit('progress', this._evt(task, rel, error, stateOverride));
     }
 
-    // 进度事件负载：{taskId, gameId, received, total, speed, diskSpeed, state, fileRelPath, error}
+    // 进度事件负载：{taskId, gameId, received, total, speed, diskSpeed, state, fileRelPath, error, phase}
     _evt(task, rel, error, stateOverride) {
         return {
             taskId: task.taskId,
             gameId: task.gameId,
-            received: task.received,        // 总处理字节（下载+去重复用）
+            received: task.received,        // 总处理字节（下载+去重复用；解压阶段=已解压估算字节）
             netReceived: task.netReceived,  // 实际网络下载字节
             total: task.total,
             speed: task._speed,             // 网络下载速度（基于 netReceived）
@@ -591,13 +610,53 @@ class GameDownloadManager extends EventEmitter {
             dedupedBytes: task.dedupedBytes || 0,
             state: stateOverride || task.state,
             fileRelPath: rel || task._currentRel || '',
+            phase: task._phase || 'download', // 任务阶段（download=现有默认 extract=ZIP 解压中；页面据此切文案）
             error: error || null
         };
     }
 
-    // 任务完成：全部文件下载且校验通过 → 暂存目录一次性换入正式目录（done 必发一条进度；
-    // main.js 监听 done 事件探测主程序写注册表）
+    // 任务完成：全部文件下载且校验通过 →（ZIP 打包版本先走解压阶段）→ 暂存目录一次性换入正式目录
+    // （done 必发一条进度；main.js 监听 done 事件探测主程序写注册表）
     _finish(task) {
+        const self = this;
+        // ZIP 打包版本（packType>0）：全部卷下载校验通过后进入解压阶段（phase='extract'，
+        // total 换算为解压后大小，页面状态文案切"解压中"）。解压失败任务置 error——压缩包
+        // 保留在暂存目录，重试时下载引擎对已校验卷秒跳，直接重进解压。
+        if (task.packType > 0 && !task._extracted) {
+            task._phase = 'extract';
+            task._currentRel = '';
+            task._speed = 0;
+            task._diskSpeed = 0;
+            if (task.packSize > 0) {
+                task.total = task.packSize; // 进度总量换算：解压阶段按解压后字节推进
+            }
+            task.received = 0;
+            task._lastBytes = 0;
+            task._lastTime = 0;
+            this._emit(task, '', null, true); // 阶段切换必发一条（页面切"解压中"）
+            this._extract(task, function (err) {
+                if (task.state !== 'downloading') { self._schedule(); return; } // 取消等外部中断：状态已定，不覆盖
+                if (err) {
+                    task.state = 'error';
+                    task._phase = 'download';
+                    task._speed = 0;
+                    task._diskSpeed = 0;
+                    task.total = self._calcTotal(task.files); // 重试重下口径复位（总量还原为压缩包大小）
+                    self._emit(task, '', (err && err.message) || '解压失败', true); // error 必发
+                    self._schedule();
+                    return;
+                }
+                task._extracted = true;
+                task._phase = 'download';
+                self._finishCommit(task);
+            });
+            return;
+        }
+        this._finishCommit(task);
+    }
+
+    // 解压后提交：原 _finish 的完成路径（rename 换入正式目录 + done 事件）
+    _finishCommit(task) {
         task.state = 'done';
         task.received = task.total;
         task._speed = 0;
@@ -614,6 +673,155 @@ class GameDownloadManager extends EventEmitter {
         this.emit('progress', this._evt(task, ''));
         this.emit('done', { taskId: task.taskId, gameId: task.gameId, installDir: task.installDir, username: task.username });
         this._schedule(); // 释放并行槽位，调度排队任务
+    }
+
+    // —— ZIP 打包版本解压阶段（packType=1 单 ZIP / 2 分卷 ZIP，内置 7z 通吃）——
+
+    // 7z 组件路径（与 dlbt-host 同构：打包态 resources/7z/，开发态 __dirname/7z/）
+    _7zPath() {
+        if (app && app.isPackaged) {
+            return path.join(process.resourcesPath, '7z', '7z.exe');
+        }
+        return path.join(__dirname, '7z', '7z.exe');
+    }
+
+    // 解压前置：清残留 → 磁盘余量预检 → Zip Slip 条目预检 → spawn 7z x（stdout 百分比 → 解压进度）
+    _extract(task, cb) {
+        const self = this;
+        const exe = this._7zPath();
+        if (!fs.existsSync(exe)) { cb(new Error('解压组件缺失（7z.exe），请重新安装客户端')); return; }
+        const staging = task.stagingDir;
+        const keepMap = {};
+        task.files.forEach(function (f) {
+            keepMap[path.resolve(staging, f.rel_path).toLowerCase()] = true; // 分卷本体保留（重试免重下）
+        });
+        // 1) 清残留：上次解压中断可能留下半解压文件，全部清除防脏数据混入正式目录（保留压缩包本体）
+        try {
+            self._cleanStagingExcept(staging, keepMap);
+        } catch (e) { /* 清理失败不阻断：7z -y 覆盖写 + _commit 全量换入兜底 */ }
+        // 2) 磁盘余量预检（statfs 不可用/未知大小则跳过，由 7z 写盘失败兜底）
+        if (task.packSize > 0) {
+            try {
+                const st = fs.statfsSync(staging);
+                const free = Number(st.bavail) * Number(st.bsize);
+                if (free > 0 && free < task.packSize) {
+                    cb(new Error('磁盘空间不足：解压需约 ' + Math.ceil(task.packSize / 1073741824) +
+                        'GB，当前剩余 ' + Math.floor(free / 1073741824) + 'GB（已下载的压缩包已保留）'));
+                    return;
+                }
+            } catch (e) { /* 预检不可用：跳过 */ }
+        }
+        // 3) Zip Slip 预检：7z 列表逐条目校验路径（绝对路径/盘符/UNC/父目录引用一律拒绝），
+        //    恶意包在写盘前拦截（服务端登记时同规则已拦一道，双保险）
+        const firstVol = path.resolve(staging, task.files[0].rel_path);
+        this._7zEntryCheck(exe, firstVol, staging, function (slipErr) {
+            if (slipErr) { cb(slipErr); return; }
+            // 4) 解压：单 ZIP 直接 x；分卷给首卷 7z 自动发现同前缀 .zip.001…（.z01 旧式同样支持）
+            let child;
+            try {
+                child = spawn(exe, ['x', '-y', '-bso0', '-bsp1', '-o' + staging, firstVol], {
+                    windowsHide: true,
+                    stdio: ['ignore', 'pipe', 'pipe']
+                });
+            } catch (e) { cb(new Error('解压进程启动失败：' + e.message)); return; }
+            task._extractProc = child;
+            let buf = '';
+            child.stdout.on('data', function (chunk) {
+                buf += chunk.toString('utf8');
+                // -bsp1 进度行形如 " 42% 128 - file"，取行内最大百分数换算解压字节
+                const ms = buf.match(/(\d{1,3})%/g);
+                if (ms && ms.length) {
+                    let pct = 0;
+                    for (let i = 0; i < ms.length; i++) pct = Math.max(pct, parseInt(ms[i], 10) || 0);
+                    if (pct > 100) pct = 100;
+                    if (task.packSize > 0) task.received = Math.round(task.packSize * pct / 100);
+                    else task.received = pct;
+                    self._tick(task);
+                }
+                if (buf.length > 4096) buf = buf.slice(-1024); // 环形截断防长文件名堆积
+            });
+            child.stderr.on('data', function () { /* 7z 告警走 stderr，退出码裁决 */ });
+            child.on('error', function (err2) {
+                if (task._extractProc === child) task._extractProc = null;
+                cb(new Error('解压进程异常：' + err2.message));
+            });
+            child.on('exit', function (code) {
+                if (task._extractProc === child) task._extractProc = null;
+                if (task.state !== 'downloading') { cb(null); return; } // 取消中断：外层按状态收口
+                if (code !== 0) {
+                    const why = code === null ? '进程被终止' : ('7z 退出码 ' + code);
+                    cb(new Error('压缩包解压失败（' + why + '，包可能损坏或密码保护）'));
+                    return;
+                }
+                task.received = task.total; // 解压完成：进度拉满
+                // 5) 清压缩包本体释放空间（失败忽略——_commit rename 不受影响，仅暂存多占盘）
+                const dels = task.files.map(function (f) {
+                    return self._safeUnlink(path.resolve(staging, f.rel_path));
+                });
+                Promise.all(dels).then(function () { cb(null); }, function () { cb(null); });
+            });
+        });
+    }
+
+    // 7z 条目路径安检：l -slt -ba 列表解析 "Path = " 行，逐条校验不逃逸暂存目录
+    _7zEntryCheck(exe, vol, stagingDir, cb) {
+        let child;
+        try {
+            child = spawn(exe, ['l', '-slt', '-ba', vol], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        } catch (e) { cb(new Error('解压组件异常：' + e.message)); return; }
+        let out = '';
+        let settled = false;
+        child.stdout.on('data', function (c) { out += c.toString('utf8'); });
+        child.on('error', function (e) {
+            if (settled) return;
+            settled = true;
+            cb(new Error('解压组件异常：' + e.message));
+        });
+        child.on('exit', function (code) {
+            if (settled) return;
+            settled = true;
+            if (code !== 0) { cb(new Error('压缩包无法识别（7z 退出码 ' + code + '，包可能损坏）')); return; }
+            const root = path.resolve(stagingDir);
+            const lines = out.split(/\r?\n/);
+            for (let i = 0; i < lines.length; i++) {
+                const m = /^Path = (.+)$/.exec(lines[i]);
+                if (!m) continue;
+                const name = m[1].trim();
+                // 与服务端 zipEntryUnsafe 同规则：绝对路径/盘符/UNC/.. 段一律拒绝
+                const norm = name.replace(/\\/g, '/');
+                let bad = norm.charAt(0) === '/' || norm.indexOf(':') >= 0;
+                if (!bad) {
+                    const segs = norm.split('/');
+                    for (let s = 0; s < segs.length; s++) {
+                        if (segs[s] === '..') { bad = true; break; }
+                    }
+                }
+                if (!bad) {
+                    // 兜底：解析后必须仍位于暂存目录内（防符号链接等绕过）
+                    try {
+                        const abs = path.resolve(stagingDir, name);
+                        if (abs !== root && abs.indexOf(root + path.sep) !== 0) bad = true;
+                    } catch (e) { bad = true; }
+                }
+                if (bad) { cb(new Error('压缩包内含非法路径条目：' + name)); return; }
+            }
+            cb(null);
+        });
+    }
+
+    // 清空暂存目录但保留 keepMap 内的路径（分卷本体）：目录树后序删除
+    _cleanStagingExcept(dir, keepMap) {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (let i = 0; i < entries.length; i++) {
+            const full = path.join(dir, entries[i].name);
+            if (keepMap[full.toLowerCase()]) continue;
+            if (entries[i].isDirectory()) {
+                this._cleanStagingExcept(full, keepMap);
+                try { fs.rmdirSync(full); } catch (e) { /* 非空（保留文件所在目录）忽略 */ }
+            } else {
+                try { fs.unlinkSync(full); } catch (e) { /* 占用忽略 */ }
+            }
+        }
     }
 
     // 暂存目录 → 正式目录同盘一次性换入（Steam 同款）：旧版本先挪 .old-<ts> 腾位，rename 失败回滚；
@@ -687,6 +895,7 @@ class GameDownloadManager extends EventEmitter {
             dedupedCount: task.dedupedCount || 0,
             dedupedBytes: task.dedupedBytes || 0,
             startedAt: task.startedAt,
+            phase: task._phase || 'download', // 任务阶段（ZIP 打包版本解压中为 extract）
             via: 'http' // 通道标识（与 BT 摘要同口径；页面去重采纳/徽标展示按此区分）
         };
     }

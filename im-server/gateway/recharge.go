@@ -83,11 +83,11 @@ type rechargeRunner struct {
 	client   *http.Client
 	stop     chan struct{}
 	mu       sync.Mutex
-	dbs      map[string]*sql.DB        // 游戏 ID → 连接池
+	dbs      map[string]*sql.DB          // 游戏 ID → 连接池
 	tpls     map[string]*dbwriteTemplate // 游戏 ID → 编译后模板
-	done     map[uint64]bool           // 本地已处理订单号（幂等保险 1）
+	done     map[uint64]bool             // 本地已处理订单号（幂等保险 1）
 	donePath string
-	warned   map[string]bool           // 未配置游戏告警去重（每游戏仅记一次，防长期刷屏）
+	warned   map[string]bool // 未配置游戏告警去重（每游戏仅记一次，防长期刷屏）
 }
 
 // rechargeMgr 当前活跃 runner（nil=未启用）；Web 后台热更经 rechargeReload 原子替换

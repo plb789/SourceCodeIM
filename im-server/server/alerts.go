@@ -185,6 +185,9 @@ func evaluateAlerts(s *Server) {
 			alertClear("gn_relay_high")
 		}
 	}
+	// 12. 磁盘水位（安全加固）：聊天上传/游戏数据/网盘本地目录所在卷使用率
+	// （disk_monitor.enabled=false 时旁路；statfs 60s 缓存，评估开销可忽略）
+	evaluateDiskAlerts(s)
 }
 
 // i64s int64 转字符串（告警文案拼接用）

@@ -1105,10 +1105,14 @@ type Merchant struct {
 	// CommissionRate 商户分成比例（百分比 0~100；100=全额结算）
 	CommissionRate float64 `gorm:"column:commission_rate;type:double;default:100" json:"commission_rate"`
 	// Status 0 启用 / 1 停用（default:0 约定同公告表：default:1 会让 GORM 省略零值字段落成启用）
-	Status     int8      `gorm:"column:status;type:tinyint;default:0" json:"status"`
-	Remark     string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
-	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
-	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+	Status int8 `gorm:"column:status;type:tinyint;default:0" json:"status"`
+	// StorageQuotaBytes 商户专属存储配额（安全加固，管理员后台分配）：0=跟随全局
+	// game.merchant_quota_bytes（默认），-1=不限，>0=专属配额（字节）。
+	// AutoMigrate 自动加列，存量商户默认 0=跟随全局
+	StorageQuotaBytes int64     `gorm:"column:storage_quota_bytes;type:bigint;default:0" json:"storage_quota_bytes"`
+	Remark            string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
+	CreateTime        time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime        time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 表名沿用 im_ 前缀约定
@@ -1176,15 +1180,15 @@ const (
 // 失败不 ack=天然重试；超时（30 分钟）由服务端定时任务标 failed 并自动全额退分。
 // 索引：username（兑换记录页）、status+create_time（超时扫描）、game_id（按游戏审计）
 type RechargeOrder struct {
-	ID         uint64    `gorm:"primaryKey" json:"id"`
-	Username   string    `gorm:"column:username;size:64;index" json:"username"`  // 兑换用户（=游戏账号，模板 {user}）
-	GameID     uint      `gorm:"column:game_id;index" json:"game_id"`            // 游戏 ID（网关按 game_id 路由 DSN/SQL，模板 {game}）
-	Points     float64   `gorm:"column:points;type:double" json:"points"`        // 扣除积分数（3 位小数口径）
-	Amount     float64   `gorm:"column:amount;type:double" json:"amount"`        // 到账数值（下单快照，模板 {amount}，纯数字校验）
-	Status     int8      `gorm:"column:status;type:tinyint;default:0;index:idx_status_ctime" json:"status"`
-	Gw         string    `gorm:"column:gw;size:64;default:''" json:"gw"`         // 下单时快照的归属网关名（防游戏后续改归属歧义）
-	FailReason string    `gorm:"column:fail_reason;size:255;default:''" json:"fail_reason"`
-	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index:idx_status_ctime" json:"create_time"`
+	ID         uint64     `gorm:"primaryKey" json:"id"`
+	Username   string     `gorm:"column:username;size:64;index" json:"username"` // 兑换用户（=游戏账号，模板 {user}）
+	GameID     uint       `gorm:"column:game_id;index" json:"game_id"`           // 游戏 ID（网关按 game_id 路由 DSN/SQL，模板 {game}）
+	Points     float64    `gorm:"column:points;type:double" json:"points"`       // 扣除积分数（3 位小数口径）
+	Amount     float64    `gorm:"column:amount;type:double" json:"amount"`       // 到账数值（下单快照，模板 {amount}，纯数字校验）
+	Status     int8       `gorm:"column:status;type:tinyint;default:0;index:idx_status_ctime" json:"status"`
+	Gw         string     `gorm:"column:gw;size:64;default:''" json:"gw"` // 下单时快照的归属网关名（防游戏后续改归属歧义）
+	FailReason string     `gorm:"column:fail_reason;size:255;default:''" json:"fail_reason"`
+	CreateTime time.Time  `gorm:"column:create_time;autoCreateTime;index:idx_status_ctime" json:"create_time"`
 	DoneTime   *time.Time `gorm:"column:done_time" json:"done_time"` // 终态时间（success/failed 落定时刻）
 }
 
@@ -1193,9 +1197,9 @@ func (RechargeOrder) TableName() string { return "im_recharge_order" }
 
 // 充值卡状态（卡密充值，状态机单向迁移：0→1 核销 / 0→2 作废，终态不可逆）
 const (
-	RechargeCardStatusUnused  int8 = 0 // 未使用
-	RechargeCardStatusUsed    int8 = 1 // 已使用（used_by/used_at 记录核销人与时间）
-	RechargeCardStatusVoided  int8 = 2 // 已作废（管理端操作，仅未使用卡可作废）
+	RechargeCardStatusUnused int8 = 0 // 未使用
+	RechargeCardStatusUsed   int8 = 1 // 已使用（used_by/used_at 记录核销人与时间）
+	RechargeCardStatusVoided int8 = 2 // 已作废（管理端操作，仅未使用卡可作废）
 )
 
 // RechargeCard 充值卡表 im_recharge_card（充值卡功能开发文档 §3.1.1）：管理员按面值批量生成
@@ -1204,14 +1208,14 @@ const (
 // 索引：card_no/card_key 唯一索引（防碰撞主防线）、batch_no（批次导出/列表）、status（筛选）
 type RechargeCard struct {
 	ID         uint64     `gorm:"primaryKey" json:"id"`
-	CardNo     string     `gorm:"column:card_no;size:24;uniqueIndex" json:"card_no"`  // 卡号（前缀+12位纯数字）
+	CardNo     string     `gorm:"column:card_no;size:24;uniqueIndex" json:"card_no"`   // 卡号（前缀+12位纯数字）
 	CardKey    string     `gorm:"column:card_key;size:24;uniqueIndex" json:"card_key"` // 卡密（16位去易混淆字符字母数字）
 	Points     float64    `gorm:"column:points;type:double" json:"points"`             // 面值（积分，3 位小数口径）
 	Status     int8       `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
-	BatchNo    string     `gorm:"column:batch_no;size:32;index" json:"batch_no"`      // 批次号（CR+时间戳，同次生成归组）
+	BatchNo    string     `gorm:"column:batch_no;size:32;index" json:"batch_no"`          // 批次号（CR+时间戳，同次生成归组）
 	CreatedBy  string     `gorm:"column:created_by;size:64;default:''" json:"created_by"` // 生成管理员
-	UsedBy     string     `gorm:"column:used_by;size:64;default:''" json:"used_by"`   // 核销用户
-	UsedAt     *time.Time `gorm:"column:used_at" json:"used_at"`                      // 核销时间
+	UsedBy     string     `gorm:"column:used_by;size:64;default:''" json:"used_by"`       // 核销用户
+	UsedAt     *time.Time `gorm:"column:used_at" json:"used_at"`                          // 核销时间
 	CreateTime time.Time  `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
@@ -1245,6 +1249,20 @@ type GameVersion struct {
 	// SizeBytes 该版本全部文件总大小；FileCount 文件数
 	SizeBytes int64 `gorm:"column:size_bytes;default:0" json:"size_bytes"`
 	FileCount int   `gorm:"column:file_count;default:0" json:"file_count"`
+	// PackType 打包方式（AutoMigrate 自动加列，存量版本默认 0 散文件，行为不变）：
+	// 0=散文件清单（现有方式，逐文件下载） 1=单 ZIP 包（下载后客户端解压）
+	// 2=分卷 ZIP（game.zip.001/.002…，下载后客户端 7z 分卷解压）
+	PackType int8 `gorm:"column:pack_type;type:tinyint;default:0" json:"pack_type"`
+	// PackSize 解压后总大小（字节）：单 ZIP 由服务端读 central directory 自动计算；
+	// 分卷由商户登记时填写（服务端无法解析分卷）；客户端解压前磁盘余量预检用；0=未知不预检
+	PackSize int64 `gorm:"column:pack_size;default:0" json:"pack_size"`
+	// BaseVersion 补丁基底版本号（pack_type=3 补丁专用；散文件/ZIP 版为空串）。补丁版本登记时
+	// 服务端解包 patch.zip 并按基底版本清单合成完整散文件清单（合成结果直接落 GameFile 行，
+	// manifest 对客户端透明表现为普通散文件版本；链式补丁逐版本物化，无需运行期递归）
+	BaseVersion string `gorm:"column:base_version;type:varchar(32);default:''" json:"base_version"`
+	// PatchDelete 补丁删除清单（JSON 数组串，pack_type=3 专用；登记时从 patch.json 提取存库，
+	// 合成清单时消费——基底中存在而补丁声明删除的文件不进入合成清单）
+	PatchDelete string `gorm:"column:patch_delete;type:text" json:"patch_delete"`
 	// Changelog 更新日志；MinReq 最低配置说明（纯展示）
 	Changelog  string    `gorm:"column:changelog;type:varchar(1024);default:''" json:"changelog"`
 	MinReq     string    `gorm:"column:min_req;type:varchar(512);default:''" json:"min_req"`

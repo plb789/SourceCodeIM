@@ -54,10 +54,10 @@ func TestAgentProjTreeRender(t *testing.T) {
 	agentTreeWrite(t, ws, "readme.md", "readme")
 	agentTreeWrite(t, ws, "src/main.go", "package main")
 	agentTreeWrite(t, ws, "src/util/helper.go", "package util")
-	agentTreeWrite(t, ws, "docs/a/b/deep.txt", "超深层") // 第 4 层文件：不应出现（深度 ≤3）
+	agentTreeWrite(t, ws, "docs/a/b/deep.txt", "超深层")        // 第 4 层文件：不应出现（深度 ≤3）
 	agentTreeWrite(t, ws, "node_modules/pkg/index.js", "依赖") // 跳过目录
-	agentTreeWrite(t, ws, ".git/HEAD", "ref")                  // 跳过目录
-	agentTreeWrite(t, ws, "dist/bundle.js", "构建产物")           // 跳过目录
+	agentTreeWrite(t, ws, ".git/HEAD", "ref")                // 跳过目录
+	agentTreeWrite(t, ws, "dist/bundle.js", "构建产物")          // 跳过目录
 
 	s := &Server{}
 	block := s.agentProjTreeBlock("treerender1")

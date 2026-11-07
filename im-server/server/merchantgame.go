@@ -10,7 +10,10 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -155,6 +158,8 @@ func merchantGameBaseClean(g *model.Game, req *merchantGameReq) error {
 }
 
 // handleMerchantProfile 商户资料（含分成比例，赞助统计页展示口径参数）
+// 存储配额三字段（安全加固）：商户自助掌握已用/总量/占比——版本上架触发配额拒绝前可自查腾额度；
+// quota=-1（不限）时 percent 下发 null，前端显示"不限量"
 func (s *Server) handleMerchantProfile(w http.ResponseWriter, r *http.Request) {
 	me := merchantUserFromCtx(r)
 	var m model.Merchant
@@ -165,9 +170,16 @@ func (s *Server) handleMerchantProfile(w http.ResponseWriter, r *http.Request) {
 	var gameCnt, pendingCnt int64
 	store.DB.Model(&model.Game{}).Where("owner_username = ?", me).Count(&gameCnt)
 	store.DB.Model(&model.Game{}).Where("owner_username = ? AND audit_status = ?", me, model.GameAuditPending).Count(&pendingCnt)
+	used := merchantQuotaUsed(me)
+	quota := s.merchantQuotaLimit(me) // 专属分配优先，未分配跟随全局（管理员后台可改，商户端即时跟随）
+	var percent interface{}
+	if quota > 0 {
+		percent = math.Round(float64(used)/float64(quota)*1000) / 10
+	}
 	adminJSON(w, map[string]interface{}{
 		"username": me, "name": m.Name, "commission_rate": m.CommissionRate,
 		"game_count": gameCnt, "pending_count": pendingCnt,
+		"storage_used_bytes": used, "storage_quota_bytes": quota, "storage_used_percent": percent,
 	})
 }
 
@@ -203,11 +215,11 @@ func (s *Server) handleMerchantGameList(w http.ResponseWriter, r *http.Request) 
 			"developer": g.Developer, "publisher": g.Publisher, "price": g.Price,
 			"launch_exe": g.LaunchExe, "launch_name": g.LaunchName, "launch_args": g.LaunchArgs,
 			"status": g.Status, "audit_status": g.AuditStatus, "audit_remark": g.AuditRemark,
-			"audit_time": g.AuditTime,
+			"audit_time":       g.AuditTime,
 			"recharge_enabled": g.RechargeEnabled, "recharge_rate": g.RechargeRate,
 			"recharge_tiers_raw": g.RechargeTiers, "recharge_gw": g.RechargeGw,
 			"recharge_daily_max": g.RechargeDailyMax,
-			"latest_version": g.LatestVersion, "size_bytes": g.SizeBytes,
+			"latest_version":     g.LatestVersion, "size_bytes": g.SizeBytes,
 			"create_time": g.CreateTime.Format("2006-01-02 15:04"),
 		})
 	}
@@ -554,9 +566,70 @@ func (s *Server) handleMerchantGameVersions(w http.ResponseWriter, r *http.Reque
 		verList = append(verList, map[string]interface{}{
 			"id": v.ID, "version": v.Version, "size_bytes": v.SizeBytes, "file_count": v.FileCount,
 			"changelog": v.Changelog, "create_time": v.CreateTime.Format("2006-01-02 15:04"),
+			"pack_type": v.PackType, "pack_size": v.PackSize, "base_version": v.BaseVersion,
 		})
 	}
 	adminJSON(w, map[string]interface{}{"versions": verList, "latest_version": g.LatestVersion})
+}
+
+// handleMerchantVersionFilelist 商户版本清单导出（GamePatchTool -base-list 基准数据源）：
+// 按 GameFile 行输出 `0|rel_path|sha256|size` 排序文本（与 FileListGenerator 清单格式同构）。
+// 补丁版（pack_type=3）导出的是登记时合成的最终完整清单——可直接作为下一层补丁的基准
+func (s *Server) handleMerchantVersionFilelist(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	me := merchantUserFromCtx(r)
+	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	g, ok := merchantOwnGame(me, id)
+	if !ok {
+		adminFail(w, http.StatusNotFound, "游戏不存在")
+		return
+	}
+	var v model.GameVersion
+	if err := store.DB.Where("game_id = ? AND version = ?", g.ID, strings.TrimSpace(r.PathValue("ver"))).First(&v).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "版本不存在")
+		return
+	}
+	s.gameVersionFilelistText(w, &v)
+}
+
+// handleMerchantGameToolDownload 商户补丁工具（gametool.exe）下载：工具与 im-server.exe 同目录
+// 托管（go build 产物同落 bin/，零部署步骤），缺失时明确提示未随服务端部署
+func (s *Server) handleMerchantGameToolDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	if merchantUserFromCtx(r) == "" {
+		adminFail(w, http.StatusUnauthorized, "请先登录商户账号")
+		return
+	}
+	gameToolDownloadServe(w, r)
+}
+
+// gameToolDownloadServe gametool.exe 下载公共核心（管理端/商户端共用）：
+// os.Executable 同目录定位（无用户输入参与路径，无穿越面），ServeContent 支持断点续传
+func gameToolDownloadServe(w http.ResponseWriter, r *http.Request) {
+	exePath, err := os.Executable()
+	if err != nil {
+		adminFail(w, http.StatusInternalServerError, "服务端路径解析失败")
+		return
+	}
+	toolPath := filepath.Join(filepath.Dir(exePath), "gametool.exe")
+	f, err := os.Open(toolPath)
+	if err != nil {
+		adminFail(w, http.StatusNotFound, "补丁工具未随服务端部署（gametool.exe 与 im-server.exe 不在同目录），请联系管理员")
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		adminFail(w, http.StatusInternalServerError, "工具文件读取失败")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"gametool.exe\"")
+	http.ServeContent(w, r, "gametool.exe", st.ModTime(), f)
 }
 
 // handleMerchantVersionCreate 商户版本上架（共享核心 gameVersionCreateCore，前置归属校验）

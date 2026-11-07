@@ -9,9 +9,9 @@ import "time"
 // Group 群聊信息表 im_group
 type Group struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name       string    `gorm:"column:name;type:varchar(64);not null" json:"name"`   // 群名称
-	OwnerID    string    `gorm:"column:owner_id;type:varchar(32);not null" json:"owner_id"` // 群主用户名
-	Avatar     string    `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`  // 群头像（空=前端成员头像九宫格降级；阶段二百六十六支持群主上传）
+	Name       string    `gorm:"column:name;type:varchar(64);not null" json:"name"`             // 群名称
+	OwnerID    string    `gorm:"column:owner_id;type:varchar(32);not null" json:"owner_id"`     // 群主用户名
+	Avatar     string    `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`      // 群头像（空=前端成员头像九宫格降级；阶段二百六十六支持群主上传）
 	Announce   string    `gorm:"column:announce;type:varchar(1024);default:''" json:"announce"` // 阶段一百四十三：群公告（仅群主可编辑，全员可见）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
@@ -37,10 +37,10 @@ func (GroupMember) TableName() string { return "im_group_member" }
 type GroupInvite struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	GroupID    uint      `gorm:"column:group_id;not null;index:idx_invite_to,priority:1" json:"group_id"`
-	FromUser   string    `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`                    // 邀请人
+	FromUser   string    `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`                            // 邀请人
 	ToUser     string    `gorm:"column:to_user;type:varchar(32);not null;index:idx_invite_to,priority:2" json:"to_user"` // 被邀请人
-	Status     int8      `gorm:"column:status;type:tinyint;default:0" json:"status"`                             // 0待处理 1已同意 2已拒绝（与好友申请状态对齐）
-	Message    string    `gorm:"column:message;type:varchar(255);default:''" json:"message"`                     // 邀请附言（预留）
+	Status     int8      `gorm:"column:status;type:tinyint;default:0" json:"status"`                                     // 0待处理 1已同意 2已拒绝（与好友申请状态对齐）
+	Message    string    `gorm:"column:message;type:varchar(255);default:''" json:"message"`                             // 邀请附言（预留）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 

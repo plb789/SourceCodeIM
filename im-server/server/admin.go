@@ -77,6 +77,10 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /admin/api/metrics", s.adminGuard(s.handleAdminMetrics))
 	// 阶段一百四十七：管理端通话话单查询（含链路类型筛选，通话统计视图数据源）
 	http.HandleFunc("GET /admin/api/calllogs", s.adminGuard(s.HandleAdminCallLogs))
+	// 病毒扫描（安全加固）：存量商户版本 ClamAV 回溯重扫（管理端游戏审核页入口；
+	// 检出自动驳回，任务态单飞）。clamav.enabled=false 时启动接口明确拒绝
+	http.HandleFunc("POST /admin/api/security/clamav/rescan", s.adminGuard(s.handleClamAVRescan))
+	http.HandleFunc("GET /admin/api/security/clamav/rescan/status", s.adminGuard(s.handleClamAVRescanStatus))
 	// AI 模型服务管理
 	http.HandleFunc("GET /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderList))
 	http.HandleFunc("POST /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderCreate))

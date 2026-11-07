@@ -305,8 +305,8 @@
             else if (item.dataset.view === 'groders') { grodPage = 1; grodLoad(); }
             // 充值卡（游戏管理二级页）：进入视图拉取卡密列表（重置到第一页）
             else if (item.dataset.view === 'cards') { cardsPage = 1; cardsLoad(); }
-            // 游戏审核（游戏管理二级页）：进入视图拉取商户提交的游戏队列
-            else if (item.dataset.view === 'gaudit') { gauditLoad(); }
+            // 游戏审核（游戏管理二级页）：进入视图拉取商户提交的游戏队列 + 病毒回溯扫描任务态
+            else if (item.dataset.view === 'gaudit') { gauditLoad(); clamavStatusLoad(true); }
             // 商户管理（游戏管理二级页）：进入视图拉取商户列表并复位表单为「创建」态
             else if (item.dataset.view === 'merchants') { merchantsResetForm(); merchantsLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
@@ -5484,6 +5484,92 @@
     var gmFiles = [];      // 待上传清单 [{rel_path,size,file,ui:{state,fill}}]
     var gmBaseDir = '';    // 最新版文件首段公共目录名（如 War3），单文件上传时自动前缀
     var gmUploading = false;  // 版本上传进行中（关闭/重复提交归口拦截）
+    // 打包方式（对齐商户端两级分类）：0=散文件 1=单 ZIP 2=分卷 ZIP 3=补丁包；0/3=逐文件版大类（可补丁增量），1/2=ZIP 完整包大类（不可补丁）
+    var gmPackType = 0;
+    var GM_PACK_TIPS = [
+        '完整版·逐文件上传：选整个游戏目录（或多选文件），玩家端逐个下载。此方式的版本可作为后续补丁升级的基底，推荐首发使用。',
+        '完整版·整包上传：选 1 个 .zip 上传，玩家端整包下载后自动解压安装。<span class="gm-warn-text">⚠ 此方式不支持后续补丁升级（服务端无逐文件清单），后续更新须重新上传完整包或改用散文件方式</span>',
+        '完整版·分卷上传：选 game.zip.001 / .002…（7-Zip/WinRAR 标准分卷），玩家端自动分卷解压；需填写解压后总大小。<span class="gm-warn-text">⚠ 此方式不支持后续补丁升级，后续更新须重新上传完整分卷或改用散文件方式</span>',
+        '增量更新·只传变更：先用版本行"导出清单"下载基底版本清单 → 本地用 gametool 生成 patch.zip → 上传；老玩家只下载变更文件（基底须为散文件版或补丁版）'
+    ];
+    function gmSetPack(t) {
+        gmPackType = t;
+        var cat = (t === 1 || t === 2) ? 'zip' : 'file';
+        var cats = $('gm-catseg').querySelectorAll('.gm-cat-btn');
+        for (var i = 0; i < cats.length; i++) {
+            cats[i].classList.toggle('active', cats[i].getAttribute('data-cat') === cat);
+        }
+        $('gm-pack-file').classList.toggle('hidden', cat !== 'file');
+        $('gm-pack-zip').classList.toggle('hidden', cat !== 'zip');
+        var btns = $('gm-packseg').querySelectorAll('.gm-packseg-btn');
+        for (var j = 0; j < btns.length; j++) {
+            btns[j].classList.toggle('active', Number(btns[j].getAttribute('data-pack')) === t);
+        }
+        $('gm-packtip').innerHTML = GM_PACK_TIPS[t] || GM_PACK_TIPS[0];
+        $('gm-packsize-row').classList.toggle('hidden', t !== 2);
+        $('gm-base-row').classList.toggle('hidden', t !== 3);
+        $('gm-tooldown-row').classList.toggle('hidden', t !== 3);
+        if (t === 3) gmFillBase();
+        gmFiles = []; // 方式切换清空已选文件（清单语义不同：散文件目录树 vs 包本体）
+        gmRenderFiles();
+    }
+    function gmSetCat(cat) { gmSetPack(cat === 'zip' ? 1 : 0); }
+    gmSetPack(0); // 初始归位：填充默认说明（实际入口 gmOpenVersions 亦会重置）
+    // 分卷命名解析：`前缀.zip.NNN`（3 位数字）→ {prefix, seq}，非法返回 null
+    function gmSplitVolParse(name) {
+        var m = /^(.+)\.zip\.(\d{3})$/i.exec(name);
+        return m ? { prefix: m[1].toLowerCase(), seq: Number(m[2]) } : null;
+    }
+    // ZIP 打包清单前端预校验（服务端 gameVersionCreateCore 同名规则兜底）；散文件无 ZIP 语义校验
+    function gmPackValidate(list) {
+        if (gmPackType === 0) return '';
+        if (gmPackType === 1 || gmPackType === 3) {
+            if (list.length !== 1 || !/\.zip$/i.test(list[0].rel_path)) {
+                return gmPackType === 3 ? '补丁包方式只能选择 1 个 GamePatchTool 生成的 patch.zip' : '单 ZIP 方式只能选择 1 个 .zip 压缩包';
+            }
+            return '';
+        }
+        if (!list.length) return '请先选择分卷文件';
+        var prefix = null, prev = 0;
+        for (var i = 0; i < list.length; i++) {
+            var v = gmSplitVolParse(list[i].rel_path);
+            if (!v) return '分卷命名非法：' + list[i].rel_path + '（须为 前缀.zip.001 形式）';
+            if (prefix === null) {
+                if (v.seq !== 1) return '分卷必须从 .zip.001 开始';
+                prefix = v.prefix; prev = 1;
+            } else if (v.prefix !== prefix) {
+                return '分卷前缀不一致：' + list[i].rel_path;
+            } else if (v.seq !== prev + 1) {
+                return '分卷序号不连续（缺 ' + ('00' + (prev + 1)).slice(-3) + ' 卷）';
+            } else {
+                prev = v.seq;
+            }
+        }
+        return '';
+    }
+    // 基底版本下拉填充：仅散文件（0）与补丁版（3）可作基底（ZIP 整包/分卷版无逐文件清单）
+    function gmFillBase() {
+        var sel = $('gm-pub-base');
+        var cur = sel.value;
+        sel.innerHTML = '';
+        var opts = 0;
+        ((gmVerGame && gmVerGame.versions) || []).forEach(function (v) {
+            var pk = Number(v.pack_type) || 0;
+            if (pk !== 0 && pk !== 3) return;
+            var o = document.createElement('option');
+            o.value = v.version;
+            o.textContent = 'v' + v.version + (pk === 3 ? '（补丁版）' : '') + ' · ' + fmFormatSize(v.size_bytes);
+            sel.appendChild(o);
+            opts++;
+        });
+        if (!opts) {
+            var o = document.createElement('option');
+            o.value = '';
+            o.textContent = '暂无可用基底版本（请先上传散文件版本）';
+            sel.appendChild(o);
+        }
+        if (cur) sel.value = cur;
+    }
     // 下载方式=2（BT·上传种子）：暂存上传种子文件名与种子内元信息（保存时随表单提交 torrent_path）
     var GM_TORRENT_HINT = '上传自制 .torrent（≤8MB）：客户端按种子内 info.name 作为安装目录名下载，故种子内须包含完整游戏文件；该方式为纯 BT，不叠加服务器直链源';
     var gmTorrentPath = '';   // 已上传种子文件名（服务端 LocalDir/torrents/uploaded/ 下的名字）
@@ -6867,11 +6953,31 @@
             $('gm-pub-version').value = '';
             $('gm-pub-changelog').value = '';
             $('gm-pub-minreq').value = '';
-            gmFiles = [];
-            gmRenderFiles();
+            $('gm-pub-packsize').value = '';
+            gmSetPack(0); // 每次打开归位散文件方式（清空已选文件 + 联动行显隐）
             gmRenderVersions();
             $('gm-ver-mask').classList.remove('hidden');
         }).catch(function () { showToast('网络异常'); });
+    }
+
+    // 版本清单导出（GamePatchTool -base-list 基准；补丁版导出的是合成后最终清单，可直接作下一层补丁基准）
+    function gmExportFilelist(vid, ver) {
+        fetch('/admin/api/game/version/' + vid + '/filelist', {
+            headers: { 'Authorization': 'Bearer ' + getToken() }
+        }).then(function (r) {
+            if (!r.ok) return r.json().then(function (j) { throw new Error(j.msg || ('HTTP ' + r.status)); });
+            return r.blob();
+        }).then(function (blob) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'filelist-' + ver + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+            showToast('清单已导出：filelist-' + ver + '.txt');
+        }).catch(function (e) {
+            showToast('导出失败：' + (e && e.message ? e.message : '网络异常'));
+        });
     }
 
     function gmRefreshVersions() {
@@ -6891,7 +6997,7 @@
         if (!versions.length) {
             var tr0 = document.createElement('tr');
             var td0 = document.createElement('td');
-            td0.colSpan = 6;
+            td0.colSpan = 7;
             td0.className = 'vec-empty';
             td0.textContent = '暂无版本，在下方上架第一个版本';
             tr0.appendChild(td0);
@@ -6908,6 +7014,12 @@
         versions.forEach(function (v) {
             var tr = document.createElement('tr');
             var tdV = document.createElement('td'); tdV.textContent = v.version; tr.appendChild(tdV);
+            // 方式列：打包方式徽标（补丁版带基底版本号），与商户端版本列表同口径
+            var pk = Number(v.pack_type) || 0;
+            var tdP = document.createElement('td');
+            tdP.textContent = pk === 1 ? '单ZIP' : pk === 2 ? '分卷ZIP' : pk === 3 ? '补丁⇢v' + (v.base_version || '?') : '散文件';
+            tdP.style.color = pk === 3 ? 'var(--primary)' : 'var(--text-light)';
+            tr.appendChild(tdP);
             var tdC = document.createElement('td'); tdC.textContent = v.file_count; tr.appendChild(tdC);
             var tdS = document.createElement('td'); tdS.textContent = fmFormatSize(v.size_bytes); tr.appendChild(tdS);
             var tdL = document.createElement('td');
@@ -6918,6 +7030,9 @@
             var tdT = document.createElement('td'); tdT.textContent = v.create_time || '-'; tr.appendChild(tdT);
             var tdOp = document.createElement('td');
             tdOp.className = 'vec-td-actions';
+            tdOp.appendChild(opBtn('导出清单', '', function () {
+                gmExportFilelist(v.id, v.version);
+            }));
             tdOp.appendChild(opBtn('删除', 'danger', function () {
                 confirmBox('删除版本「' + v.version + '」将同时删除其全部文件与磁盘数据，不可恢复，确定删除？', function () {
                     api('DELETE', '/admin/api/game/version/' + v.id).then(function (result) {
@@ -7121,6 +7236,20 @@
         var minReq = $('gm-pub-minreq').value;
         if (!version) { showToast('请填写版本号'); return; }
         if (!gmFiles.length) { showToast('请先选择游戏目录或文件'); return; }
+        // ZIP 打包方式发布前校验（与清单预校验同规则；分卷需填解压后总大小，补丁需选基底）
+        var packErr = gmPackValidate(gmFiles);
+        if (packErr) { showToast(packErr); return; }
+        var packSizeBytes = 0;
+        if (gmPackType === 2) {
+            var gb = Number($('gm-pub-packsize').value);
+            if (!(gb > 0)) { showToast('请填写压缩包解压后的总大小（GB）'); return; }
+            packSizeBytes = Math.round(gb * 1073741824);
+        }
+        var baseVer = '';
+        if (gmPackType === 3) {
+            baseVer = $('gm-pub-base').value;
+            if (!baseVer) { showToast('请选择基底版本（无可用基底请先上传散文件版本）'); return; }
+        }
         gmSetUploadUI(true);
         gmCancelFlag = false;
         gmStartedIds = [];
@@ -7148,7 +7277,8 @@
         var reg;
         try {
             reg = await api('POST', '/admin/api/game/' + gmVerGame.id + '/version',
-                { version: version, changelog: changelog, min_req: minReq, files: okFiles });
+                { version: version, changelog: changelog, min_req: minReq, files: okFiles,
+                  pack_type: gmPackType, pack_size: packSizeBytes, base_version: baseVer });
         } catch (e) {
             gmSetUploadUI(false);
             showToast(e.message || '网络异常');
@@ -7421,6 +7551,7 @@
     $('gm-file-dir').addEventListener('change', function () {
         var files = Array.prototype.slice.call(this.files || []);
         this.value = '';
+        if (gmPackType > 0) { gmCollectPack(files); return; } // ZIP 方式：清单语义=包本体，整体替换
         files.forEach(function (f) {
             var rel = f.webkitRelativePath || f.name;
             var parts = rel.split('/');
@@ -7432,6 +7563,7 @@
     $('gm-file-multi').addEventListener('change', function () {
         var files = Array.prototype.slice.call(this.files || []);
         this.value = '';
+        if (gmPackType > 0) { gmCollectPack(files); return; }
         files.forEach(function (f) {
             // 单文件上传时自动前缀最新版 base_dir，使更新文件落在与原版相同的客户端目录下
             var rel = gmBaseDir ? (gmBaseDir + '/' + f.name) : f.name;
@@ -7439,6 +7571,48 @@
         });
         gmRenderFiles();
     });
+    // ZIP 打包方式文件收集（整体替换，清单=包本体非目录树）：文件名直用，空文件跳过，选完即时校验命名
+    function gmCollectPack(files) {
+        var next = [];
+        for (var i = 0; i < files.length; i++) {
+            var f = files[i];
+            if (f.size <= 0) continue;
+            next.push({ rel_path: f.name, size: f.size, file: f });
+        }
+        var err = gmPackValidate(next);
+        if (err) { showToast(err); return; }
+        gmFiles = next;
+        gmRenderFiles();
+    }
+    // 补丁工具下载（服务端 /admin/api/game/gametool 托管 gametool.exe）与教程页
+    $('gm-tooldown').addEventListener('click', function () {
+        fetch('/admin/api/game/gametool', { headers: { 'Authorization': 'Bearer ' + getToken() } }).then(function (r) {
+            if (!r.ok) return r.json().then(function (j) { throw new Error(j.msg || ('HTTP ' + r.status)); });
+            return r.blob();
+        }).then(function (blob) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'gametool.exe';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+            showToast('补丁工具已开始下载：gametool.exe');
+        }).catch(function (e) {
+            showToast('下载失败：' + (e && e.message ? e.message : '网络异常'));
+        });
+    });
+    $('gm-toolhelp').addEventListener('click', function () { window.open('/gametool-help.html', '_blank'); });
+    // 方式切换绑定（大类 + 组内子方式）
+    (function () {
+        var cats = $('gm-catseg').querySelectorAll('.gm-cat-btn');
+        for (var i = 0; i < cats.length; i++) {
+            cats[i].addEventListener('click', function () { gmSetCat(this.getAttribute('data-cat')); });
+        }
+        var btns = $('gm-packseg').querySelectorAll('.gm-packseg-btn');
+        for (var j = 0; j < btns.length; j++) {
+            btns[j].addEventListener('click', function () { gmSetPack(Number(this.getAttribute('data-pack'))); });
+        }
+    })();
     // 上传与取消
     $('gm-pub-ok').addEventListener('click', function () { gmRunPublish(); });
     $('gm-pub-cancel').addEventListener('click', function () {
@@ -7831,7 +8005,7 @@
             $('gaudit-status').textContent = '共 ' + gauditGames.length + ' 条' + (st === '' || st === '1' ? '（待审核 ' + pend + '）' : '');
             var AUD = { 1: ['pending', '待审核'], 2: ['ok', '已通过'], 3: ['rej', '已驳回'] };
             var tbody = $('gaudit-tbody');
-            if (!gauditGames.length) { tbody.innerHTML = '<tr><td colspan="8" class="vec-empty">队列为空</td></tr>'; return; }
+            if (!gauditGames.length) { tbody.innerHTML = '<tr><td colspan="8" class="vec-empty">队列为空</td></tr>'; clamavFillGames(); return; }
             tbody.innerHTML = '';
             gauditGames.forEach(function (g) {
                 var tr = document.createElement('tr');
@@ -7865,6 +8039,7 @@
                 tr.lastElementChild.appendChild(acts);
                 tbody.appendChild(tr);
             });
+            clamavFillGames(); // 游戏清单就绪后同步病毒扫描的范围下拉（保留当前选择）
         });
     }
     function gauditAct(g, action) {
@@ -7904,6 +8079,7 @@
         $('merchants-f-name').value = '';
         $('merchants-f-rate').value = 100;
         $('merchants-f-remark').value = '';
+        $('merchants-f-quota').value = '';
         $('merchants-form-title').textContent = '创建商户';
         $('merchants-save').textContent = '创建';
         $('merchants-reset-form').classList.add('hidden');
@@ -7915,13 +8091,18 @@
             var items = (result.data.list || []);
             $('merchants-status').textContent = '共 ' + (result.data.total || items.length) + ' 个商户';
             var tbody = $('merchants-tbody');
-            if (!items.length) { tbody.innerHTML = '<tr><td colspan="8" class="vec-empty">暂无商户，用上方表单创建</td></tr>'; return; }
+            if (!items.length) { tbody.innerHTML = '<tr><td colspan="9" class="vec-empty">暂无商户，用上方表单创建</td></tr>'; return; }
             tbody.innerHTML = '';
             items.forEach(function (m) {
                 var tr = document.createElement('tr');
                 var st = m.status === 0
                     ? '<span class="m-badge ok">启用</span>'
                     : '<span class="m-badge rej">停用</span>';
+                // 存储配额列（安全加固）：专属 X GB（已用 Y）/-1 不限/0 跟随全局
+                var q = Number(m.storage_quota_bytes) || 0;
+                var qTxt = q === -1 ? '不限量' : (q > 0
+                    ? fmtGB(q) + '<div style="font-size:11px;color:var(--text-light);">已用 ' + fmtGB(Number(m.storage_used_bytes) || 0) + '</div>'
+                    : '跟随全局<div style="font-size:11px;color:var(--text-light);">已用 ' + fmtGB(Number(m.storage_used_bytes) || 0) + '</div>');
                 tr.innerHTML =
                     '<td>' + esc(m.username) + '</td>' +
                     '<td>' + esc(m.name || '—') + '</td>' +
@@ -7929,6 +8110,7 @@
                     '<td>' + st + '</td>' +
                     '<td>' + (m.game_count || 0) + '</td>' +
                     '<td>' + (Number(m.recharge_total) || 0) + '</td>' +
+                    '<td>' + qTxt + '</td>' +
                     '<td>' + esc(String(m.create_time || '')) + '</td><td></td>';
                 var acts = document.createElement('div');
                 acts.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
@@ -7944,6 +8126,9 @@
                     $('merchants-f-name').value = m.name || '';
                     $('merchants-f-rate').value = m.commission_rate;
                     $('merchants-f-remark').value = m.remark || '';
+                    // 配额回填：专属>0 转 GB，-1 原样，0（跟随全局）留空
+                    var qb = Number(m.storage_quota_bytes) || 0;
+                    $('merchants-f-quota').value = qb > 0 ? (qb / 1073741824) : (qb === -1 ? -1 : '');
                     $('merchants-form-title').textContent = '编辑商户 — ' + m.username;
                     $('merchants-save').textContent = '保存';
                     $('merchants-reset-form').classList.remove('hidden');
@@ -7965,24 +8150,41 @@
             });
         });
     }
+    // 存储配额 GB 输入解析（安全加固）：空/0=跟随全局(0)、-1=不限、其他=专属字节（最小 0.001GB=1MB）
+    function parseQuotaGB() {
+        var v = $('merchants-f-quota').value.trim();
+        if (v === '') return 0;
+        var n = Number(v);
+        if (isNaN(n)) return NaN;
+        if (n === -1) return -1;
+        if (n <= 0) return NaN; // 0 或负数（除 -1）非法
+        return Math.round(n * 1073741824);
+    }
+    function fmtGB(bytes) {
+        var b = Number(bytes) || 0;
+        return b >= 1073741824 ? (b / 1073741824).toFixed(2) + 'GB'
+            : b >= 1048576 ? (b / 1048576).toFixed(1) + 'MB' : b + 'B';
+    }
     $('merchants-save').addEventListener('click', function () {
         var user = $('merchants-f-user').value.trim();
         var pass = $('merchants-f-pass').value;
         var name = $('merchants-f-name').value.trim();
         var rate = Number($('merchants-f-rate').value);
         var remark = $('merchants-f-remark').value.trim();
+        var quota = parseQuotaGB();
+        if (isNaN(quota)) { showToast('存储配额非法：留空=跟随全局，-1=不限，其他须为正数（GB）'); return; }
         if (merchantsEditing) {
-            var body = { name: name, commission_rate: rate, remark: remark };
+            var body = { name: name, commission_rate: rate, remark: remark, storage_quota_bytes: quota };
             if (pass) body.password = pass;
             api('PUT', '/admin/api/merchants/' + encodeURIComponent(merchantsEditing), body).then(function (result) {
                 if (!result.ok) { showToast(result.msg || '保存失败'); return; }
-                showToast('已保存');
+                showToast('已保存（配额即时生效）');
                 merchantsResetForm();
                 merchantsLoad();
             });
         } else {
             if (!user || !pass) { showToast('请填写账号与密码'); return; }
-            api('POST', '/admin/api/merchants', { username: user, password: pass, name: name, commission_rate: rate, remark: remark }).then(function (result) {
+            api('POST', '/admin/api/merchants', { username: user, password: pass, name: name, commission_rate: rate, storage_quota_bytes: quota, remark: remark }).then(function (result) {
                 if (!result.ok) { showToast(result.msg || '创建失败'); return; }
                 showToast('商户已创建：' + user);
                 merchantsResetForm();
@@ -7992,6 +8194,85 @@
     });
     $('merchants-reset-form').addEventListener('click', merchantsResetForm);
     $('gaudit-refresh').addEventListener('click', gauditLoad);
+
+    // ===== 病毒扫描·存量回溯（安全加固：clamav-* 归口） =====
+    // 点击流程：选范围（全部/单游戏，下拉随审核清单自动填充）→ 开始重扫 → 自绘确认弹窗
+    //   （confirmBox，禁用系统弹窗）→ POST {game_id} 启动 → 进行中置按钮态 + 每 5s 轮询
+    //   （关页面不中断，服务端任务单飞兜底）→ 409（已有任务）自动转轮询；结束恢复按钮
+    var clamavPollTimer = null;
+    function clamavScopeGameName(gid) {
+        var name = '';
+        gauditGames.forEach(function (g) { if (String(g.id) === String(gid)) name = g.name; });
+        return name || ('游戏' + gid);
+    }
+    function clamavFillGames() {
+        var sel = $('clamav-f-game');
+        if (!sel) return;
+        var cur = sel.value;
+        var opts = '<option value="">全部商户游戏</option>';
+        gauditGames.forEach(function (g) {
+            opts += '<option value="' + esc(g.id) + '">' + esc(g.name) + '（' + esc(g.slug) + '）</option>';
+        });
+        sel.innerHTML = opts;
+        var kept = false;
+        Array.prototype.forEach.call(sel.options, function (o) { if (o.value === cur) kept = true; });
+        if (kept) sel.value = cur; // 所选游戏仍在清单中则保留
+    }
+    function clamavSetRunning(running) {
+        var btn = $('clamav-rescan');
+        btn.disabled = !!running;
+        btn.textContent = running ? '扫描中…' : '开始重扫';
+    }
+    function clamavStatusLoad(silent) {
+        api('GET', '/admin/api/security/clamav/rescan/status').then(function (result) {
+            if (!result.ok) {
+                if (!silent) showToast(result.msg || '查询失败');
+                return;
+            }
+            var j = result.data || {};
+            clamavSetRunning(!!j.running);
+            var lines = [];
+            lines.push(j.running ? ('扫描进行中（启动于 ' + (j.started_at || '-') + '）')
+                : (j.started_at ? ('上次任务已完成（结束于 ' + (j.finished_at || '-') + '）') : '尚未执行过回溯扫描'));
+            lines.push('版本进度：' + (j.versions_scanned || 0) + ' / ' + (j.versions_total || 0)
+                + '，已扫文件 ' + (j.files_scanned || 0) + ' 个，检出 ' + ((j.hits || []).length) + ' 处'
+                + (j.game_id > 0 ? ('（范围：' + clamavScopeGameName(j.game_id) + '）') : '（范围：全部商户游戏）'));
+            if (j.err) lines.push('任务异常：' + j.err);
+            (j.hits || []).forEach(function (h) {
+                lines.push('检出：' + h.slug + ' v' + h.version + ' ← ' + h.rel_path + '（' + h.sig + '）');
+            });
+            var box = $('clamav-result');
+            box.style.display = '';
+            box.textContent = lines.join('\n');
+            if (j.running) {
+                if (!clamavPollTimer) clamavPollTimer = setTimeout(function () { clamavPollTimer = null; clamavStatusLoad(true); }, 5000);
+            } else if (clamavPollTimer) {
+                clearTimeout(clamavPollTimer);
+                clamavPollTimer = null;
+                if (!silent && j.started_at) showToast('存量回溯扫描已完成');
+            }
+        });
+    }
+    $('clamav-rescan').addEventListener('click', function () {
+        if (this.disabled) return; // 进行中防连点（服务端另有 409 单飞兜底）
+        var gid = Number($('clamav-f-game').value) || 0;
+        var scopeText = gid ? ('单个游戏「' + clamavScopeGameName(gid) + '」的已上架版本')
+            : '全部商户已上架版本';
+        confirmBox('对 ' + scopeText + ' 执行 ClamAV 病毒回溯扫描？\n· 检出病毒将自动驳回对应游戏（玩家端立即下架）\n· 大包耗时可能数分钟，任务后台执行、关闭页面不中断\n· clamd 未部署/不可达时跳过并继续（不阻断）', function () {
+            clamavSetRunning(true); // 确认后立即置态防连点，启动失败在响应分支恢复
+            api('POST', '/admin/api/security/clamav/rescan', { game_id: gid }).then(function (result) {
+                if (!result.ok) {
+                    clamavSetRunning(false);
+                    showToast(result.msg || '启动失败');
+                    if ((result.msg || '').indexOf('进行中') >= 0) clamavStatusLoad(true); // 已有任务：转入轮询跟进
+                    return;
+                }
+                showToast('存量回溯扫描已启动（' + (gid ? clamavScopeGameName(gid) : '全部商户游戏') + '）');
+                clamavStatusLoad(true);
+            });
+        });
+    });
+    $('clamav-status').addEventListener('click', function () { clamavStatusLoad(false); });
 
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
     // 归位说明：启动必须放在 IIFE 末尾——此前位于积分管理区块之前（L2975），带 #gn/#games 等

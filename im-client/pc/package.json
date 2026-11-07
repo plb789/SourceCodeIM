@@ -57,6 +57,7 @@
       "!debug-manager.js",
       "!updater.js",
       "!dlbt-host/**",
+      "!7z/**",
       "!Driver/**",
       "!dll/**",
       "!elevator/**",
@@ -117,6 +118,14 @@
       {
         "from": "dlbt-host/p2p-host.exe",
         "to": "dlbt-host/p2p-host.exe"
+      },
+      {
+        "from": "7z/7z.exe",
+        "to": "7z/7z.exe"
+      },
+      {
+        "from": "7z/7z.dll",
+        "to": "7z/7z.dll"
       },
       {
         "from": "game-visible/game-visible.exe",

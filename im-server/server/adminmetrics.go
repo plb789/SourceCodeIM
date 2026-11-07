@@ -99,6 +99,8 @@ type adminMetricsSystem struct {
 	WSBackpressured int   `json:"ws_backpressured"` // 发送队列超半载连接数（>0=有连接消费不及投递）
 	WSSlowWrites    int64 `json:"ws_slow_writes"`   // WS 慢写累计（writePump >200ms；持续增长=网卡/对端拥塞）
 	ConvBackoffMS   int64 `json:"conv_backoff_ms"`  // 会话推送当前退避窗口（300=常态，升档=推送风暴中）
+	// 磁盘水位（安全加固）：监控目录所在卷快照（60s 缓存；空数组=disk_monitor 未启用或无有效目录）
+	Disk []adminDiskStat `json:"disk"`
 }
 
 type adminMetricsBusiness struct {
@@ -213,6 +215,10 @@ func collectSystemMetrics() adminMetricsSystem {
 	}
 	sys.WSSlowWrites = wsSlowWrites.Load()
 	sys.ConvBackoffMS = convBackoffMS()
+	// 磁盘水位快照（安全加固：60s 缓存复用，与告警评估同一数据源）
+	if s := defaultServer(); s != nil {
+		sys.Disk = diskStatsCached(s)
+	}
 	return sys
 }
 

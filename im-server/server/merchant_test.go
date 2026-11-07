@@ -632,3 +632,65 @@ func TestGatewayPackageBuild(t *testing.T) {
 		t.Fatal("gateway.yaml 必须与服务端模板逐字一致（保证包内无任何真实密钥）")
 	}
 }
+
+// TestMerchantQuotaAllocation 管理员按商户分配专属存储配额（安全加固）三分支回归：
+// 专属 >0 覆盖全局 / -1 不限量 / 0 未分配回退全局；专属配额下的拒绝/放行路径；
+// 编辑接口入参校验（-2 等非法值 400，合法值落库后即时生效）。测试数据 mtest_ 前缀用后即清。
+func TestMerchantQuotaAllocation(t *testing.T) {
+	merchantTestSeed(t, "mtest_quota", 0, 100)
+	t.Cleanup(func() { merchantTestCleanup(t) })
+	s := dbwServer(t)
+	global := s.cfg.Game.MerchantQuotaBytes
+	const gbyte = int64(1) << 30
+
+	// 1) 未分配（0）→ 回退全局配额
+	if got := s.merchantQuotaLimit("mtest_quota"); got != global {
+		t.Fatalf("未分配应回退全局配额 %d, 实得 %d", global, got)
+	}
+
+	// 2) 专属 10GB 覆盖全局：已用 0 时 11GB 拒绝 / 9GB 放行
+	store.DB.Model(&model.Merchant{}).Where("username = ?", "mtest_quota").Update("storage_quota_bytes", 10*gbyte)
+	if got := s.merchantQuotaLimit("mtest_quota"); got != 10*gbyte {
+		t.Fatalf("专属配额应生效 10GB, 实得 %d", got)
+	}
+	if err := s.gameMerchantQuotaCheck("mtest_quota", 11*gbyte); err == nil {
+		t.Fatal("11GB 超出专属 10GB 配额应被拒绝")
+	}
+	if err := s.gameMerchantQuotaCheck("mtest_quota", 9*gbyte); err != nil {
+		t.Fatalf("9GB 未超专属配额不应拒绝: %v", err)
+	}
+
+	// 3) -1 不限量：任意大小放行，解析值 -1
+	store.DB.Model(&model.Merchant{}).Where("username = ?", "mtest_quota").Update("storage_quota_bytes", -1)
+	if got := s.merchantQuotaLimit("mtest_quota"); got != -1 {
+		t.Fatalf("不限量应解析为 -1, 实得 %d", got)
+	}
+	if err := s.gameMerchantQuotaCheck("mtest_quota", 1<<40); err != nil {
+		t.Fatalf("不限量配额不应拒绝: %v", err)
+	}
+
+	// 4) 重置 0 → 再次回退全局（管理员"取消专属"路径）
+	store.DB.Model(&model.Merchant{}).Where("username = ?", "mtest_quota").Update("storage_quota_bytes", 0)
+	if got := s.merchantQuotaLimit("mtest_quota"); got != global {
+		t.Fatalf("重置后应回退全局 %d, 实得 %d", global, got)
+	}
+
+	// 5) 编辑接口入参校验：-2 等非法值 400；合法值（5GB）落库即时生效
+	req := httptest.NewRequest("PUT", "/admin/api/merchants/mtest_quota", strings.NewReader(`{"storage_quota_bytes":-2}`))
+	req.SetPathValue("username", "mtest_quota")
+	rec := httptest.NewRecorder()
+	s.handleAdminMerchantUpdate(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("非法配额 -2 应 400, 实得 %d %s", rec.Code, rec.Body.String())
+	}
+	req2 := httptest.NewRequest("PUT", "/admin/api/merchants/mtest_quota", strings.NewReader(`{"storage_quota_bytes":5368709120}`))
+	req2.SetPathValue("username", "mtest_quota")
+	rec2 := httptest.NewRecorder()
+	s.handleAdminMerchantUpdate(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("合法配额 5GB 应保存成功, 实得 %d %s", rec2.Code, rec2.Body.String())
+	}
+	if got := s.merchantQuotaLimit("mtest_quota"); got != 5*gbyte {
+		t.Fatalf("编辑后专属配额应生效 5GB, 实得 %d", got)
+	}
+}

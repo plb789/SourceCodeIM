@@ -47,6 +47,9 @@ func registerMerchantRoutes(s *Server) {
 	http.HandleFunc("DELETE /api/merchant/notices/{id}", s.merchantGuard(s.handleMerchantNoticeDelete))
 	// 版本（复用分片上传与合并链路；会话 Owner 注入防串道）
 	http.HandleFunc("GET /api/merchant/games/{id}/versions", s.merchantGuard(s.handleMerchantGameVersions))
+	http.HandleFunc("GET /api/merchant/games/{id}/versions/{ver}/filelist", s.merchantGuard(s.handleMerchantVersionFilelist))
+	// 补丁工具下载（GamePatchTool gametool.exe，与 im-server.exe 同目录托管）
+	http.HandleFunc("GET /api/merchant/gametool", s.merchantGuard(s.handleMerchantGameToolDownload))
 	http.HandleFunc("POST /api/merchant/games/{id}/version", s.merchantGuard(s.handleMerchantVersionCreate))
 	http.HandleFunc("DELETE /api/merchant/version/{vid}", s.merchantGuard(s.handleMerchantVersionDelete))
 	http.HandleFunc("POST /api/merchant/upload/chunk", s.merchantGuard(s.handleAdminGameChunk))

@@ -14,7 +14,7 @@
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，Steam 同款暗色卡片风；主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
     <link rel="stylesheet" href="css/admin.css?v=1.38">
-    <link rel="stylesheet" href="css/merchant.css?v=1.1">
+    <link rel="stylesheet" href="css/merchant.css?v=1.2">
 </head>
 <body>
     <!-- 启动骨架层 -->
@@ -63,6 +63,14 @@
                     <h2>我的游戏</h2>
                     <button id="m-game-add" class="admin-btn primary">+ 新增游戏</button>
                 </header>
+                <!-- 存储配额（安全加固）：商户自助掌握已用/总量/占比，版本上架配额拒绝前可自查腾额度 -->
+                <div class="m-quota-card" id="m-quota-card">
+                    <div class="m-quota-head">
+                        <span class="m-quota-title">存储空间</span>
+                        <span id="m-quota-txt" class="m-quota-txt">—</span>
+                    </div>
+                    <div class="m-quota-bar"><div id="m-quota-fill" class="m-quota-fill" style="width:0%"></div></div>
+                </div>
                 <div id="m-game-list" class="m-game-list"><div class="m-empty">加载中…</div></div>
             </section>
 
@@ -167,6 +175,36 @@
             <h3 class="m-modal-title">版本管理 — <span id="m-ver-game"></span></h3>
             <div class="m-form">
                 <div class="m-row"><label>版本号 *</label><input id="m-ver-version" class="admin-input" maxlength="32" placeholder="如 1.0.0 或 2026-11-04"></div>
+                <div class="m-row"><label>上传方式</label>
+                    <div id="m-ver-catseg" class="m-packseg m-catseg">
+                        <button type="button" class="m-packseg-btn m-cat-btn active" data-cat="file">逐文件版（支持补丁增量）</button>
+                        <button type="button" class="m-packseg-btn m-cat-btn" data-cat="zip">ZIP 完整包（不支持补丁）</button>
+                    </div>
+                    <div id="m-ver-packseg" class="m-packseg">
+                        <span id="m-ver-pack-file" class="m-packgrp">
+                            <button type="button" class="m-packseg-btn active" data-pack="0">散文件</button>
+                            <button type="button" class="m-packseg-btn" data-pack="3">补丁包</button>
+                        </span>
+                        <span id="m-ver-pack-zip" class="m-packgrp hidden">
+                            <button type="button" class="m-packseg-btn" data-pack="1">单 ZIP 包</button>
+                            <button type="button" class="m-packseg-btn" data-pack="2">分卷 ZIP</button>
+                        </span>
+                    </div>
+                    <div id="m-ver-packtip" class="m-head-tip"></div>
+                </div>
+                <div class="m-row hidden" id="m-ver-packsize-row"><label>解压后总大小（GB）*</label>
+                    <input id="m-ver-packsize" class="admin-input" type="number" min="0.01" step="0.01" placeholder="分卷 ZIP 必填：压缩包解压后的总大小">
+                </div>
+                <div class="m-row hidden" id="m-ver-base-row"><label>基底版本（基于哪个版本打补丁）*</label>
+                    <select id="m-ver-base" class="admin-input"></select>
+                </div>
+                <div class="m-row hidden" id="m-ver-tooldown-row"><label>补丁工具</label>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                        <button id="m-ver-tooldown" class="admin-btn small">下载 gametool.exe</button>
+                        <button id="m-ver-toolhelp" class="admin-btn small">查看使用教程</button>
+                        <span id="m-ver-tooltip" class="m-head-tip">Windows x64，无需安装；教程含完整操作步骤与错误对照</span>
+                    </div>
+                </div>
                 <div class="m-row"><label>更新日志</label><textarea id="m-ver-log" class="admin-input" rows="2"></textarea></div>
                 <div class="m-row"><label>游戏目录 / 文件</label>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -218,6 +256,6 @@
     <!-- 自绘 Toast -->
     <div id="m-toast" class="m-toast hidden"></div>
 
-    <script src="js/merchant.js?v=1.2"></script>
+    <script src="js/merchant.js?v=1.3"></script>
 </body>
 </html>

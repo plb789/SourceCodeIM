@@ -73,9 +73,9 @@ var (
 )
 
 type cardRateEntry struct {
-	fails      int
-	windowAt   time.Time
-	lockUntil  time.Time
+	fails     int
+	windowAt  time.Time
+	lockUntil time.Time
 }
 
 // cardRateCheck 核销前检查：被锁返回剩余秒数（>0 即拒绝）
@@ -382,7 +382,7 @@ func (s *Server) HandleGameCardRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		CardNo string `json:"card_no"`
+		CardNo  string `json:"card_no"`
 		CardKey string `json:"card_key"`
 	}
 	if err := jsonDecodeLimit(w, r, &req, 1024); err != nil {

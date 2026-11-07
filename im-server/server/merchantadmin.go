@@ -66,20 +66,25 @@ func (s *Server) handleAdminMerchantList(w http.ResponseWriter, r *http.Request)
 			"username": m.Username, "name": m.Name, "commission_rate": m.CommissionRate,
 			"status": m.Status, "remark": m.Remark, "game_count": gameCnt,
 			"recharge_total": sum,
-			"create_time":    m.CreateTime.Format("2006-01-02 15:04"),
+			// 存储配额与占用（安全加固）：管理员分配视角——quota 0=跟随全局 / -1=不限 / >0=专属字节
+			"storage_quota_bytes": m.StorageQuotaBytes,
+			"storage_used_bytes":  merchantQuotaUsed(m.Username),
+			"create_time":         m.CreateTime.Format("2006-01-02 15:04"),
 		})
 	}
 	adminJSON(w, map[string]interface{}{"list": items, "total": total, "page": page, "size": size})
 }
 
 // handleAdminMerchantCreate 创建商户（users.role=2 + im_merchant 行；账号=IM 账号体系）
+// storage_quota_bytes 可选：0=跟随全局默认（缺省），-1=不限，>0=专属配额（字节）
 func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username       string  `json:"username"`
-		Password       string  `json:"password"`
-		Name           string  `json:"name"`
-		CommissionRate float64 `json:"commission_rate"`
-		Remark         string  `json:"remark"`
+		Username          string  `json:"username"`
+		Password          string  `json:"password"`
+		Name              string  `json:"name"`
+		CommissionRate    float64 `json:"commission_rate"`
+		StorageQuotaBytes int64   `json:"storage_quota_bytes"`
+		Remark            string  `json:"remark"`
 	}
 	if err := jsonDecodeLimit(w, r, &req, 4096); err != nil {
 		return
@@ -106,6 +111,10 @@ func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Reques
 		adminFail(w, http.StatusBadRequest, "分成比例须为 0~100")
 		return
 	}
+	if req.StorageQuotaBytes != 0 && req.StorageQuotaBytes != -1 && req.StorageQuotaBytes < 1048576 {
+		adminFail(w, http.StatusBadRequest, "存储配额须为 -1（不限）或不小于 1MB 的字节数（0=跟随全局）")
+		return
+	}
 	var cnt int64
 	store.DB.Model(&model.User{}).Where("username = ?", req.Username).Count(&cnt)
 	if cnt > 0 {
@@ -120,7 +129,8 @@ func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	store.DB.Model(&model.User{}).Where("username = ?", req.Username).Update("points", 0)
-	m := model.Merchant{Username: req.Username, Name: req.Name, CommissionRate: req.CommissionRate, Status: 0, Remark: strings.TrimSpace(req.Remark)}
+	m := model.Merchant{Username: req.Username, Name: req.Name, CommissionRate: req.CommissionRate,
+		StorageQuotaBytes: req.StorageQuotaBytes, Status: 0, Remark: strings.TrimSpace(req.Remark)}
 	if err := store.DB.Create(&m).Error; err != nil {
 		store.DB.Where("username = ?", req.Username).Delete(&model.User{}) // 回滚孤儿账号
 		adminFail(w, http.StatusInternalServerError, "商户资料创建失败")
@@ -142,7 +152,8 @@ func (s *Server) handleAdminMerchantUpdate(w http.ResponseWriter, r *http.Reques
 		Name           *string  `json:"name"`
 		CommissionRate *float64 `json:"commission_rate"` // 指针：未传=不改（0 也是合法比例值）
 		Status         *int8    `json:"status"`
-		Password       string   `json:"password"` // 非空=重置密码
+		StorageQuota   *int64   `json:"storage_quota_bytes"` // 指针：未传=不改；0=跟随全局，-1=不限，>0=专属（字节）
+		Password       string   `json:"password"`            // 非空=重置密码
 		Remark         *string  `json:"remark"`
 	}
 	if err := jsonDecodeLimit(w, r, &req, 4096); err != nil {
@@ -170,6 +181,14 @@ func (s *Server) handleAdminMerchantUpdate(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		updates["status"] = *req.Status
+	}
+	if req.StorageQuota != nil {
+		q := *req.StorageQuota
+		if q != 0 && q != -1 && q < 1048576 {
+			adminFail(w, http.StatusBadRequest, "存储配额须为 -1（不限）或不小于 1MB 的字节数（0=跟随全局）")
+			return
+		}
+		updates["storage_quota_bytes"] = q
 	}
 	if req.Remark != nil {
 		if utf8.RuneCountInString(*req.Remark) > 255 {

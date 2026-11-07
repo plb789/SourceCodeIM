@@ -1152,6 +1152,10 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 		"game_id": g.ID, "slug": g.Slug, "name": g.Name,
 		"version": v.Version, "manifest_hash": v.ManifestHash,
 		"size_bytes": v.SizeBytes, "file_count": v.FileCount,
+		// 打包方式（新增字段，老客户端 JSON 解析忽略未知字段不受影响）：
+		// 0=散文件逐个下载（现状） 1=单 ZIP（下载后客户端解压） 2=分卷 ZIP（客户端 7z 分卷解压）
+		// 3=补丁包（服务端已解包合成完整散文件清单，客户端按散文件语义走——dedup 硬链接天然增量）
+		"pack_type": v.PackType, "pack_size": v.PackSize,
 		"files": list,
 	}, nil
 }

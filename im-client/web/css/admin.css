@@ -2056,6 +2056,18 @@ td .skel-line {
     font-weight: 600;
     color: var(--text);
 }
+/* 上传打包方式两级分类（对齐商户端 merchant.css m-packseg 同款交互，主题变量同源）：
+   第一级大类（逐文件版·可补丁 / ZIP 完整包·不可补丁）+ 组内子方式（gm-packgrp 随大类显隐） */
+.gm-packseg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.gm-packseg-btn { appearance: none; border: none; background: transparent; color: var(--text-light);
+    font-size: 12px; padding: 7px 16px; cursor: pointer; transition: background .15s, color .15s; }
+.gm-packseg-btn + .gm-packseg-btn { border-left: 1px solid var(--divider, var(--border)); }
+.gm-packseg-btn:hover { color: var(--text); background: rgba(127,127,127,.08); }
+.gm-packseg-btn.active { background: var(--primary); color: #fff; }
+.gm-catseg { margin-bottom: 2px; }
+.gm-cat-btn { font-weight: 600; padding: 8px 18px; }
+.gm-packgrp { display: inline-flex; }
+.gm-warn-text { color: #e5a54d; }
 /* 文件清单/上传进度行（每文件一行：名称/大小/进度条/状态） */
 .gm-file-list {
     display: flex;

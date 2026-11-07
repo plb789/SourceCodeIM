@@ -12,6 +12,7 @@ package server
 //   4. rel_path 上架时归口清洗（禁绝对路径/父目录引用/盘符），storage_path 服务端私有绝不外泄
 
 import (
+	"archive/zip"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -283,6 +284,10 @@ func registerGameAdminRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/game/{id}", s.adminGuard(s.handleAdminGameDelete))
 	http.HandleFunc("POST /admin/api/game/{id}/version", s.adminGuard(s.handleAdminGameVersionCreate))
 	http.HandleFunc("DELETE /admin/api/game/version/{vid}", s.adminGuard(s.handleAdminGameVersionDelete))
+	// 版本清单导出（GamePatchTool -base-list 基准数据源；与上面 version/{vid} 段数不同无冲突）
+	http.HandleFunc("GET /admin/api/game/version/{vid}/filelist", s.adminGuard(s.handleAdminVersionFilelist))
+	// 补丁工具下载（与商户端 /api/merchant/gametool 同一文件托管核心，adminGuard 鉴权）
+	http.HandleFunc("GET /admin/api/game/gametool", s.adminGuard(s.handleAdminGameToolDownload))
 	// 游戏公告（库内游戏页"动态"区数据源）
 	http.HandleFunc("GET /admin/api/game/notices", s.adminGuard(s.handleAdminGameNoticesGet))
 	http.HandleFunc("POST /admin/api/game/notice", s.adminGuard(s.handleAdminGameNoticeCreate))
@@ -696,6 +701,8 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 		verList = append(verList, map[string]interface{}{
 			"id": v.ID, "version": v.Version, "size_bytes": v.SizeBytes, "file_count": v.FileCount,
 			"changelog": v.Changelog, "min_req": v.MinReq, "manifest_hash": v.ManifestHash,
+			// 打包方式下发（管理端版本管理徽标/基底下拉/导出清单数据源，与商户端同口径）
+			"pack_type": v.PackType, "pack_size": v.PackSize, "base_version": v.BaseVersion,
 			"create_time": v.CreateTime.Format("2006-01-02 15:04"),
 		})
 	}
@@ -958,6 +965,14 @@ func (s *Server) handleAdminGameDelete(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
+	// 与版本登记/版本删除同一把分桶锁：本函数 RemoveAll 整个 games/<slug>/ 目录并清全部
+	// 版本行，不持锁会与进行中的版本登记交错（登记落位中目录被整删 → 孤儿版本行/孤儿文件）
+	vlock := gameVersionLock(g.ID)
+	if !vlock.TryLock() {
+		adminFail(w, http.StatusConflict, "该游戏有版本登记/删除操作进行中，请稍后重试")
+		return
+	}
+	defer vlock.Unlock()
 	var verIDs []uint
 	store.DB.Model(&model.GameVersion{}).Where("game_id = ?", g.ID).Pluck("id", &verIDs)
 	// 独立删除（清单表按版本 ID 归口；行数远小于文件数，无事务必要——磁盘目录清理为准）
@@ -1449,6 +1464,18 @@ func (s *Server) handleAdminGameVersionCreate(w http.ResponseWriter, r *http.Req
 	s.gameVersionCreateCore(w, r, &g, uploadOwnerFromCtx(r))
 }
 
+// gameVersionLocks 版本登记/删除互斥（按游戏 ID 分桶）：串行化同一游戏的
+// 「查重 → 合并落位 → 入库」临界区——防并发登记同一 version 双过查重后交错写盘、
+// 失败方回滚 os.RemoveAll 误删成功方文件；删除同拿锁防与落位中的目录交错。
+// map 项只增不减（量级=游戏数，可忽略）
+var gameVersionLocks sync.Map // map[uint]*sync.Mutex
+
+// gameVersionLock 取游戏分桶锁（不存在即原子创建）
+func gameVersionLock(gameID uint) *sync.Mutex {
+	v, _ := gameVersionLocks.LoadOrStore(gameID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 // gameVersionCreateCore 版本上架登记共享核心（管理端/商户端同链路，商户侧前置归属校验）：
 // 入参 {version, changelog, min_req, files:[{rel_path,size,sha256,upload_id}]}
 // 流程：清洗校验 → 逐文件合并分片至 games/<slug>/<version>/<rel_path>（MultiWriter 单遍复算
@@ -1467,7 +1494,15 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		Version   string `json:"version"`
 		Changelog string `json:"changelog"`
 		MinReq    string `json:"min_req"`
-		Files     []struct {
+		// PackType 打包方式（0=散文件清单现状 1=单ZIP 2=分卷ZIP；manifest 随版本下发客户端），
+		// 缺省 0 等价历史行为——散文件上架链路零改动
+		PackType int8 `json:"pack_type"`
+		// PackSize 解压后总大小（字节）：pack_type=1 由服务端读 central directory 实算（本字段忽略）；
+		// pack_type=2 分卷服务端无法解析，必须由商户端填写；pack_type=0 忽略
+		PackSize int64 `json:"pack_size"`
+		// BaseVersion 补丁基底版本号（pack_type=3 专用必填）：必须为同游戏已登记的散文件版或另一补丁版
+		BaseVersion string `json:"base_version"`
+		Files       []struct {
 			RelPath  string `json:"rel_path"`
 			Size     int64  `json:"size"`
 			SHA256   string `json:"sha256"`
@@ -1483,6 +1518,14 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		adminFail(w, http.StatusBadRequest, "版本号非法（1-32 字符，禁路径分隔符）")
 		return
 	}
+	// 查重-落位竞态防护：按游戏分桶 TryLock 快速失败（大版本落位耗时分钟级，
+	// 并发请求挂起占连接不如直接 409 让操作者稍后重试）。锁覆盖查重→合并落位→入库全程
+	vlock := gameVersionLock(g.ID)
+	if !vlock.TryLock() {
+		adminFail(w, http.StatusConflict, "该游戏有另一个版本登记/删除操作进行中，请稍后重试")
+		return
+	}
+	defer vlock.Unlock()
 	var exist model.GameVersion
 	if err := store.DB.Where("game_id = ? AND version = ?", g.ID, version).First(&exist).Error; err == nil {
 		adminFail(w, http.StatusConflict, "该版本已存在")
@@ -1530,7 +1573,66 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		items = append(items, gameUploadItem{relPath: rp, size: f.Size, sha: sha, uploadID: f.UploadID})
 	}
 
+	// 打包方式校验（ZIP 整包/分卷新增通道；0=散文件现状不校验，存量版本与历史调用不受影响）
+	packType := req.PackType
+	if packType < 0 || packType > 3 {
+		adminFail(w, http.StatusBadRequest, "打包方式非法（0=散文件清单 1=单 ZIP 2=分卷 ZIP 3=补丁包）")
+		return
+	}
+	packSize := req.PackSize
+	baseVer := strings.TrimSpace(req.BaseVersion)
+	if packType != 3 {
+		baseVer = "" // 基底版本号仅补丁通道有意义，其余方式强制置空（防请求参数污染 BaseVersion 列）
+	}
+	switch packType {
+	case 1: // 单 ZIP：清单必须恰好 1 项且以 .zip 结尾（大小写不敏感）；解压后大小合并落位后服务端实算
+		if len(items) != 1 || !strings.HasSuffix(strings.ToLower(items[0].relPath), ".zip") {
+			adminFail(w, http.StatusBadRequest, "单 ZIP 打包方式的文件清单必须恰好包含 1 个 .zip 文件")
+			return
+		}
+	case 2: // 分卷 ZIP：同前缀 .zip.001 起连续递增（7z 原生命名）；服务端无法解析分卷，解压后大小必填
+		if len(items) < 2 {
+			adminFail(w, http.StatusBadRequest, "分卷 ZIP 打包方式的文件清单至少需要 2 个分卷")
+			return
+		}
+		if err := gameSplitZipCheck(items); err != nil {
+			adminFail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if packSize <= 0 {
+			adminFail(w, http.StatusBadRequest, "分卷 ZIP 必须填写解压后总大小（服务端无法从分卷解析）")
+			return
+		}
+	case 3: // 补丁包：清单必须恰好 1 项 .zip；基底版本必填且须为同游戏散文件版/补丁版（合并落位后解包合成）
+		if len(items) != 1 || !strings.HasSuffix(strings.ToLower(items[0].relPath), ".zip") {
+			adminFail(w, http.StatusBadRequest, "补丁包方式的文件清单必须恰好包含 1 个 patch.zip 文件")
+			return
+		}
+		if baseVer == "" {
+			adminFail(w, http.StatusBadRequest, "补丁包必须指定基底版本 base_version")
+			return
+		}
+	}
+	if packType == 2 { // ZIP 炸弹防护：分卷按商户申报值预检（单 ZIP 实算后再查）
+		if cap := s.cfg.Game.MaxUnpackSize; cap > 0 && packSize > cap {
+			adminFail(w, http.StatusBadRequest, "解压后总大小超出上限（上限 "+strconv.FormatInt(cap>>20, 10)+"MB）")
+			return
+		}
+	}
+
 	// 合并落位：目标根目录 games/<slug>/<version>/，逐文件校验（失败即整版回滚删目录）
+	// 商户存储总量配额·预检（快）：申报大小 + 已用 > 配额直接拒绝（大版本合并耗时分钟级，
+	// 提前拦截不浪费 IO；落位后还有实算复检兜底，见 gameMerchantQuotaCheck）
+	if g.OwnerUsername != "" {
+		var incoming int64
+		for _, it := range items {
+			incoming += it.size
+		}
+		if err := s.gameMerchantQuotaCheck(g.OwnerUsername, incoming); err != nil {
+			adminFail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	verRoot := filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, version)
 	var totalSize int64
 	hashLines := make([]string, 0, len(items))
@@ -1556,21 +1658,220 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		totalSize += it.size
 		hashLines = append(hashLines, it.relPath+":"+strconv.FormatInt(it.size, 10)+":"+it.sha)
 	}
+	// 商户存储总量配额·复检（准）：落位实算 totalSize 与申报可能有差（防申报缩水绕过预检），
+	// 超限整版回滚（目录清理与预检拒绝同一语义，商户拿明确报错自助删旧版本腾额度）
+	if g.OwnerUsername != "" {
+		if err := s.gameMerchantQuotaCheck(g.OwnerUsername, totalSize); err != nil {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	// 单 ZIP：合并落位后读 central directory 实算解压后总大小（不信任商户申报），
+	// 同时做条目路径安检（Zip Slip 服务端第一道防线，客户端解压前还有第二道）
+	if packType == 1 {
+		zipPath := filepath.Join(verRoot, filepath.FromSlash(items[0].relPath))
+		computed, err := gameZipUnpackSize(zipPath)
+		if err != nil {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "ZIP 包损坏或无法解析（"+err.Error()+"）")
+			return
+		}
+		if cap := s.cfg.Game.MaxUnpackSize; cap > 0 && computed > cap {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "ZIP 解压后总大小超出上限（上限 "+strconv.FormatInt(cap>>20, 10)+"MB）")
+			return
+		}
+		packSize = computed
+	}
+
+	// pack_type=3 补丁：解包 patch.zip 落位 + 依基底版本清单合成完整清单。合成结果物化落
+	// GameFile 行——manifest 对客户端透明表现为普通散文件版本（dedup 硬链接天然增量、
+	// _commit 整目录换入使删除文件自动消失），链式补丁逐版本物化无需运行期递归。
+	// patch.json 为保留名（元数据），不作为游戏文件登记。
+	var finalItems []gameUploadItem // pack 0/1/2：与 items 相同；pack 3：合成后的最终清单
+	var patchDelJSON string
+	storageOverride := map[string]string{} // pack 3 继承条目的存储路径覆写（物理文件在基底版本目录）
+	if packType == 3 {
+		var bv model.GameVersion
+		if err := store.DB.Where("game_id = ? AND version = ?", g.ID, baseVer).First(&bv).Error; err != nil {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusNotFound, "基底版本不存在: "+baseVer)
+			return
+		}
+		if bv.PackType != 0 && bv.PackType != 3 {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "基底版本必须为散文件版或补丁版（ZIP 整包/分卷版无逐文件清单，无法合成），请改发完整版")
+			return
+		}
+		var baseFiles []model.GameFile
+		store.DB.Where("version_id = ?", bv.ID).Find(&baseFiles)
+		if len(baseFiles) == 0 {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusInternalServerError, "基底版本清单缺失")
+			return
+		}
+		baseMap := make(map[string]gameUploadItem, len(baseFiles))
+		for _, f := range baseFiles {
+			baseMap[f.RelPath] = gameUploadItem{relPath: f.RelPath, size: f.SizeBytes, sha: f.SHA256}
+		}
+		zipPath := filepath.Join(verRoot, filepath.FromSlash(items[0].relPath))
+		changeMap, pjBytes, err := gamePatchUnpack(zipPath, verRoot, s.cfg.Game.MaxUnpackSize)
+		if err != nil {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "补丁包解包失败（"+err.Error()+"）")
+			return
+		}
+		var pj struct {
+			Format      int      `json:"format"`
+			BaseVersion string   `json:"base_version"`
+			Version     string   `json:"version"`
+			Change      []string `json:"change"`
+			Delete      []string `json:"delete"`
+		}
+		if err := json.Unmarshal(pjBytes, &pj); err != nil {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "patch.json 解析失败（"+err.Error()+"）")
+			return
+		}
+		if pj.Format != 1 {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "patch.json 格式版本不支持")
+			return
+		}
+		if pj.BaseVersion != "" && pj.BaseVersion != baseVer {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "patch.json 基底版本("+pj.BaseVersion+")与登记参数("+baseVer+")不一致")
+			return
+		}
+		if pj.Version != "" && pj.Version != version {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "patch.json 版本号("+pj.Version+")与登记版本号("+version+")不一致，请用 gametool diff -ver "+version+" 重新生成")
+			return
+		}
+		if len(pj.Change) != len(changeMap) {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "patch.json change 数量与 zip 条目不一致")
+			return
+		}
+		for _, c := range pj.Change {
+			if _, ok := changeMap[c]; !ok {
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusBadRequest, "patch.json change 与 zip 条目不一致: "+c)
+				return
+			}
+		}
+		delSet := make(map[string]bool, len(pj.Delete))
+		for _, d := range pj.Delete {
+			if zipEntryUnsafe(d) {
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusBadRequest, "补丁删除清单含非法路径: "+d)
+				return
+			}
+			if _, ok := changeMap[d]; ok {
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusBadRequest, "delete 与 change 冲突: "+d)
+				return
+			}
+			if _, ok := baseMap[d]; !ok {
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusBadRequest, "delete 路径不在基底版本清单中: "+d)
+				return
+			}
+			delSet[d] = true
+		}
+		// 合成：基底 − 删除 − 变更 ∪ 补丁条目（变更/新增以补丁为准）。
+		// 继承条目的物理文件仍在基底版本目录——storage 路径必须继承基底行（防下载 404），
+		// 仅补丁变更/新增条目落在本版本目录
+		finalMap := make(map[string]gameUploadItem, len(baseFiles)+len(changeMap))
+		for _, f := range baseFiles {
+			if delSet[f.RelPath] {
+				continue
+			}
+			if _, changed := changeMap[f.RelPath]; changed {
+				continue
+			}
+			finalMap[f.RelPath] = gameUploadItem{relPath: f.RelPath, size: f.SizeBytes, sha: f.SHA256}
+			storageOverride[f.RelPath] = f.StoragePath
+		}
+		for rel, it := range changeMap {
+			finalMap[rel] = it
+			storageOverride[rel] = "games/" + g.Slug + "/" + version + "/" + rel
+		}
+		if len(finalMap) == 0 {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "合成清单为空（基底文件被全部删除？）")
+			return
+		}
+		finalItems = make([]gameUploadItem, 0, len(finalMap))
+		var sumUp int64
+		for _, it := range finalMap {
+			finalItems = append(finalItems, it)
+			sumUp += it.size
+		}
+		sort.Slice(finalItems, func(i, j int) bool { return finalItems[i].relPath < finalItems[j].relPath })
+		if cap := s.cfg.Game.MaxUnpackSize; cap > 0 && sumUp > cap {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "合成清单总大小超出上限（上限 "+strconv.FormatInt(cap>>20, 10)+"MB）")
+			return
+		}
+		packSize = sumUp
+		patchDelJSON = "[]"
+		if len(pj.Delete) > 0 {
+			if b, err := json.Marshal(pj.Delete); err == nil {
+				patchDelJSON = string(b)
+			}
+		}
+	}
+	if finalItems == nil {
+		finalItems = items
+	}
+	if packType == 3 { // 合成清单口径重算哈希行与总量（基底继承 + 补丁变更）
+		hashLines = hashLines[:0]
+		totalSize = 0
+		for _, it := range finalItems {
+			hashLines = append(hashLines, it.relPath+":"+strconv.FormatInt(it.size, 10)+":"+it.sha)
+			totalSize += it.size
+		}
+	}
 	sort.Strings(hashLines)
 	mh := sha256.Sum256([]byte(strings.Join(hashLines, "\n")))
 	manifestHash := hex.EncodeToString(mh[:])
 
+	// 病毒扫描·同步模式（安全加固，clamav.sync=true）：登记前扫描本版本落位文件——检出即
+	// 整版回滚拒绝（病毒文件不落库存，商户拿明确报错）；clamd 异常 fail-open 放行记日志
+	// （扫描服务故障不阻断正常上架，人工审核兜底）。异步模式（默认）在登记成功后后台扫描
+	if g.OwnerUsername != "" && s.cfg.ClamAV.Enabled && s.cfg.ClamAV.Sync {
+		_, hits, serr := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second)
+		switch {
+		case serr != nil:
+			logger.Warn("病毒扫描服务异常（fail-open 放行）: 游戏=%s(%s) v%s, %v", g.Name, g.Slug, version, serr)
+		case len(hits) > 0:
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, "病毒扫描不通过：检出 "+hits[0].Sig+"（"+filepath.Base(hits[0].Path)+
+				"），版本已回滚未上架（共检出 "+strconv.Itoa(len(hits))+" 处）")
+			logger.Error("病毒扫描拦截版本上架: 游戏=%s(%s) v%s, 商户=%s, 检出 %d 处, 首个=%s（%s）",
+				g.Name, g.Slug, version, operator, len(hits), filepath.Base(hits[0].Path), hits[0].Sig)
+			return
+		}
+	}
+
 	// 登记版本与清单（文件行已在合并循环中登记——此处仅版本行与冗余刷新）
 	v := model.GameVersion{GameID: g.ID, Version: version, ManifestHash: manifestHash,
-		SizeBytes: totalSize, FileCount: len(items), Changelog: req.Changelog, MinReq: req.MinReq}
+		SizeBytes: totalSize, FileCount: len(finalItems), Changelog: req.Changelog, MinReq: req.MinReq,
+		PackType: packType, PackSize: packSize, BaseVersion: baseVer, PatchDelete: patchDelJSON}
 	if err := store.DB.Create(&v).Error; err != nil {
 		s.gameVersionRollback(verRoot, items, false)
 		adminFail(w, http.StatusInternalServerError, "版本登记失败")
 		return
 	}
-	fileRows := make([]model.GameFile, 0, len(items))
-	for _, it := range items {
+	fileRows := make([]model.GameFile, 0, len(finalItems))
+	for _, it := range finalItems {
 		storageRel := "games/" + g.Slug + "/" + version + "/" + it.relPath
+		if so, inherited := storageOverride[it.relPath]; inherited { // 补丁继承条目：物理文件在基底版本目录
+			storageRel = so
+		}
 		fileRows = append(fileRows, model.GameFile{VersionID: v.ID, RelPath: it.relPath,
 			SizeBytes: it.size, SHA256: it.sha, StoragePath: storageRel})
 	}
@@ -1591,8 +1892,277 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	}
 	logger.Info("游戏版本上架: %s (%s) v%s, 文件 %d 个, 共 %d 字节, 操作人=%s",
 		g.Name, g.Slug, version, len(items), totalSize, operator)
+	// 病毒扫描·异步模式（安全加固，默认）：仅商户名下游戏 + clamav.enabled 时异步逐文件扫描
+	// 本版本落位文件，不阻塞上架响应（大包扫描分钟级）；检出病毒自动驳回（audit=3 + remark
+	// 携带签名），clamd 不可达 fail-open 仅记日志（人工审核兜底不变）。同步模式见上方登记前拦截
+	if g.OwnerUsername != "" && s.cfg.ClamAV.Enabled && !s.cfg.ClamAV.Sync {
+		go clamScanGameVersionAsync(g.ID, g.Name, g.Slug, version, verRoot)
+	}
 	adminJSON(w, map[string]interface{}{"version_id": v.ID, "version": version,
-		"file_count": len(items), "size_bytes": totalSize, "manifest_hash": manifestHash})
+		"file_count": len(items), "size_bytes": totalSize, "manifest_hash": manifestHash,
+		"pack_type": packType, "pack_size": packSize})
+}
+
+// merchantQuotaUsed 商户存储配额占用口径：名下全部游戏全部版本 size_bytes 之和
+// （官方游戏 OwnerUsername 为空天然不参与；空库/无版本 COALESCE 兜底 0）
+func merchantQuotaUsed(owner string) int64 {
+	var used int64
+	store.DB.Model(&model.GameVersion{}).
+		Select("COALESCE(SUM(im_game_version.size_bytes), 0)").
+		Joins("JOIN im_game ON im_game.id = im_game_version.game_id").
+		Where("im_game.owner_username = ?", owner).
+		Scan(&used)
+	return used
+}
+
+// merchantQuotaLimit 商户存储配额解析归口（管理员后台分配支持）：商户行专属值优先——
+// -1=不限 / >0=专属配额；0（未分配）或商户行缺失=跟随全局 game.merchant_quota_bytes
+func (s *Server) merchantQuotaLimit(owner string) int64 {
+	var mq int64
+	if err := store.DB.Model(&model.Merchant{}).Select("storage_quota_bytes").
+		Where("username = ?", owner).Scan(&mq).Error; err == nil && (mq == -1 || mq > 0) {
+		return mq
+	}
+	return s.cfg.Game.MerchantQuotaBytes
+}
+
+// gameMerchantQuotaCheck 商户存储总量配额校验（版本登记预检/落位复检共用）：
+// 已用 + 本次新增 > 配额即拒绝；quota=-1 不限。报错文案带已用/配额，商户可自助删旧版本腾额度
+func (s *Server) gameMerchantQuotaCheck(owner string, incoming int64) error {
+	quota := s.merchantQuotaLimit(owner)
+	if quota == -1 {
+		return nil
+	}
+	if quota <= 0 {
+		quota = 50 << 30 // Load 已兜底，此处防御（直接 new Server 的测试路径）
+	}
+	used := merchantQuotaUsed(owner)
+	if used+incoming > quota {
+		return fmt.Errorf("商户存储总量超出配额：已用 %s + 本次 %s > 配额 %s（请先删除不需要的旧版本）",
+			humanBytes(used), humanBytes(incoming), humanBytes(quota))
+	}
+	return nil
+}
+
+// humanBytes 字节数人性化文案（配额报错用）
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.2fGB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
+}
+
+// gameSplitZipCheck 分卷 ZIP 命名校验：同目录、同前缀、`.zip.001` 起连续递增（7z/WinRAR 原生
+// 分卷命名）。序号固定 3 位数字（超 999 卷不支持——50GB/100MB 单卷也远用不到）。
+// 返回 nil 表示命名合法；否则返回可直接提示商户的错误
+func gameSplitZipCheck(items []gameUploadItem) error {
+	volRe := regexp.MustCompile(`^(.+)\.zip\.([0-9]{3})$`)
+	var dir, prefix string
+	start, prev := -1, -1
+	for _, it := range items {
+		base := it.relPath
+		if i := strings.LastIndexByte(base, '/'); i >= 0 {
+			base = base[i+1:]
+			if dir == "" {
+				dir = it.relPath[:i]
+			} else if dir != it.relPath[:i] {
+				return errors.New("分卷文件必须位于同一目录")
+			}
+		} else if dir != "" {
+			return errors.New("分卷文件必须位于同一目录")
+		}
+		m := volRe.FindStringSubmatch(strings.ToLower(base))
+		if m == nil {
+			return errors.New("分卷命名非法: " + it.relPath + "（须为 前缀.zip.001 形式）")
+		}
+		if prefix == "" {
+			prefix = m[1]
+		} else if prefix != m[1] {
+			return errors.New("分卷前缀不一致: " + it.relPath)
+		}
+		n, _ := strconv.Atoi(m[2])
+		if start < 0 {
+			if n != 1 {
+				return errors.New("分卷必须从 .zip.001 开始: " + it.relPath)
+			}
+			start, prev = 1, 1
+			continue
+		}
+		if n != prev+1 {
+			return errors.New("分卷序号不连续（缺 " + fmt.Sprintf("%03d", prev+1) + " 卷）")
+		}
+		prev = n
+	}
+	return nil
+}
+
+// gameZipUnpackSize 单 ZIP 包解析：读 central directory 实算解压后总大小（防 ZIP 炸弹的
+// 申报口径归服务端），并校验条目路径安全（绝对路径/盘符/父目录引用一律拒绝——Zip Slip 防线一）
+func gameZipUnpackSize(zipPath string) (int64, error) {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return 0, err
+	}
+	defer zr.Close()
+	var sum int64
+	for _, zf := range zr.File {
+		if zipEntryUnsafe(zf.Name) {
+			return 0, errors.New("压缩包内含非法路径条目: " + zf.Name)
+		}
+		sum += int64(zf.UncompressedSize64)
+	}
+	return sum, nil
+}
+
+// zipEntryUnsafe ZIP 条目路径安检：拒绝绝对路径（/ 或 \\ 开头）、盘符/UNC（含冒号）、
+// 路径段含 ..（解压可逃逸出目标目录）。Windows 反斜杠按分隔符归一处理
+func zipEntryUnsafe(name string) bool {
+	n := strings.ReplaceAll(name, "\\", "/")
+	if strings.HasPrefix(n, "/") || strings.Contains(n, ":") {
+		return true
+	}
+	for _, seg := range strings.Split(n, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// gamePatchUnpack 补丁包解包（pack_type=3 登记专用）：把 patch.zip 内游戏文件条目解压落位到
+// verRoot 并流式复算 SHA256（不信任 zip 声明），返回 change 条目映射与 patch.json 字节。
+// patch.json 为保留元数据名：不作为游戏文件登记/落 GameFile 行，但落盘保留供审计。
+// 目录条目与空文件条目拒绝（补丁工具产出约定；服务端登记通道本就跳过空文件）。
+// maxBytes：解压总量预检上限（解包前扫 central directory 拒绝，防 ZIP 炸弹先写满磁盘再被检查）
+func gamePatchUnpack(zipPath, verRoot string, maxBytes int64) (map[string]gameUploadItem, []byte, error) {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer zr.Close()
+	// ZIP 炸弹预检：central directory 声明的解压总量超限直接拒绝（写盘前拦截）
+	var declared int64
+	for _, zf := range zr.File {
+		declared += int64(zf.UncompressedSize64)
+	}
+	if maxBytes > 0 && declared > maxBytes {
+		return nil, nil, errors.New("补丁解压总量超出上限（上限 " + strconv.FormatInt(maxBytes>>20, 10) + "MB）")
+	}
+	out := make(map[string]gameUploadItem)
+	var meta []byte
+	for _, zf := range zr.File {
+		if zf.Name == "patch.json" {
+			rc, err := zf.Open()
+			if err != nil {
+				return nil, nil, err
+			}
+			meta, err = io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		if strings.HasSuffix(zf.Name, "/") {
+			return nil, nil, errors.New("补丁含目录条目: " + zf.Name)
+		}
+		if zipEntryUnsafe(zf.Name) {
+			return nil, nil, errors.New("压缩包内含非法路径条目: " + zf.Name)
+		}
+		size := int64(zf.UncompressedSize64)
+		if size <= 0 {
+			return nil, nil, errors.New("补丁含空文件条目: " + zf.Name)
+		}
+		if _, dup := out[zf.Name]; dup {
+			return nil, nil, errors.New("补丁含重复条目: " + zf.Name)
+		}
+		dst := filepath.Join(verRoot, filepath.FromSlash(zf.Name))
+		abs, err := filepath.Abs(dst)
+		if err != nil || !strings.HasPrefix(filepath.Clean(abs), filepath.Clean(verRoot)+string(os.PathSeparator)) {
+			return nil, nil, errors.New("非法条目路径: " + zf.Name)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
+			return nil, nil, errors.New("目录创建失败")
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			return nil, nil, err
+		}
+		fout, err := os.Create(dst)
+		if err != nil {
+			rc.Close()
+			return nil, nil, errors.New("补丁文件落盘失败")
+		}
+		h := sha256.New()
+		written, err := io.Copy(io.MultiWriter(fout, h), rc)
+		fout.Close()
+		rc.Close()
+		if err != nil {
+			return nil, nil, errors.New("补丁文件写入失败")
+		}
+		if written != size {
+			return nil, nil, errors.New("补丁条目大小不符: " + zf.Name)
+		}
+		out[zf.Name] = gameUploadItem{relPath: zf.Name, size: size, sha: hex.EncodeToString(h.Sum(nil))}
+	}
+	if meta == nil {
+		return nil, nil, errors.New("补丁缺少 patch.json 元数据")
+	}
+	if err := os.WriteFile(filepath.Join(verRoot, "patch.json"), meta, 0644); err != nil {
+		return nil, nil, errors.New("patch.json 落盘失败")
+	}
+	return out, meta, nil
+}
+
+// gameVersionFilelistText 版本清单文本输出归口（商户/管理端清单导出共用）：
+// 每文件一行 `0|rel_path|sha256|size`（rel_path 升序），附件下载
+func (s *Server) gameVersionFilelistText(w http.ResponseWriter, v *model.GameVersion) {
+	var files []model.GameFile
+	store.DB.Where("version_id = ?", v.ID).Order("rel_path ASC").Find(&files)
+	var b strings.Builder
+	b.WriteString("# game version filelist: type|rel_path|sha256|size (version=" + v.Version + ")\n")
+	for _, f := range files {
+		b.WriteString("0|" + f.RelPath + "|" + f.SHA256 + "|" + strconv.FormatInt(f.SizeBytes, 10) + "\n")
+	}
+	// 下载文件名白名单归一：version 登记口径允许中文/引号等（gameVersionClean 仅禁路径字符），
+	// 直接嵌入 Content-Disposition 会导致 Go 写 header 失败（非 ASCII）或文件名混乱（引号）——
+	// 仅文件名归一，正文首行 version= 注释保留原值
+	fn := strings.Map(func(r rune) rune {
+		if r >= 0x80 || strings.ContainsRune("\"\\\r\n ;/", r) {
+			return '_'
+		}
+		return r
+	}, v.Version)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"filelist-"+fn+".txt\"")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(b.String()))
+}
+
+// handleAdminGameToolDownload 管理端补丁工具下载（gameToolDownloadServe 公共核心，adminGuard 已在路由层）
+func (s *Server) handleAdminGameToolDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	gameToolDownloadServe(w, r)
+}
+
+// handleAdminVersionFilelist 管理端版本清单导出（自建游戏生成补丁的基准数据源）
+func (s *Server) handleAdminVersionFilelist(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	vid, _ := strconv.ParseUint(r.PathValue("vid"), 10, 64)
+	var v model.GameVersion
+	if err := store.DB.First(&v, vid).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "版本不存在")
+		return
+	}
+	s.gameVersionFilelistText(w, &v)
 }
 
 // gameMergeChunks 流式合并分片并复算 SHA256（MultiWriter 单遍完成写盘+校验）
@@ -1663,8 +2233,23 @@ func (s *Server) handleAdminGameVersionDelete(w http.ResponseWriter, r *http.Req
 }
 
 // gameVersionDeleteCore 版本删除共享核心（管理端/商户端同链路，商户侧前置归属校验）：
-// 清清单行与版本行、删版本磁盘目录；被删版本为最新版时回退到剩余版本（无剩余则清空冗余）
+// 清清单行与版本行、删版本磁盘目录；被删版本为最新版时回退到剩余版本（无剩余则清空冗余）。
+// 补丁基底保护：存在以本版本为 base 的补丁版本时拒绝删除——补丁合成清单的继承条目
+// 物理文件在本版本目录，删掉会导致补丁版本全部继承文件下载 404（须先删依赖补丁）
 func (s *Server) gameVersionDeleteCore(w http.ResponseWriter, v *model.GameVersion, g *model.Game, operator string) {
+	// 与登记同一把分桶锁：防删除与落位中的版本目录交错（RemoveAll 扫到半成品目录）
+	vlock := gameVersionLock(v.GameID)
+	if !vlock.TryLock() {
+		adminFail(w, http.StatusConflict, "该游戏有另一个版本登记/删除操作进行中，请稍后重试")
+		return
+	}
+	defer vlock.Unlock()
+	var patchCnt int64
+	store.DB.Model(&model.GameVersion{}).Where("game_id = ? AND base_version = ?", v.GameID, v.Version).Count(&patchCnt)
+	if patchCnt > 0 {
+		adminFail(w, http.StatusConflict, "该版本是 "+strconv.FormatInt(patchCnt, 10)+" 个补丁版本的基底，请先删除依赖它的补丁版本（或改发全量包）")
+		return
+	}
 	store.DB.Where("version_id = ?", v.ID).Delete(&model.GameFile{})
 	store.DB.Delete(&v)
 	os.RemoveAll(filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, v.Version))

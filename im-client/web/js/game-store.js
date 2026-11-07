@@ -2492,6 +2492,9 @@
         head.appendChild(el('div', 'gs-task-name', taskName(t)));
         if (t.via === 'bt') head.appendChild(el('div', 'gs-task-via', 'BT')); // 下载通道标识
         var stText = TASK_STATE_TEXT[t.state] || t.state || '—';
+        // ZIP 打包版本解压阶段（state 仍为 downloading，phase='extract' 由主进程下载器标记）：
+        // 状态文案切"解压中"，进度条按解压字节推进（total 已被主进程换算为解压后大小）
+        if (t.state === 'downloading' && t.phase === 'extract') stText = T('解压中');
         // BT 完成即转做种（最长 12h，任务留在表内期间引擎持续 announce）：状态显示"做种中"，
         // 上传速率数字实时展示（随 peer 波动归零/恢复，状态文本不随流量抖动切换）
         if (t.state === 'done' && t.via === 'bt') stText = T('做种中');
@@ -2766,7 +2769,7 @@
                     };
                     if (t.gameId !== undefined && t.gameId !== null) state.taskByGame[t.gameId] = taskId;
                 }
-                ['name', 'version', 'received', 'netReceived', 'total', 'speed', 'diskSpeed', 'upSpeed', 'state', 'fileRelPath', 'error', 'installDir', 'via', 'dedupedCount', 'dedupedBytes'].forEach(function (k) {
+                ['name', 'version', 'received', 'netReceived', 'total', 'speed', 'diskSpeed', 'upSpeed', 'state', 'fileRelPath', 'error', 'installDir', 'via', 'dedupedCount', 'dedupedBytes', 'phase'].forEach(function (k) {
                     if (raw[k] !== undefined && raw[k] !== null) t[k] = raw[k];
                 });
             });
@@ -3054,6 +3057,10 @@
                         slug: slug || ('g' + gid),
                         username: username,
                         serverBase: location.origin,
+                        // ZIP 打包版本（新增通道，0=散文件现状）：客户端下载全部卷后自动解压（7z，
+                        // 单 ZIP 与 .zip.001 分卷通吃）；pack_size=解压后总大小（磁盘余量预检）
+                        packType: Number(manifest.pack_type) || 0,
+                        packSize: Number(manifest.pack_size) || 0,
                         files: manifest.files || []
                     }, dirPayload))).then(adoptDedup);
                     toast(T('开始下载：') + (g.name || (T('游戏 #') + gid)));
@@ -5475,7 +5482,7 @@
             }
             if (p.gameId !== undefined && p.gameId !== null && t.gameId === undefined) t.gameId = p.gameId;
             var prev = t.state;
-            ['received', 'netReceived', 'total', 'speed', 'diskSpeed', 'upSpeed', 'state', 'fileRelPath', 'error', 'dedupedCount', 'dedupedBytes', 'conn', 'seeds', 'totalSeeds', 'totalPeers', 'engineError'].forEach(function (k) {
+            ['received', 'netReceived', 'total', 'speed', 'diskSpeed', 'upSpeed', 'state', 'fileRelPath', 'error', 'dedupedCount', 'dedupedBytes', 'conn', 'seeds', 'totalSeeds', 'totalPeers', 'engineError', 'phase'].forEach(function (k) {
                 if (p[k] !== undefined && p[k] !== null) t[k] = p[k];
             });
             dlHistPush(p.taskId, p); // 吞吐曲线环形序列推进（网络/磁盘双序列）

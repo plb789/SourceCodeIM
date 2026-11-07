@@ -41,6 +41,7 @@ func uiFeatureEnabled(name string) bool {
 // 按路径前缀判定功能归属，被后台「功能开关」停用的功能其用户端接口一律 403 拒绝：
 //   - /api/game/*        → game_center（游戏中心全部用户端接口：清单/详情/下载/云存档/评价/积分等 30 条）
 //   - /api/workbench*    → workbench（工作台启用清单下发）
+//
 // 管理端 /admin/api/game*、/admin/api/workbench* 前缀不同不受影响（管理员维护入口保留）；
 // 静态资源（game-store.html 商店页本体）不下发拦截——页面可打开但数据接口全 403，属预期硬禁用效果。
 func FeatureGate(next http.Handler) http.Handler {

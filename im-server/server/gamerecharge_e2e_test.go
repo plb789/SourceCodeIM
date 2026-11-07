@@ -108,7 +108,7 @@ func e2eSeed(t *testing.T) (game1, game2 uint) {
 	if err := store.DB.Exec("CREATE TABLE IF NOT EXISTS " + e2eWalletTB + " (account VARCHAR(64) PRIMARY KEY, gold DOUBLE NOT NULL DEFAULT 0)").Error; err != nil {
 		t.Fatalf("钱包表创建失败：%v", err)
 	}
-	store.DB.Exec("INSERT INTO " + e2eWalletTB + " (account, gold) VALUES (?, 0)", e2eUser1)
+	store.DB.Exec("INSERT INTO "+e2eWalletTB+" (account, gold) VALUES (?, 0)", e2eUser1)
 	return g1.ID, g2.ID
 }
 
@@ -153,7 +153,7 @@ func e2ePost(t *testing.T, base, username string, gameID uint, points float64) (
 func e2eWalletGold(t *testing.T, account string) float64 {
 	t.Helper()
 	var gold float64
-	if err := store.DB.Raw("SELECT gold FROM " + e2eWalletTB + " WHERE account = ?", account).Scan(&gold).Error; err != nil {
+	if err := store.DB.Raw("SELECT gold FROM "+e2eWalletTB+" WHERE account = ?", account).Scan(&gold).Error; err != nil {
 		t.Fatalf("钱包查询失败：%v", err)
 	}
 	return gold

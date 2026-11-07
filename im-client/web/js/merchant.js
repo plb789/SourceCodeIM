@@ -199,6 +199,36 @@
         }).catch(function () {
             box.innerHTML = '<div class="m-empty">加载失败</div>';
         });
+        loadQuota();
+    }
+
+    // 存储配额（安全加固）：已用/总量/占比进度条；不限量（quota=-1）显示"不限量"无占比；
+    // 占比 ≥80% 进度条转警示色，提示商户先删旧版本腾额度再上架
+    function fmtBytes(n) {
+        n = Number(n) || 0;
+        if (n >= 1099511627776) return (n / 1099511627776).toFixed(2) + 'TB';
+        if (n >= 1073741824) return (n / 1073741824).toFixed(2) + 'GB';
+        if (n >= 1048576) return (n / 1048576).toFixed(1) + 'MB';
+        if (n >= 1024) return (n / 1024).toFixed(1) + 'KB';
+        return n + 'B';
+    }
+    function loadQuota() {
+        api('GET', '/api/merchant/profile').then(function (res) {
+            var d = unwrap(res);
+            var txt = $('m-quota-txt'), fill = $('m-quota-fill');
+            if (!txt || !fill) return;
+            var used = d.storage_used_bytes || 0, quota = d.storage_quota_bytes;
+            if (quota === -1 || quota === undefined || quota === null || quota <= 0) {
+                txt.textContent = '已用 ' + fmtBytes(used) + ' / 不限量';
+                fill.style.width = '0%';
+                fill.classList.remove('warn');
+                return;
+            }
+            var pct = used / quota * 100;
+            txt.textContent = '已用 ' + fmtBytes(used) + ' / ' + fmtBytes(quota) + '（' + pct.toFixed(1) + '%）';
+            fill.style.width = Math.min(100, pct) + '%';
+            fill.classList.toggle('warn', pct >= 80);
+        }).catch(function () { /* 静默：配额条保持占位 */ });
     }
     function auditBadge(a) {
         var def = AUDIT_TEXT[a] || ['pending', '待审核'];
@@ -420,11 +450,90 @@
     var verFiles = []; // {file, rel_path, size, state}
     var verUploading = false, verCancelFlag = false, verStartedIds = [];
     var verBaseDir = ''; // 最新版文件首段公共目录名（如 War3），单文件上传时自动前缀
+    // 上传方式（ZIP 打包新增通道）：0=散文件逐个下载（现状） 1=单 ZIP（下载后自动解压）
+    // 2=分卷 ZIP 3=补丁包（GamePatchTool 产出 patch.zip + base_version，服务端解包合成完整清单）
+    var verPackType = 0;
+    var verVersionRows = []; // loadVersions 缓存（基底版本下拉/导出清单按钮数据源）
+    var VER_PACK_TIPS = [
+        // 0 散文件 / 3 补丁包 = 逐文件版大类（可补丁增量）；1 单 ZIP / 2 分卷 ZIP = ZIP 完整包大类（不可补丁）
+        '完整版·逐文件上传：选整个游戏目录（或多选文件），玩家端逐个下载。此方式的版本可作为后续补丁升级的基底，推荐首发使用。',
+        '完整版·整包上传：选 1 个 .zip 上传，玩家端整包下载后自动解压安装。<span class="m-warn-text">⚠ 此方式不支持后续补丁升级（服务端无逐文件清单），后续更新须重新上传完整包或改用散文件方式</span>',
+        '完整版·分卷上传：选 game.zip.001 / .002…（7-Zip/WinRAR 标准分卷），玩家端自动分卷解压；需填写解压后总大小。<span class="m-warn-text">⚠ 此方式不支持后续补丁升级，后续更新须重新上传完整分卷或改用散文件方式</span>',
+        '增量更新·只传变更：先用下方"导出清单"下载基底版本清单 → 本地用 gametool 生成 patch.zip → 上传；老玩家只下载变更文件（基底须为散文件版或补丁版）'
+    ];
+    function verSetPack(t) {
+        verPackType = t;
+        // 大类联动（0/3=逐文件版，1/2=ZIP 完整包）：大类按钮 active + 子按钮组显隐
+        var cat = (t === 1 || t === 2) ? 'zip' : 'file';
+        var cats = $('m-ver-catseg').querySelectorAll('.m-cat-btn');
+        for (var i = 0; i < cats.length; i++) {
+            cats[i].classList.toggle('active', cats[i].getAttribute('data-cat') === cat);
+        }
+        $('m-ver-pack-file').classList.toggle('hidden', cat !== 'file');
+        $('m-ver-pack-zip').classList.toggle('hidden', cat !== 'zip');
+        var btns = $('m-ver-packseg').querySelectorAll('.m-packseg-btn');
+        for (var j = 0; j < btns.length; j++) {
+            btns[j].classList.toggle('active', Number(btns[j].getAttribute('data-pack')) === t);
+        }
+        $('m-ver-packtip').innerHTML = VER_PACK_TIPS[t] || VER_PACK_TIPS[0];
+        $('m-ver-packsize-row').classList.toggle('hidden', t !== 2);
+        $('m-ver-base-row').classList.toggle('hidden', t !== 3);
+        $('m-ver-tooldown-row').classList.toggle('hidden', t !== 3);
+        if (t === 3) verFillBase();
+        // ZIP 打包方式清空已选文件（清单语义完全不同：散文件目录树 vs 包本体）
+        verFiles = [];
+        renderVerList();
+    }
+    // 大类切换：切到对应组并自动选中该组默认方式（逐文件版→散文件，ZIP 包→单 ZIP）
+    function verSetCat(cat) {
+        verSetPack(cat === 'zip' ? 1 : 0);
+    }
+    verSetPack(0); // 初始态归位：填充默认说明与按钮状态（实际入口 openVersion 亦会重置）
+    (function () {
+        var cats = $('m-ver-catseg').querySelectorAll('.m-cat-btn');
+        for (var i = 0; i < cats.length; i++) {
+            cats[i].addEventListener('click', function () { verSetCat(this.getAttribute('data-cat')); });
+        }
+        var btns = $('m-ver-packseg').querySelectorAll('.m-packseg-btn');
+        for (var j = 0; j < btns.length; j++) {
+            btns[j].addEventListener('click', function () { verSetPack(Number(this.getAttribute('data-pack'))); });
+        }
+    })();
+    // 基底版本下拉填充：仅散文件（0）与补丁版（3）可作基底（ZIP 整包/分卷版无逐文件清单）
+    function verFillBase() {
+        var sel = $('m-ver-base');
+        var cur = sel.value;
+        sel.innerHTML = '';
+        var opts = 0;
+        (verVersionRows || []).forEach(function (v) {
+            var pk = Number(v.pack_type) || 0;
+            if (pk !== 0 && pk !== 3) return;
+            var o = document.createElement('option');
+            o.value = v.version;
+            o.textContent = 'v' + v.version + (pk === 3 ? '（补丁版）' : '') + ' · ' + fmtSize(v.size_bytes);
+            sel.appendChild(o);
+            opts++;
+        });
+        if (!opts) {
+            var o = document.createElement('option');
+            o.value = '';
+            o.textContent = '暂无可用基底版本（请先上传散文件版本）';
+            sel.appendChild(o);
+        }
+        if (cur) sel.value = cur;
+    }
+    // 分卷命名解析：`前缀.zip.NNN`（3 位数字）→ {prefix, seq}，非法返回 null
+    function verSplitVolParse(name) {
+        var m = /^(.+)\.zip\.(\d{3})$/i.exec(name);
+        return m ? { prefix: m[1].toLowerCase(), seq: Number(m[2]) } : null;
+    }
     function openVersion(g) {
         verGame = g;
         verFiles = [];
         verBaseDir = '';
         verCancelFlag = false;
+        verSetPack(0);
+        $('m-ver-packsize').value = '';
         $('m-ver-game').textContent = g.name;
         $('m-ver-version').value = '';
         $('m-ver-log').value = '';
@@ -444,14 +553,27 @@
             var d = unwrap(res);
             verBaseDir = String(d.base_dir || '').trim();
             var list = d.versions || [];
+            verVersionRows = list; // 基底下拉/导出按钮数据源缓存
             if (!list.length) { box.innerHTML = '<div class="m-empty">暂无版本，上传第一个版本后游戏即可安装</div>'; return; }
-            var html = '<table class="m-table"><tr><th>版本</th><th>大小</th><th>文件数</th><th>时间</th><th></th></tr>';
+            var html = '<table class="m-table"><tr><th>版本</th><th>方式</th><th>大小</th><th>文件数</th><th>时间</th><th></th></tr>';
             list.forEach(function (v) {
-                html += '<tr><td>' + esc(v.version) + (v.version === d.latest_version ? ' <span class="m-badge ok">最新</span>' : '') +
+                var pk = Number(v.pack_type) || 0;
+                var pkText = pk === 1 ? '单ZIP' : pk === 2 ? '分卷ZIP' : pk === 3 ? '补丁⇢v' + (v.base_version || '?') : '散文件';
+                var pkBadge = pk === 1 ? ' <span class="m-badge ok">ZIP</span>' : pk === 2 ? ' <span class="m-badge ok">分卷ZIP</span>'
+                    : pk === 3 ? ' <span class="m-badge ok">补丁</span>' : '';
+                html += '<tr><td>' + esc(v.version) + (v.version === d.latest_version ? ' <span class="m-badge ok">最新</span>' : '') + pkBadge +
+                    '</td><td>' + pkText +
                     '</td><td>' + fmtSize(v.size_bytes) + '</td><td>' + v.file_count + '</td><td>' + esc(v.create_time) +
-                    '</td><td><button class="admin-btn small m-ver-del" data-vid="' + v.id + '" data-ver="' + esc(v.version) + '">删除</button></td></tr>';
+                    '</td><td><button class="admin-btn small m-ver-fl" data-ver="' + esc(v.version) + '">导出清单</button>' +
+                    ' <button class="admin-btn small m-ver-del" data-vid="' + v.id + '" data-ver="' + esc(v.version) + '">删除</button></td></tr>';
             });
             box.innerHTML = html + '</table>';
+            var fls = box.querySelectorAll('.m-ver-fl');
+            for (var j = 0; j < fls.length; j++) {
+                fls[j].addEventListener('click', function () {
+                    verExportFilelist(this.getAttribute('data-ver'));
+                });
+            }
             var dels = box.querySelectorAll('.m-ver-del');
             for (var i = 0; i < dels.length; i++) {
                 dels[i].addEventListener('click', function () {
@@ -461,15 +583,69 @@
                             unwrap(res);
                             toast('已删除 v' + ver);
                             loadVersions();
+                            loadQuota(); // 删除释放配额，进度条即时回退
                         }).catch(function () { /* toast 已提示 */ });
                     }, true);
                 });
             }
         }).catch(function () { box.innerHTML = '<div class="m-empty">加载失败</div>'; });
     }
+    // 版本清单导出（GamePatchTool -base-list 基准）：fetch 带 Authorization → blob 触发下载
+    function verExportFilelist(ver) {
+        fetch('/api/merchant/games/' + verGame.id + '/versions/' + encodeURIComponent(ver) + '/filelist', {
+            headers: { 'Authorization': 'Bearer ' + getToken() }
+        }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.blob();
+        }).then(function (blob) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'filelist-' + ver + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 3000);
+            toast('清单已导出：filelist-' + ver + '.txt');
+        }).catch(function (e) {
+            toast('导出失败：' + (e && e.message ? e.message : '网络异常'));
+        });
+    }
+    // 补丁工具下载（服务端托管 gametool.exe，与 im-server.exe 同目录）与教程页
+    $('m-ver-tooldown').addEventListener('click', function () {
+        fetch('/api/merchant/gametool', { headers: { 'Authorization': 'Bearer ' + getToken() } }).then(function (r) {
+            if (!r.ok) return r.json().then(function (j) { throw new Error(j.msg || ('HTTP ' + r.status)); });
+            return r.blob();
+        }).then(function (blob) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'gametool.exe';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+            toast('补丁工具已开始下载：gametool.exe');
+        }).catch(function (e) {
+            toast('下载失败：' + (e && e.message ? e.message : '网络异常'));
+        });
+    });
+    $('m-ver-toolhelp').addEventListener('click', function () {
+        window.open('/gametool-help.html', '_blank');
+    });
     function collectFiles(input, useRelPath) {
         var fs = Array.prototype.slice.call(input.files);
         input.value = '';
+        if (verPackType > 0) {
+            // ZIP 打包方式：清单语义=包本体（非目录树），每次选择整体替换并即时校验命名
+            var next = [];
+            for (var i = 0; i < fs.length; i++) {
+                var f0 = fs[i];
+                if (f0.size <= 0) continue;
+                next.push({ file: f0, rel_path: f0.name, size: f0.size, state: 0 });
+            }
+            var err = verPackValidate(next);
+            if (err) { toast(err); return; }
+            verFiles = next;
+            renderVerList();
+            return;
+        }
         fs.forEach(function (f) {
             if (f.size <= 0) return; // 空文件服务端跳过
             var rel = useRelPath ? (f.webkitRelativePath || f.name) : f.name;
@@ -479,6 +655,34 @@
             verFiles.push({ file: f, rel_path: rel, size: f.size, state: 0 });
         });
         renderVerList();
+    }
+    // ZIP 打包清单前端预校验（服务端 gameVersionCreateCore 还有同名规则兜底）
+    function verPackValidate(list) {
+        if (verPackType === 0) return ''; // 散文件：无 ZIP 语义校验（runVersionPublish 无条件调用本函数，须短路防误入分卷命名校验）
+        if (verPackType === 1 || verPackType === 3) {
+            if (list.length !== 1 || !/\.zip$/i.test(list[0].rel_path)) {
+                return verPackType === 3 ? '补丁包方式只能选择 1 个 GamePatchTool 生成的 patch.zip' : '单 ZIP 方式只能选择 1 个 .zip 压缩包';
+            }
+            return '';
+        }
+        // 分卷：同前缀、.zip.001 起连续
+        if (!list.length) return '请先选择分卷文件';
+        var prefix = null, prev = 0;
+        for (var i = 0; i < list.length; i++) {
+            var v = verSplitVolParse(list[i].rel_path);
+            if (!v) return '分卷命名非法：' + list[i].rel_path + '（须为 前缀.zip.001 形式）';
+            if (prefix === null) {
+                if (v.seq !== 1) return '分卷必须从 .zip.001 开始';
+                prefix = v.prefix; prev = 1;
+            } else if (v.prefix !== prefix) {
+                return '分卷前缀不一致：' + list[i].rel_path;
+            } else if (v.seq !== prev + 1) {
+                return '分卷序号不连续（缺 ' + ('00' + (prev + 1)).slice(-3) + ' 卷）';
+            } else {
+                prev = v.seq;
+            }
+        }
+        return '';
     }
     $('m-ver-pick-dir').addEventListener('click', function () { $('m-ver-dir').click(); });
     $('m-ver-pick-files').addEventListener('click', function () { $('m-ver-files').click(); });
@@ -568,6 +772,20 @@
         var version = $('m-ver-version').value.trim();
         if (!version) { toast('请填写版本号'); return; }
         if (!verFiles.length) { toast('请先选择游戏目录或文件'); return; }
+        // ZIP 打包方式发布前校验（与清单预校验同规则；分卷需填解压后总大小）
+        var packErr = verPackValidate(verFiles);
+        if (packErr) { toast(packErr); return; }
+        var packSizeBytes = 0;
+        if (verPackType === 2) {
+            var gb = Number($('m-ver-packsize').value);
+            if (!(gb > 0)) { toast('请填写压缩包解压后的总大小（GB）'); return; }
+            packSizeBytes = Math.round(gb * 1073741824);
+        }
+        var baseVer = '';
+        if (verPackType === 3) {
+            baseVer = $('m-ver-base').value;
+            if (!baseVer) { toast('请选择基底版本（无可用基底请先上传散文件版本）'); return; }
+        }
         verUploading = true;
         verCancelFlag = false;
         verStartedIds = [];
@@ -610,7 +828,8 @@
             return;
         }
         var res = await api('POST', '/api/merchant/games/' + verGame.id + '/version', {
-            version: version, changelog: $('m-ver-log').value, files: okFiles
+            version: version, changelog: $('m-ver-log').value, files: okFiles,
+            pack_type: verPackType, pack_size: packSizeBytes, base_version: baseVer
         });
         $('m-ver-ok').textContent = '开始上传并登记版本';
         try {
@@ -620,6 +839,7 @@
             renderVerList();
             $('m-ver-progress').classList.add('hidden');
             loadVersions();
+            loadQuota(); // 上架占用配额，进度条即时前进
         } catch (e) { /* toast 已提示 */ }
     }
 

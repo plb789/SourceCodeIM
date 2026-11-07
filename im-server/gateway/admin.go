@@ -107,7 +107,7 @@ func (a *adminServer) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !a.checkSession(r) {
 			w.Header().Set("Cache-Control", "no-store")
-if strings.HasPrefix(r.URL.Path, "/api/") {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"ok":false,"err":"unauthorized"}`))
 			} else {

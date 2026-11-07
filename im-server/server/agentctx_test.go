@@ -62,7 +62,7 @@ func TestAgentTaskContextsLoad(t *testing.T) {
 	for name, bad := range map[string]string{
 		"上级逃逸": "../outside.txt",
 		"绝对路径": "C:\\Windows\\system32\\cmd.exe",
-		"空路径":   "  ",
+		"空路径":  "  ",
 	} {
 		if _, err := s.agentTaskContextsLoad("ctxuser1", []AgentCtxReq{{Path: bad}}); err == nil {
 			t.Fatalf("%s 应被拒绝：%q", name, bad)

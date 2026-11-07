@@ -273,6 +273,21 @@ func main() {
 		http.ServeFile(w, r, filepath.Join(cfg.WebDir, "share.html"))
 	})
 	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 阶段二百八十二（安全加固）：静态响应统一禁 MIME 嗅探——浏览器拒绝把声明类型与内容
+		// 不符的资源当脚本/样式执行（攻击者把 HTML 改名 .png 上传也无法借嗅探执行）。
+		// 仅影响响应头，类型正确的 HTML/JS/CSS/媒体零变化
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// 阶段二百八十二（安全加固）：/static/upload/** 非内联白名单文件强制 attachment——
+		// 浏览器直链打开即触发下载而非渲染执行，封堵 .html/.svg 等可渲染扩展名的存储型 XSS；
+		// 图片/视频/音频白名单内保持内联（聊天气泡/商店详情/公告图/语音播放不受影响）。
+		// 前端下载走 fetch→Blob→<a download>（忽略该头，下载名由前端决定），链路无感知
+		if p := r.URL.Path; strings.HasPrefix(p, "/static/upload/") {
+			if !server.IsStaticInlineFile(filepath.Ext(p)) {
+				if name := p[strings.LastIndexByte(p, '/')+1:]; name != "" {
+					w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+				}
+			}
+		}
 		// 原实现：仅对 HTML 入口禁用缓存（css/js 走浏览器启发式缓存，存在陈旧缓存风险）
 		// if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
 		// 	w.Header().Set("Cache-Control", "no-cache")

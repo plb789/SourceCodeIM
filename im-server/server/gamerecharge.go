@@ -426,7 +426,13 @@ func (s *Server) HandleGameRechargeConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 	resp["enabled"] = true
-	resp["rate"] = func() float64 { v := g.RechargeRate; if v <= 0 { return 1 }; return v }()
+	resp["rate"] = func() float64 {
+		v := g.RechargeRate
+		if v <= 0 {
+			return 1
+		}
+		return v
+	}()
 	resp["tiers"] = tiers
 	resp["daily_max"] = g.RechargeDailyMax
 	// 个人字段仅对 token 校验通过的本人请求下发（客户端无 token 时弹窗缺余额展示，
@@ -514,8 +520,8 @@ func (s *Server) handleInternalGatewayRechargeAck(w http.ResponseWriter, r *http
 		return
 	}
 	var req struct {
-		GW     string                 `json:"gw"`
-		OK     []uint64               `json:"ok"`
+		GW     string                  `json:"gw"`
+		OK     []uint64                `json:"ok"`
 		Failed []rechargeAckFailedItem `json:"failed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || (len(req.OK) == 0 && len(req.Failed) == 0) {

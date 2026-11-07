@@ -90,7 +90,7 @@ var dbwriteStmtRe = regexp.MustCompile(`(?i)^\s*(insert|update|merge|call|exec|e
 // compileSQLTemplate 模板编译归口（dbwrite/recharge 共用）：白名单校验 + 占位符→方言参数符替换。
 // dialect：mysql/sqlite→?；mssql→@p1/@p2...；postgres→$1/$2...
 // allowed：占位符白名单（仅小写名）——dbwrite 链路 {user}/{password}；recharge 链路 {user}/{amount}/{order}
-//（充值模板出现 {password} 即"未知占位符"拒绝：充值链路无密码语义）
+// （充值模板出现 {password} 即"未知占位符"拒绝：充值链路无密码语义）
 func compileSQLTemplate(tpl, dialect string, allowed []string) (*dbwriteTemplate, error) {
 	allowedSet := make(map[string]bool, len(allowed))
 	for _, a := range allowed {
