@@ -2568,9 +2568,13 @@
             meta.appendChild(el('span', '', T('提示：') + t.engineError));
         }
 
-        // 按钮行：签名守卫（仅任务/状态/通道变化才重建；meta 每帧刷新不触碰按钮 DOM）
-        var showActs = IN_ELECTRON && t.state !== 'done' && t.state !== 'verifying';
-        var sig = showActs ? (t.taskId + '|' + t.state + '|' + t.via) : '';
+        // 按钮行：签名守卫（仅任务/状态/通道变化才重建；meta 每帧刷新不触碰按钮 DOM）。
+        // verifying（每文件下载完成后的 SHA256 校验过渡态）与 downloading 归一同一签名——
+        // 否则每文件切换按钮行清空重建+隐藏再显示，形成用户反馈的"文件切换瞬间按钮闪现"；
+        // 校验中仍显示按钮（点击暂停由主进程在文件边界生效），状态文案独立显示"校验中"
+        var showActs = IN_ELECTRON && t.state !== 'done';
+        var btnState = t.state === 'verifying' ? 'downloading' : t.state;
+        var sig = showActs ? (t.taskId + '|' + btnState + '|' + t.via) : '';
         if (row._sig !== sig) {
             row._acts.innerHTML = '';
             if (showActs) {
@@ -5572,8 +5576,13 @@
                     }
                 }
             }
-            // 状态迁移帧全量重绘（按钮/角标随任务态切换）；纯进度帧轻刷新防整页闪烁
-            (prev !== t.state ? scheduleRefresh : scheduleProgressRefresh)();
+            // 状态迁移帧全量重绘（按钮/角标随任务态切换）；纯进度帧轻刷新防整页闪烁。
+            // verifying↔downloading 往返（每文件校验过渡，无库状态/按钮语义变化）降级为轻刷新——
+            // 否则多文件任务每个文件边界都触发一次全库重绘（scheduleRefresh 含 syncLibrary）
+            var stateMigrated = prev !== t.state &&
+                !(prev === 'downloading' && t.state === 'verifying') &&
+                !(prev === 'verifying' && t.state === 'downloading');
+            (stateMigrated ? scheduleRefresh : scheduleProgressRefresh)();
         });
     }
 
