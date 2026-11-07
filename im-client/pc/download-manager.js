@@ -134,6 +134,7 @@ class GameDownloadManager extends EventEmitter {
             task.slug = slug; // 游戏标识（_commit 末级目录名校验用）
             task.username = String(payload.username || '');
             task.serverBase = String(payload.serverBase || '');
+            task.direct = Number(payload.download_method) === 3; // 直连模式（商户自带文件服务器）：错误文案分流 + https 强制
             task.files = list;
             task.packType = packType; // ZIP 打包方式（重试重下时一并刷新，解压标记复位）
             task.packSize = packSize;
@@ -159,6 +160,7 @@ class GameDownloadManager extends EventEmitter {
                 slug: slug,             // 游戏标识（_commit 末级目录名校验用）
                 username: String(payload.username || ''),
                 serverBase: String(payload.serverBase || ''),
+                direct: Number(payload.download_method) === 3, // 直连模式（商户自带文件服务器）
                 files: list,
                 packType: packType,     // ZIP 打包方式（0=散文件 1=单 ZIP 2=分卷 ZIP；>0 下载后走解压阶段）
                 packSize: packSize,     // 解压后总大小（磁盘余量预检 + 解压进度条总量换算；0=未知）
@@ -370,7 +372,14 @@ class GameDownloadManager extends EventEmitter {
                     if (st.isFile()) base = st.size;
                 } catch (e) { /* 无断点文件，从头下载 */ }
                 const url = self._buildUrl(task, file);
-                if (!url) { reject({ message: '文件下载地址缺失' }); return; }
+                if (!url) { reject({ message: task.direct ? '清单缺少直连地址（rel_path: ' + file.rel_path + '）' : '文件下载地址缺失' }); return; }
+                // 直连模式（商户自带文件服务器）：强制 https（防中间人篡改；清单 SHA256 是第二道校验）
+                if (task.direct && url.indexOf('https:') !== 0) {
+                    reject({ message: '直连下载已中止：文件服务器地址必须为 https（来源：' + url.split('/').slice(0, 3).join('/') + '）' });
+                    return;
+                }
+                // 直连错误文案归口：失败指向"游戏来源服务器"（商户自备），避免用户误判平台故障
+                const em = function (m) { return task.direct ? '来源服务器：' + m : m; };
                 const attempt = function (u, redirects) {
                     if (task.state !== 'downloading') { reject({ paused: true }); return; }
                     // 按协议选模块（服务端可能 http/https 任一）
@@ -396,7 +405,7 @@ class GameDownloadManager extends EventEmitter {
                         const append = res.statusCode === 206 && base > 0; // 206：断点续传追加
                         if (res.statusCode !== 200 && !append) {
                             res.resume();
-                            reject({ message: '服务端返回 ' + res.statusCode });
+                            reject({ message: em('服务端返回 ' + res.statusCode) });
                             return;
                         }
                         let written = append ? base : 0; // 最终文件字节数（含断点已有部分）
@@ -530,7 +539,7 @@ class GameDownloadManager extends EventEmitter {
                     task._req = req;
                     req.on('error', function (err) {
                         if (task.state === 'paused') { reject({ paused: true }); return; }
-                        reject({ message: '网络错误：' + ((err && err.message) || '连接失败') });
+                        reject({ message: em('网络错误：' + ((err && err.message) || '连接失败')) });
                     });
                 };
                 attempt(url, 0);
@@ -539,14 +548,19 @@ class GameDownloadManager extends EventEmitter {
         });
     }
 
-    // 拼完整下载地址：serverBase + file.url + username 参数（url 已是绝对地址/自带查询串时正确拼接）
+    // 拼完整下载地址：serverBase + file.url + username 参数（url 已是绝对地址/自带查询串时正确拼接）。
+    // 直连模式（download_method=3，安全加固）：manifest 的 file.url 必须是商户服务器绝对地址——
+    // 原样使用且不追加 username（不向第三方服务器泄露平台账号名；完整性由 SHA256 清单校验兜底）；
+    // 直连下相对地址一律返回空（防意外回拼到平台服务器造成口径混乱，由调用方给出明确错误）
     _buildUrl(task, file) {
         let u = String(file.url || '');
         if (!u) return '';
         if (/^https?:\/\//i.test(u)) {
+            if (task.direct) return u; // 直连：商户地址原样使用，不带平台账号参数
             // 绝对地址仍统一补 username（服务端下载归口按账号鉴权）
             return u + (u.indexOf('?') >= 0 ? '&' : '?') + 'username=' + encodeURIComponent(task.username || '');
         }
+        if (task.direct) return ''; // 直连拒绝相对地址（服务端 dm=3 必然下发绝对 url，出现即异常）
         const base = String(task.serverBase || '').replace(/\/+$/, '');
         if (!base) return '';
         u = base + (u.indexOf('/') === 0 ? u : '/' + u);

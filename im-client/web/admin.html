@@ -1442,11 +1442,13 @@
                         <option value="0">上架</option>
                         <option value="1">下架</option>
                     </select>
-                    <select id="gm-f-dlmethod" class="admin-input gm-num-input" title="PC 客户端下载通道：BT·生成种子 走 P2SP 混合（种子+服务器直链源，可加速）；BT·上传种子 为纯 BT（直发自制种子，不叠加直链源）；WEB 端自动回退 HTTP">
-                        <option value="0">HTTP 直连</option>
+                    <select id="gm-f-dlmethod" class="admin-input gm-num-input" title="PC 客户端下载通道：BT·生成种子 走 P2SP 混合（种子+服务器直链源，可加速）；BT·上传种子 为纯 BT（直发自制种子，不叠加直链源）；直连 HTTP·外部源 为商户自带文件服务器（文件不上传平台，客户端直连下载+SHA256 校验）；WEB 端自动回退提示">
+                        <option value="0">HTTP 直连（平台服务器）</option>
                         <option value="1">BT（生成种子）</option>
                         <option value="2">BT（上传种子）</option>
+                        <option value="3">直连 HTTP（外部源）</option>
                     </select>
+                    <input id="gm-f-directurl" class="admin-input hidden" style="max-width:320px;" maxlength="512" placeholder="外部源根地址 https://cdn.example.com/game/">
                 </div>
                 <span class="admin-field-hint">积分价格：用户从商店获取游戏时从其积分钱包扣除（0=免费），移出游戏库全额退还</span>
                 <!-- 游戏归属（阶段二百九十七）：官方=平台自运营免审；选商户账号保存即转移归属——
@@ -2227,7 +2229,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.77"></script>
+    <script src="js/admin.js?v=1.78"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

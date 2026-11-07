@@ -6056,8 +6056,12 @@
         $('gm-f-price').value = d ? (d.price || 0) : 0;
         $('gm-f-sort').value = d ? (d.sort || 0) : 0;
         $('gm-f-status').value = d ? String(d.status === 1 ? 1 : 0) : '0';
-        // 下载方式三态回填（0=HTTP 直连 / 1=BT·生成种子 / 2=BT·上传种子）
-        $('gm-f-dlmethod').value = d ? String(d.download_method === 2 ? 2 : (d.download_method === 1 ? 1 : 0)) : '0';
+        // 下载方式四态回填（0=HTTP 直连 / 1=BT·生成种子 / 2=BT·上传种子 / 3=直连 HTTP·外部源）
+        var dm = d ? Number(d.download_method) || 0 : 0;
+        $('gm-f-dlmethod').value = String(dm);
+        // 直连外部源地址回填 + 行显隐联动（仅 dm=3 显示）
+        $('gm-f-directurl').value = d ? (d.direct_base_url || '') : '';
+        $('gm-f-directurl').classList.toggle('hidden', dm !== 3);
         // 游戏归属下拉回填（编辑态显示；新建态隐藏——服务端创建一律官方）
         gmOwnerBackfill(d);
         // 上传种子回填（编辑时仅文件名；种子内元信息在本次上传时才有，编辑回填不复算）
@@ -6173,13 +6177,16 @@
 
     // 上传种子行显隐与回显（仅下载方式=2「BT·上传种子」时出现；已上传时显示文件名与元信息）
     function gmRenderTorrent() {
-        var isUp = parseInt($('gm-f-dlmethod').value, 10) === 2;
+        var dm = parseInt($('gm-f-dlmethod').value, 10) || 0;
+        var isUp = dm === 2;
         $('gm-torrent-row').classList.toggle('hidden', !isUp);
         $('gm-torrent-clear').classList.toggle('hidden', !gmTorrentPath);
         var hint = $('gm-torrent-hint');
         hint.textContent = gmTorrentPath
             ? ('已上传：' + gmTorrentPath + (gmTorrentMeta ? '（' + gmTorrentMeta + '）' : '') + '；重新上传将替换为新的种子')
             : GM_TORRENT_HINT;
+        // 直连外部源地址行联动（商户直连·安全加固）：仅 dm=3 显示
+        $('gm-f-directurl').classList.toggle('hidden', dm !== 3);
     }
 
     function gmRenderCoverPreview() {
@@ -6833,6 +6840,7 @@
             sort: parseInt($('gm-f-sort').value, 10) || 0,
             status: parseInt($('gm-f-status').value, 10) || 0,
             download_method: dlmethod,
+            direct_base_url: dlmethod === 3 ? $('gm-f-directurl').value.trim() : '',
             torrent_path: gmTorrentPath, // 下载方式=2 必填（服务端二次校验存在性）；其余方式保留/不填均可
             // 游戏归属（编辑态下拉：官方/商户账号；新建态恒空=官方，服务端创建强制官方）。
             // owner_transfer=true 为转移显式开关：仅本通道（编辑表单保存）允许变更归属——
@@ -6897,7 +6905,8 @@
             publisher: d.publisher || '',
             price: d.price || 0,
             sort: d.sort || 0,
-            download_method: (d.download_method === 2 ? 2 : (d.download_method === 1 ? 1 : 0)), // 全量回写：防上架/下架切换把 BT 游戏重置为 HTTP
+            download_method: (d.download_method === 2 ? 2 : (d.download_method === 1 ? 1 : (d.download_method === 3 ? 3 : 0))), // 全量回写：防上架/下架切换把 BT/直连游戏重置为 HTTP
+            direct_base_url: d.download_method === 3 ? (d.direct_base_url || '') : '', // 直连地址全量回写（防状态切换清空）
             torrent_path: d.torrent_path || '', // 全量回写：防状态切换丢失已上传种子关联
             owner_username: d.owner_username || '', // 归属全量回写：服务端仅在显式 owner_transfer=true 时才评估变更，本通道（上下架）恒不携带=绝不动归属
             status: status,
@@ -7231,6 +7240,9 @@
         if (!gmVerGame) { showToast('请先打开版本管理'); return; }
         // BT·上传种子方式禁上架（与服务端 create 拦截同口径的前置引导，避免选完文件传到一半才被 400）
         if (gmVerGame.download_method === 2) { showToast('BT 种子方式无需版本上架：请关闭弹窗，在「编辑」中上传新种子文件'); return; }
+        // 直连 HTTP（dm=3）禁走管理端分片上传：文件本体在商户/外部服务器，服务端仅登记清单——
+        // 服务端会拒绝带 upload_id 的登记；外部源版本请走商户后台「登记清单（文件不上传）」流程
+        if (Number(gmVerGame.download_method) === 3) { showToast('直连 HTTP 方式不支持在管理后台上传版本：请在商户后台用「登记清单（文件不上传）」登记，或先把下载方式切回平台分发'); return; }
         var version = $('gm-pub-version').value.trim();
         var changelog = $('gm-pub-changelog').value;
         var minReq = $('gm-pub-minreq').value;

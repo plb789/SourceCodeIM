@@ -88,11 +88,16 @@ type merchantGameReq struct {
 	RechargeRate     float64 `json:"recharge_rate"`
 	RechargeTiers    string  `json:"recharge_tiers"`
 	RechargeDailyMax float64 `json:"recharge_daily_max"`
+	// 下载方式（商户白名单：0=HTTP 服务端分发[默认] 3=HTTP·商户直连[自带文件服务器]；
+	// 1/2 BT 通道归管理员）。直连需配套 direct_base_url
+	DownloadMethod int8   `json:"download_method"`
+	DirectBaseURL  string `json:"direct_base_url"`
 }
 
 // merchantGameBaseClean 白名单公共清洗（创建/更新同口径）：返回错误即拒绝。
-// 充值配置写入 g 对应字段并经 rechargeGameCfgClean 归一（与管理端同清洗器）
-func merchantGameBaseClean(g *model.Game, req *merchantGameReq) error {
+// 充值配置写入 g 对应字段并经 rechargeGameCfgClean 归一（与管理端同清洗器）；
+// 下载方式 0/3 解析（BT 归管理员）与直连 base_url 校验归口本函数
+func (s *Server) merchantGameBaseClean(g *model.Game, req *merchantGameReq) error {
 	g.Name = strings.TrimSpace(req.Name)
 	if g.Name == "" {
 		return fmt.Errorf("游戏名称不能为空")
@@ -154,6 +159,22 @@ func merchantGameBaseClean(g *model.Game, req *merchantGameReq) error {
 	if err := rechargeGameCfgClean(g); err != nil {
 		return err
 	}
+	// 下载方式（商户白名单 0/3，BT 1/2 归管理员）：直连需有效 base_url（https 归口
+	// directHTTPRequired——商户后台属生产入口，恒强制 https）
+	switch req.DownloadMethod {
+	case 0:
+		g.DownloadMethod = 0
+		g.DirectBaseURL = ""
+	case 3:
+		g.DownloadMethod = 3
+		g.DirectBaseURL = gameDirectBaseURLClean(req.DirectBaseURL, s.directHTTPRequired())
+		if g.DirectBaseURL == "" {
+			return fmt.Errorf("直连 HTTP 模式必须填写有效的文件服务器根地址（https://...，禁空白/.. /查询串）")
+		}
+	default:
+		g.DownloadMethod = 0
+		g.DirectBaseURL = ""
+	}
 	return nil
 }
 
@@ -214,6 +235,8 @@ func (s *Server) handleMerchantGameList(w http.ResponseWriter, r *http.Request) 
 			"description": g.Description, "screenshots": g.Screenshots, "tags": g.Tags,
 			"developer": g.Developer, "publisher": g.Publisher, "price": g.Price,
 			"launch_exe": g.LaunchExe, "launch_name": g.LaunchName, "launch_args": g.LaunchArgs,
+			// 下载方式与直连地址（商户直连·编辑回填数据源；base_url 可下发——本就属商户自己填写）
+			"download_method": g.DownloadMethod, "direct_base_url": g.DirectBaseURL,
 			"status": g.Status, "audit_status": g.AuditStatus, "audit_remark": g.AuditRemark,
 			"audit_time":       g.AuditTime,
 			"recharge_enabled": g.RechargeEnabled, "recharge_rate": g.RechargeRate,
@@ -238,7 +261,7 @@ func (s *Server) handleMerchantGameCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	g := model.Game{}
-	if err := merchantGameBaseClean(&g, &req); err != nil {
+	if err := s.merchantGameBaseClean(&g, &req); err != nil {
 		adminFail(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -250,7 +273,6 @@ func (s *Server) handleMerchantGameCreate(w http.ResponseWriter, r *http.Request
 	g.OwnerUsername = merchantUserFromCtx(r)
 	g.AuditStatus = model.GameAuditPending
 	g.Status = 0
-	g.DownloadMethod = 0 // 商户游戏固定 HTTP 清单直连（BT 种子/上传种子通道归管理员）
 	g.GameSecret = gameRandomSecret()
 	g.ID = 0
 	if err := store.DB.Create(&g).Error; err != nil {
@@ -283,7 +305,7 @@ func (s *Server) handleMerchantGameUpdate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	u := model.Game{}
-	if err := merchantGameBaseClean(&u, &req); err != nil {
+	if err := s.merchantGameBaseClean(&u, &req); err != nil {
 		adminFail(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -298,6 +320,9 @@ func (s *Server) handleMerchantGameUpdate(w http.ResponseWriter, r *http.Request
 		"recharge_rate":      u.RechargeRate,
 		"recharge_tiers":     u.RechargeTiers,
 		"recharge_daily_max": u.RechargeDailyMax,
+		// 下载方式与直连地址（安全加固·商户直连）：变更随对外字段统一回待审核
+		"download_method": u.DownloadMethod,
+		"direct_base_url": u.DirectBaseURL,
 		// 编辑对外字段即回待审核（官方免审态 0 不会出现在商户名下，防御性归一到 1）；清空旧驳回理由
 		"audit_status": model.GameAuditPending,
 		"audit_remark": "",

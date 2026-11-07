@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -692,5 +693,111 @@ func TestMerchantQuotaAllocation(t *testing.T) {
 	}
 	if got := s.merchantQuotaLimit("mtest_quota"); got != 5*gbyte {
 		t.Fatalf("编辑后专属配额应生效 5GB, 实得 %d", got)
+	}
+}
+
+// TestMerchantDirectHTTP 商户直连 HTTP（download_method=3）全链路回归：
+// 版本登记无分片会话（纯清单）→ StoragePath 空 → manifest url 拼接商户地址（QueryEscape）
+// → pack_type=1 / 携带 upload_id 拒绝 → 编辑 dm=3 空 base_url 拒绝。测试数据 mtest_ 前缀用后即清。
+func TestMerchantDirectHTTP(t *testing.T) {
+	merchantTestSeed(t, "mtest_direct", 0, 100)
+	t.Cleanup(func() { merchantTestCleanup(t) })
+	s := dbwServer(t)
+	token := merchantTestToken(t, "mtest_direct")
+	g := merchantTestSeedGame(t, "mtest_direct", "mtest-direct", "直连游戏", model.GameAuditApproved, 0)
+	store.DB.Model(&model.Game{}).Where("id = ?", g.ID).Updates(map[string]interface{}{
+		"download_method": 3, "direct_base_url": "https://cdn.mtest.com/g/",
+	})
+	store.DB.First(&g, g.ID)
+	const gbyte = int64(1) << 30
+
+	// 1) 直连登记：无 upload_id 纯清单 → 成功；StoragePath 空、pack_type=0、size 累加正确
+	code, resp := registerPackVersion(t, s, token, g.ID, "v1", 0, 0, []map[string]interface{}{
+		{"rel_path": "bin/game.exe", "size": 1024, "sha256": strings.Repeat("a", 64)},
+		{"rel_path": "数据/readme.txt", "size": 128, "sha256": strings.Repeat("b", 64)},
+	})
+	if code != 200 {
+		t.Fatalf("直连登记应成功: %d %v", code, resp)
+	}
+	vid := uint(resp["version_id"].(float64))
+	var v model.GameVersion
+	store.DB.First(&v, vid)
+	if v.PackType != 0 || v.SizeBytes != 1152 || v.FileCount != 2 {
+		t.Fatalf("直连版本行口径不符: %+v", v)
+	}
+	var files []model.GameFile
+	store.DB.Where("version_id = ?", vid).Find(&files)
+	if len(files) != 2 {
+		t.Fatalf("文件行应 2 条, 实得 %d", len(files))
+	}
+	for _, f := range files {
+		if f.StoragePath != "" {
+			t.Fatalf("直连文件 StoragePath 应为空: %s", f.StoragePath)
+		}
+	}
+
+	// 2) manifest：url 拼接商户地址（rel_path QueryEscape）+ download_method=3
+	m, err := s.gameManifest(&g, "v1")
+	if err != nil {
+		t.Fatalf("清单构建失败: %v", err)
+	}
+	if dm, ok := m["download_method"].(int8); !ok || dm != 3 {
+		t.Fatalf("清单应下发 download_method=3, 实得 %v", m["download_method"])
+	}
+	mFiles := m["files"].([]map[string]interface{})
+	var directURL string
+	for _, mf := range mFiles {
+		if mf["rel_path"] == "数据/readme.txt" {
+			directURL = mf["url"].(string)
+		}
+	}
+	if want := "https://cdn.mtest.com/g/" + url.QueryEscape("数据/readme.txt"); directURL != want {
+		t.Fatalf("直连 url 应为 %q, 实得 %q", want, directURL)
+	}
+
+	// 3) pack_type=1 拒绝（直连一期仅散文件清单）
+	code1, _ := registerPackVersion(t, s, token, g.ID, "v2", 1, gbyte, []map[string]interface{}{
+		{"rel_path": "game.zip", "size": gbyte, "sha256": strings.Repeat("c", 64)},
+	})
+	if code1 != 400 {
+		t.Fatalf("直连 pack_type=1 应 400, 实得 %d", code1)
+	}
+
+	// 4) 携带 upload_id 拒绝（直连模式无需分片）
+	codeU, _ := registerPackVersion(t, s, token, g.ID, "v3", 0, 0, []map[string]interface{}{
+		{"rel_path": "x.txt", "size": 1, "sha256": strings.Repeat("d", 64), "upload_id": "up-x"},
+	})
+	if codeU != 400 {
+		t.Fatalf("直连携带 upload_id 应 400, 实得 %d", codeU)
+	}
+
+	// 5) 编辑 dm=3 但 base_url 为空 → 拒绝（清洗归口）
+	body, _ := json.Marshal(map[string]interface{}{"name": "直连游戏V2", "download_method": 3, "direct_base_url": ""})
+	req := httptest.NewRequest("PUT", "/api/merchant/games/"+fmt.Sprint(g.ID), bytes.NewReader(body))
+	req.SetPathValue("id", fmt.Sprint(g.ID))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.merchantGuard(s.handleMerchantGameUpdate)(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("dm=3 空 base_url 编辑应 400, 实得 %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 6) 管理端详情回填直连地址（回归：详情接口漏下发曾致管理员编辑保存清空 base_url）
+	reqD := httptest.NewRequest("GET", "/admin/api/game/"+fmt.Sprint(g.ID), nil)
+	reqD.SetPathValue("id", fmt.Sprint(g.ID))
+	recD := httptest.NewRecorder()
+	s.handleAdminGameDetail(recD, reqD)
+	if recD.Code != 200 {
+		t.Fatalf("管理端详情应 200, 实得 %d", recD.Code)
+	}
+	var detail struct {
+		OK   bool                   `json:"ok"`
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(recD.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("详情解析失败: %v", err)
+	}
+	if detail.Data["direct_base_url"] != "https://cdn.mtest.com/g/" {
+		t.Fatalf("管理端详情应回填 direct_base_url, 实得 %v", detail.Data["direct_base_url"])
 	}
 }

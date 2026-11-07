@@ -322,6 +322,9 @@
         $('m-f-rgw-daily').value = 0;
         $('m-f-rgw-tiers').value = '';
         $('m-f-rgw-gw').value = '';
+        // 下载方式回填（商户直连·安全加固）：0=平台分发 / 3=直连 HTTP；联动地址行显隐
+        var dm = g ? (Number(g.download_method) || 0) : 0;
+        setFormDM(dm === 3 ? '3' : '0', g ? (g.direct_base_url || '') : '');
         // 编辑态：列表接口按全量口径下发（服务端归口），直接从缓存取本行回填
         if (g) {
             var full = null;
@@ -349,6 +352,7 @@
         $('m-f-rgw-daily').value = full.recharge_daily_max || 0;
         $('m-f-rgw-tiers').value = full.recharge_tiers_raw || '';
         $('m-f-rgw-gw').value = full.recharge_gw || '';
+        setFormDM(Number(full.download_method) === 3 ? '3' : '0', full.direct_base_url || '');
         try { ssList = JSON.parse(full.screenshots || '[]') || []; } catch (eSs) { ssList = []; }
         refreshSsTip();
     }
@@ -358,6 +362,25 @@
         if (v) { img.src = v; img.classList.remove('hidden'); }
         else img.classList.add('hidden');
     }
+
+    // 下载方式表单联动（商户直连·安全加固）：radio 显隐地址行
+    function setFormDM(v, baseURL) {
+        var radios = document.querySelectorAll('input[name="m-f-dm"]');
+        for (var i = 0; i < radios.length; i++) radios[i].checked = radios[i].value === v;
+        $('m-f-direct-row').classList.toggle('hidden', v !== '3');
+        $('m-f-direct-url').value = baseURL || '';
+    }
+    (function () {
+        var radios = document.querySelectorAll('input[name="m-f-dm"]');
+        for (var i = 0; i < radios.length; i++) {
+            radios[i].addEventListener('change', function () {
+                setFormDM(this.value, $('m-f-direct-url').value);
+            });
+        }
+        // 直连模式使用说明（与 gametool-help.html 同模式：新开说明页，商户照步骤操作）
+        var dh = document.getElementById('m-f-direct-help');
+        if (dh) dh.addEventListener('click', function () { window.open('/merchant-direct-help.html', '_blank'); });
+    })();
 
     // 图片上传归口（封面/截图/公告图共用 /api/merchant/upload/image）
     function uploadImage(file) {
@@ -427,7 +450,14 @@
             recharge_rate: Number($('m-f-rgw-rate').value) || 0,
             recharge_daily_max: Number($('m-f-rgw-daily').value) || 0,
             recharge_tiers: $('m-f-rgw-tiers').value.trim(),
-            recharge_gw: $('m-f-rgw-gw').value.trim()
+            recharge_gw: $('m-f-rgw-gw').value.trim(),
+            // 下载方式（商户直连·安全加固）：0=平台分发 3=直连 HTTP（base_url 必填校验归服务端）
+            download_method: (function () {
+                var radios = document.querySelectorAll('input[name="m-f-dm"]');
+                for (var i = 0; i < radios.length; i++) if (radios[i].checked) return Number(radios[i].value) || 0;
+                return 0;
+            })(),
+            direct_base_url: $('m-f-direct-url').value.trim()
         };
         if (!payload.name) { toast('请填写游戏名称'); return; }
         if (!editingGame && !payload.slug) { toast('请填写 slug'); return; }
@@ -462,6 +492,8 @@
         '增量更新·只传变更：先用下方"导出清单"下载基底版本清单 → 本地用 gametool 生成 patch.zip → 上传；老玩家只下载变更文件（基底须为散文件版或补丁版）'
     ];
     function verSetPack(t) {
+        // 直连模式锁定散文件清单（dm=3 一期仅 pack_type=0，服务端同规则兜底）
+        if (t !== 0 && verGameDirect()) { toast('直连模式仅支持「散文件目录」方式：版本更新请在商户服务器替换文件后登记新版本完整清单'); return; }
         verPackType = t;
         // 大类联动（0/3=逐文件版，1/2=ZIP 完整包）：大类按钮 active + 子按钮组显隐
         var cat = (t === 1 || t === 2) ? 'zip' : 'file';
@@ -532,16 +564,16 @@
         verFiles = [];
         verBaseDir = '';
         verCancelFlag = false;
-        verSetPack(0);
+        verSetPack(0); // 直连游戏在 verSetPack 内锁定散文件清单（dm=3 拦截其他方式）
         $('m-ver-packsize').value = '';
-        $('m-ver-game').textContent = g.name;
+        $('m-ver-game').textContent = g.name + (verGameDirect() ? '（直连模式 · 文件不上传）' : '');
         $('m-ver-version').value = '';
         $('m-ver-log').value = '';
         renderVerList();
         $('m-ver-progress').classList.add('hidden');
         $('m-ver-bar').style.width = '0';
         $('m-ver-ok').disabled = false;
-        $('m-ver-ok').textContent = '开始上传并登记版本';
+        $('m-ver-ok').textContent = verGameDirect() ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
         $('m-ver-mask').classList.remove('hidden');
         loadVersions();
         osbInit($('m-ver-mask').querySelector('.m-modal'));
@@ -722,15 +754,27 @@
     });
     $('m-ver-ok').addEventListener('click', runVersionPublish);
     function verSleep(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
-    async function verUploadOne(f) {
+    // 直连模式判定（商户直连·安全加固）：dm=3 时仅登记清单（本地算 SHA256），文件不上传
+    function verGameDirect() { return !!(verGame && Number(verGame.download_method) === 3); }
+    async function verHashFile(f) {
         if (!window.crypto || !crypto.subtle) throw new Error('需安全上下文（https/localhost 或客户端内置窗口）才能计算 SHA-256');
-        verSetState(f, 1);
         var buf = await f.file.arrayBuffer();
         var digest = await crypto.subtle.digest('SHA-256', buf);
         buf = null;
         var sha = '';
         var bytes = new Uint8Array(digest);
         for (var i = 0; i < bytes.length; i++) sha += ('0' + bytes[i].toString(16)).slice(-2);
+        return sha;
+    }
+    // 直连登记单文件：本地流式算 SHA256（不读服务端、不产生 upload_id）
+    async function verDirectOne(f) {
+        verSetState(f, 1);
+        var sha = await verHashFile(f);
+        return { rel_path: f.rel_path, size: f.size, sha256: sha };
+    }
+    async function verUploadOne(f) {
+        verSetState(f, 1);
+        var sha = await verHashFile(f);
         var uploadId = 'mf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
         verStartedIds.push(uploadId);
         var total = Math.ceil(f.size / CHUNK);
@@ -769,6 +813,7 @@
     }
     async function runVersionPublish() {
         if (verUploading) return;
+        var isDirect = verGameDirect();
         var version = $('m-ver-version').value.trim();
         if (!version) { toast('请填写版本号'); return; }
         if (!verFiles.length) { toast('请先选择游戏目录或文件'); return; }
@@ -789,7 +834,7 @@
         verUploading = true;
         verCancelFlag = false;
         verStartedIds = [];
-        $('m-ver-ok').textContent = '上传中…（再次点击取消）';
+        $('m-ver-ok').textContent = isDirect ? '登记中…（仅计算清单，文件不上传）' : '上传中…（再次点击取消）';
         $('m-ver-progress').classList.remove('hidden');
         var okFiles = [], failMsg = '', cancelled = false;
         for (var i = 0; i < verFiles.length; i++) {
@@ -799,14 +844,14 @@
                 break;
             }
             try {
-                okFiles.push(await verUploadOne(verFiles[i]));
+                okFiles.push(await (isDirect ? verDirectOne(verFiles[i]) : verUploadOne(verFiles[i])));
                 verSetState(verFiles[i], 3);
             } catch (e) {
                 if (e && e.cancelled) {
                     for (var k = i; k < verFiles.length; k++) verSetState(verFiles[k], 5);
                     cancelled = true;
                 } else {
-                    failMsg = (verFiles[i].rel_path || '') + '：' + (e && e.message ? e.message : '上传失败');
+                    failMsg = (verFiles[i].rel_path || '') + '：' + (e && e.message ? e.message : (isDirect ? '清单计算失败' : '上传失败'));
                     verSetState(verFiles[i], 4);
                     for (var m = i + 1; m < verFiles.length; m++) verSetState(verFiles[m], 5);
                 }
@@ -816,22 +861,22 @@
         }
         verUploading = false;
         if (cancelled) {
-            await verCancelStarted();
-            $('m-ver-ok').textContent = '开始上传并登记版本';
-            toast('已取消上传');
+            if (!isDirect) await verCancelStarted();
+            $('m-ver-ok').textContent = isDirect ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
+            toast('已取消');
             return;
         }
         if (failMsg) {
-            await verCancelStarted();
-            $('m-ver-ok').textContent = '开始上传并登记版本';
-            toast('上传失败：' + failMsg);
+            if (!isDirect) await verCancelStarted();
+            $('m-ver-ok').textContent = isDirect ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
+            toast((isDirect ? '清单计算失败：' : '上传失败：') + failMsg);
             return;
         }
         var res = await api('POST', '/api/merchant/games/' + verGame.id + '/version', {
             version: version, changelog: $('m-ver-log').value, files: okFiles,
             pack_type: verPackType, pack_size: packSizeBytes, base_version: baseVer
         });
-        $('m-ver-ok').textContent = '开始上传并登记版本';
+        $('m-ver-ok').textContent = isDirect ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
         try {
             unwrap(res);
             toast('版本 v' + version + ' 登记成功，玩家端即时生效');

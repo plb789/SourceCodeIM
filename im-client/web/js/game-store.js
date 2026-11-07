@@ -3057,13 +3057,17 @@
                         slug: slug || ('g' + gid),
                         username: username,
                         serverBase: location.origin,
+                        // 下载方式透传（商户直连·安全加固）：dm=3 时 manifest 文件 url 已是商户服务器
+                        // 绝对地址，主进程直连下载（错误文案分流 + https 强制 + 不回传 username）
+                        download_method: Number(manifest.download_method) || 0,
                         // ZIP 打包版本（新增通道，0=散文件现状）：客户端下载全部卷后自动解压（7z，
                         // 单 ZIP 与 .zip.001 分卷通吃）；pack_size=解压后总大小（磁盘余量预检）
                         packType: Number(manifest.pack_type) || 0,
                         packSize: Number(manifest.pack_size) || 0,
                         files: manifest.files || []
                     }, dirPayload))).then(adoptDedup);
-                    toast(T('开始下载：') + (g.name || (T('游戏 #') + gid)));
+                    toast(T('开始下载：') + (g.name || (T('游戏 #') + gid)) +
+                        (Number(manifest.download_method) === 3 ? T('（来源：商户服务器）') : ''));
                 }
                 putLibState(gid, { state: 1, installed_version: prevInstalled, install_path: effectiveDir });
                 refreshViews();

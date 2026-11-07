@@ -989,10 +989,16 @@ type Game struct {
 	// 流水 reason=game_purchase/game_refund；P2 商店化启用）
 	Price float64 `gorm:"column:price;type:double;default:0" json:"price"`
 	// DownloadMethod 下载方式（0=HTTP 清单直连[默认] 1=BT 种子下载[服务端按版本文件生成种子]
-	// 2=BT 上传种子[管理员自制 .torrent 直发]）——1 走 P2SP 混合（种子任务叠加 HTTP 直链源），
-	// 2 为纯 BT（不叠加 P2SP，按上传种子自带的 tracker/DHT 找 peer）；仅 PC 客户端生效，
-	// WEB 端无 BT 引擎自动回退 HTTP。AutoMigrate 自动加列，存量游戏默认 0 行为不变
+	// 2=BT 上传种子[管理员自制 .torrent 直发] 3=HTTP·商户直连[商户自带文件服务器]）——
+	// 1 走 P2SP 混合（种子任务叠加 HTTP 直链源），2 为纯 BT（不叠加 P2SP，按上传种子自带的
+	// tracker/DHT 找 peer）；3 时文件本体在商户服务器（服务端仅持清单元数据），客户端按清单
+	// 逐文件直连商户地址下载并 SHA256 校验。仅 PC 客户端生效，WEB 端无下载引擎自动回退提示。
+	// AutoMigrate 自动加列，存量游戏默认 0 行为不变
 	DownloadMethod int8 `gorm:"column:download_method;type:tinyint;default:0" json:"download_method"`
+	// DirectBaseURL 商户文件服务器根地址（仅下载方式=3 使用，如 https://cdn.merchant.com/game/）：
+	// 清单逐文件 url = base + QueryEscape(rel_path)；清洗归口 gameDirectBaseURLClean（禁穿越/注入，
+	// 生产默认强制 https）。可下发客户端（来源展示与排障），清单完整性由服务端 SHA256 签名体系持有
+	DirectBaseURL string `gorm:"column:direct_base_url;type:varchar(512);default:''" json:"direct_base_url"`
 	// TorrentPath 上传种子文件名（仅下载方式=2 使用；服务端私有，绝不外泄——落
 	// LocalDir/torrents/uploaded/<文件名>，json:"-" 保证不下发客户端）
 	TorrentPath string `gorm:"column:torrent_path;type:varchar(255);default:''" json:"-"`

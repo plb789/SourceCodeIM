@@ -633,6 +633,10 @@ game:
   # 版本登记前预检 + 落位后实算复检双保险（超限整版回滚，报错带已用/配额）；官方游戏不受限。
   # 默认 50GB；-1 表示不限；修改后需重启服务端生效
   merchant_quota_bytes: 53687091200
+  # 商户直连（安全加固·商户直连 HTTP 分发，dm=3）：商户在商户后台填自己文件服务器根地址，
+  # 文件本体不上传平台，玩家客户端直连下载并按清单 SHA256 逐文件校验。direct_http_only 强制
+  # https（nil/true=强制；内网部署可显式 false 放开 http）。详见 docs/商户直连HTTP分发方案.md
+  # direct_http_only: true
   # launch_secret: "im-game-launch-secret"  # 启动密码派生兜底密钥（HMAC 种子，仅存本文件，不下发
   #                                         # 客户端）。正常派生走每游戏独立密钥（im_game.game_secret，
   #                                         # 上架/启动时自动生成：单游戏密钥泄露/轮换不影响其他游戏），

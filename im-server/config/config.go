@@ -230,6 +230,9 @@ type GameConfig struct {
 	// size_bytes 之和的上限（版本登记前预检+落位后复检双保险；官方游戏不受限）。
 	// 0=默认 50GB（Load 兜底），-1=不限
 	MerchantQuotaBytes int64 `yaml:"merchant_quota_bytes"`
+	// DirectHTTPOnly 商户直连（download_method=3）是否强制 https（nil=默认 true）：
+	// 内网部署可显式 false 放开 http。直连模式下文件本体在商户服务器，https 防中间人篡改
+	DirectHTTPOnly *bool `yaml:"direct_http_only"`
 	// Trackers 全局 BT Tracker 服务器地址列表（下载方式=BT·服务端生成种子时写入种子
 	// announce 与 announce-list，帮助客户端拿到可用 peer；留空=不写 announce，仅公网 DHT 发现）。
 	// 修改后需重启服务端生效（种子缓存锚点已并入 tracker 指纹，重启后自动重建新种子）

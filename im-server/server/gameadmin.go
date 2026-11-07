@@ -79,6 +79,43 @@ func (s *Server) gameTmpDir(uploadID string) string {
 	return filepath.Join(s.cfg.Game.LocalDir, "tmp_chunks", uploadID)
 }
 
+// gameDirectBaseURLClean 清洗商户直连文件服务器根地址（下载方式=3 归口）：
+// 仅允许 http(s):// 前缀；httpsOnly 时强制 https（config game.direct_http_only，默认 true）；
+// 禁空白/控制字符/父目录引用/查询串与锚点（一期固定根地址，防模板注入面）；尾部 / 归一；
+// 非法返回空串
+func gameDirectBaseURLClean(u string, httpsOnly bool) string {
+	u = strings.TrimSpace(u)
+	if u == "" || len(u) > 512 {
+		return ""
+	}
+	lower := strings.ToLower(u)
+	var prefix string
+	switch {
+	case strings.HasPrefix(lower, "https://"):
+		prefix = "https://"
+	case strings.HasPrefix(lower, "http://"):
+		prefix = "http://"
+	default:
+		return ""
+	}
+	rest := u[len(prefix):]
+	if rest == "" || strings.ContainsAny(rest, " \t\r\n\x00") || strings.Contains(rest, "..") {
+		return ""
+	}
+	if strings.ContainsAny(rest, "?#") { // 禁查询串/锚点
+		return ""
+	}
+	if httpsOnly && prefix != "https://" {
+		return ""
+	}
+	return strings.TrimRight(u, "/")
+}
+
+// directHTTPRequired 直连模式 https 强制开关（config game.direct_http_only，nil=默认强制）
+func (s *Server) directHTTPRequired() bool {
+	return s.cfg.Game.DirectHTTPOnly == nil || *s.cfg.Game.DirectHTTPOnly
+}
+
 // gameRelPathClean 清洗清单相对路径（归口）：反斜杠转正斜杠、禁父目录引用/绝对路径/盘符/空白，
 // 返回清洗后的相对路径；非法返回空串
 func gameRelPathClean(p string) string {
@@ -549,8 +586,21 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	if g.Price < 0 {
 		g.Price = 0
 	}
-	if g.DownloadMethod != 0 && g.DownloadMethod != 1 && g.DownloadMethod != 2 {
-		g.DownloadMethod = 0 // 下载方式白名单：0=HTTP（默认）1=BT（服务端生成种子）2=BT（上传种子）
+	if g.DownloadMethod != 0 && g.DownloadMethod != 1 && g.DownloadMethod != 2 && g.DownloadMethod != 3 {
+		g.DownloadMethod = 0 // 下载方式白名单：0=HTTP（默认）1=BT（生成种子）2=BT（上传种子）3=HTTP·商户直连
+	}
+	if g.DownloadMethod == 3 {
+		g.DirectBaseURL = gameDirectBaseURLClean(req.DirectBaseURL, s.directHTTPRequired())
+		if g.DirectBaseURL == "" {
+			hint := "https://"
+			if !s.directHTTPRequired() {
+				hint = "http(s)://"
+			}
+			adminFail(w, http.StatusBadRequest, "直连 HTTP 模式必须填写有效的文件服务器根地址（"+hint+"...，禁空白/.. /查询串）")
+			return
+		}
+	} else {
+		g.DirectBaseURL = "" // 非直连方式清空直连地址（切换下载方式不残留旧值）
 	}
 	if g.SteamEmu != 0 && g.SteamEmu != 1 {
 		g.SteamEmu = 0 // 启动方式白名单：0=直接启动（默认）1=SmartSteamEmu 模拟器
@@ -712,6 +762,9 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	item["versions"] = verList
 	// 上传种子文件名（管理端表单回填/上架切换全量回写保真；服务端私有字段 json:"-" 不随 model 下发）
 	item["torrent_path"] = g.TorrentPath
+	// 直连外部源地址回填（安全加固·商户直连 dm=3）：管理端编辑表单回填数据源——缺失会导致
+	// 编辑保存时清空 base_url、直连失效（商店公开摘要 gameSummary 不下发，仅管理端详情私有回填）
+	item["direct_base_url"] = g.DirectBaseURL
 	// 联机 supernode 列表/联机方式回填（管理端表单编辑用；仅管理端详情下发，商店公开摘要 gameSummary 的
 	// net_mode 为建房页数据源非敏感，supernodes 仍仅管理端可见）
 	item["supernodes"] = g.Supernodes
@@ -771,8 +824,21 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	if u.Price < 0 {
 		u.Price = 0
 	}
-	if u.DownloadMethod != 0 && u.DownloadMethod != 1 && u.DownloadMethod != 2 {
-		u.DownloadMethod = 0
+	if u.DownloadMethod != 0 && u.DownloadMethod != 1 && u.DownloadMethod != 2 && u.DownloadMethod != 3 {
+		u.DownloadMethod = 0 // 下载方式白名单（同创建口径）：+3=HTTP·商户直连
+	}
+	if u.DownloadMethod == 3 {
+		u.DirectBaseURL = gameDirectBaseURLClean(req.DirectBaseURL, s.directHTTPRequired())
+		if u.DirectBaseURL == "" {
+			hint := "https://"
+			if !s.directHTTPRequired() {
+				hint = "http(s)://"
+			}
+			adminFail(w, http.StatusBadRequest, "直连 HTTP 模式必须填写有效的文件服务器根地址（"+hint+"...，禁空白/.. /查询串）")
+			return
+		}
+	} else {
+		u.DirectBaseURL = "" // 切换下载方式不残留旧直连地址
 	}
 	if u.SteamEmu != 0 && u.SteamEmu != 1 {
 		u.SteamEmu = 0 // 启动方式白名单（同创建口径）：0=直接启动 1=SmartSteamEmu 模拟器
@@ -859,6 +925,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"cover": u.Cover, "banner": u.Banner, "screenshots": u.Screenshots, "tags": u.Tags, "videos": vids,
 		"developer": u.Developer, "publisher": u.Publisher,
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
+		"direct_base_url": u.DirectBaseURL,
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"steam_emu": u.SteamEmu, "steam_app_id": u.SteamAppId,
 		"port_forwards": u.PortForwards,
@@ -1490,6 +1557,10 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		adminFail(w, http.StatusBadRequest, "BT 种子方式无需版本上架：换新种子（编辑游戏→上传新种子文件）即自动更新大小与版本日期")
 		return
 	}
+	// 直连模式（download_method=3，安全加固方案 docs/商户直连HTTP分发方案.md）：
+	// 文件本体不上传不落盘——仅登记 rel_path/size/sha256 清单，客户端按清单直连商户
+	// 服务器下载并逐文件 SHA256 校验。一期仅支持散文件清单（pack_type=0），不计商户配额
+	direct := g.DownloadMethod == 3
 	var req struct {
 		Version   string `json:"version"`
 		Changelog string `json:"changelog"`
@@ -1558,6 +1629,15 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 			adminFail(w, http.StatusBadRequest, "SHA256 格式非法: "+rp)
 			return
 		}
+		if direct {
+			// 直连模式：文件本体不上传（upload_id 必须为空），仅登记清单
+			if f.UploadID != "" {
+				adminFail(w, http.StatusBadRequest, "直连模式无需上传分片文件: "+rp+"（仅登记 rel_path/size/sha256）")
+				return
+			}
+			items = append(items, gameUploadItem{relPath: rp, size: f.Size, sha: sha})
+			continue
+		}
 		gameUploadSessions.Lock()
 		sess, ok := gameUploadSessions.m[f.UploadID]
 		gameUploadSessions.Unlock()
@@ -1575,6 +1655,10 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 
 	// 打包方式校验（ZIP 整包/分卷新增通道；0=散文件现状不校验，存量版本与历史调用不受影响）
 	packType := req.PackType
+	if direct && packType != 0 {
+		adminFail(w, http.StatusBadRequest, "直连模式仅支持散文件清单（pack_type=0）：版本更新请在商户服务器替换文件后登记新版本完整清单")
+		return
+	}
 	if packType < 0 || packType > 3 {
 		adminFail(w, http.StatusBadRequest, "打包方式非法（0=散文件清单 1=单 ZIP 2=分卷 ZIP 3=补丁包）")
 		return
@@ -1623,48 +1707,57 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	// 合并落位：目标根目录 games/<slug>/<version>/，逐文件校验（失败即整版回滚删目录）
 	// 商户存储总量配额·预检（快）：申报大小 + 已用 > 配额直接拒绝（大版本合并耗时分钟级，
 	// 提前拦截不浪费 IO；落位后还有实算复检兜底，见 gameMerchantQuotaCheck）
-	if g.OwnerUsername != "" {
-		var incoming int64
-		for _, it := range items {
-			incoming += it.size
-		}
-		if err := s.gameMerchantQuotaCheck(g.OwnerUsername, incoming); err != nil {
-			adminFail(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	verRoot := filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, version)
+	// 直连模式（dm=3）整段跳过：无文件落盘，仅按清单累加（不计配额——文件不在本机盘）
+	var verRoot string
 	var totalSize int64
 	hashLines := make([]string, 0, len(items))
-	for _, it := range items {
-		dst := filepath.Join(verRoot, filepath.FromSlash(it.relPath))
-		abs, err := filepath.Abs(dst)
-		if err != nil || !strings.HasPrefix(filepath.Clean(abs), filepath.Clean(verRoot)+string(os.PathSeparator)) {
-			s.gameVersionRollback(verRoot, items, true)
-			adminFail(w, http.StatusBadRequest, "非法文件路径: "+it.relPath)
-			return
+	if direct {
+		for _, it := range items {
+			totalSize += it.size
+			hashLines = append(hashLines, it.relPath+":"+strconv.FormatInt(it.size, 10)+":"+it.sha)
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
-			s.gameVersionRollback(verRoot, items, true)
-			adminFail(w, http.StatusInternalServerError, "目录创建失败")
-			return
+	} else {
+		if g.OwnerUsername != "" {
+			var incoming int64
+			for _, it := range items {
+				incoming += it.size
+			}
+			if err := s.gameMerchantQuotaCheck(g.OwnerUsername, incoming); err != nil {
+				adminFail(w, http.StatusBadRequest, err.Error())
+				return
+			}
 		}
-		if err := s.gameMergeChunks(s.gameTmpDir(it.uploadID), dst, it.size, it.sha); err != nil {
-			os.Remove(dst)
-			s.gameVersionRollback(verRoot, items, true)
-			adminFail(w, http.StatusBadRequest, "文件校验失败: "+it.relPath+"（"+err.Error()+"）")
-			return
+		verRoot = filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, version)
+		for _, it := range items {
+			dst := filepath.Join(verRoot, filepath.FromSlash(it.relPath))
+			abs, err := filepath.Abs(dst)
+			if err != nil || !strings.HasPrefix(filepath.Clean(abs), filepath.Clean(verRoot)+string(os.PathSeparator)) {
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusBadRequest, "非法文件路径: "+it.relPath)
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusInternalServerError, "目录创建失败")
+				return
+			}
+			if err := s.gameMergeChunks(s.gameTmpDir(it.uploadID), dst, it.size, it.sha); err != nil {
+				os.Remove(dst)
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusBadRequest, "文件校验失败: "+it.relPath+"（"+err.Error()+"）")
+				return
+			}
+			totalSize += it.size
+			hashLines = append(hashLines, it.relPath+":"+strconv.FormatInt(it.size, 10)+":"+it.sha)
 		}
-		totalSize += it.size
-		hashLines = append(hashLines, it.relPath+":"+strconv.FormatInt(it.size, 10)+":"+it.sha)
-	}
-	// 商户存储总量配额·复检（准）：落位实算 totalSize 与申报可能有差（防申报缩水绕过预检），
-	// 超限整版回滚（目录清理与预检拒绝同一语义，商户拿明确报错自助删旧版本腾额度）
-	if g.OwnerUsername != "" {
-		if err := s.gameMerchantQuotaCheck(g.OwnerUsername, totalSize); err != nil {
-			s.gameVersionRollback(verRoot, items, true)
-			adminFail(w, http.StatusBadRequest, err.Error())
-			return
+		// 商户存储总量配额·复检（准）：落位实算 totalSize 与申报可能有差（防申报缩水绕过预检），
+		// 超限整版回滚（目录清理与预检拒绝同一语义，商户拿明确报错自助删旧版本腾额度）
+		if g.OwnerUsername != "" {
+			if err := s.gameMerchantQuotaCheck(g.OwnerUsername, totalSize); err != nil {
+				s.gameVersionRollback(verRoot, items, true)
+				adminFail(w, http.StatusBadRequest, err.Error())
+				return
+			}
 		}
 	}
 
@@ -1841,8 +1934,9 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 
 	// 病毒扫描·同步模式（安全加固，clamav.sync=true）：登记前扫描本版本落位文件——检出即
 	// 整版回滚拒绝（病毒文件不落库存，商户拿明确报错）；clamd 异常 fail-open 放行记日志
-	// （扫描服务故障不阻断正常上架，人工审核兜底）。异步模式（默认）在登记成功后后台扫描
-	if g.OwnerUsername != "" && s.cfg.ClamAV.Enabled && s.cfg.ClamAV.Sync {
+	// （扫描服务故障不阻断正常上架，人工审核兜底）。异步模式（默认）在登记成功后后台扫描。
+	// 直连模式（dm=3）文件不在服务端，扫描不可达——跳过（审核强提示 + 客户端哈希校验兜底）
+	if g.OwnerUsername != "" && !direct && s.cfg.ClamAV.Enabled && s.cfg.ClamAV.Sync {
 		_, hits, serr := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second)
 		switch {
 		case serr != nil:
@@ -1862,14 +1956,18 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		SizeBytes: totalSize, FileCount: len(finalItems), Changelog: req.Changelog, MinReq: req.MinReq,
 		PackType: packType, PackSize: packSize, BaseVersion: baseVer, PatchDelete: patchDelJSON}
 	if err := store.DB.Create(&v).Error; err != nil {
-		s.gameVersionRollback(verRoot, items, false)
+		if !direct {
+			s.gameVersionRollback(verRoot, items, false)
+		}
 		adminFail(w, http.StatusInternalServerError, "版本登记失败")
 		return
 	}
 	fileRows := make([]model.GameFile, 0, len(finalItems))
 	for _, it := range finalItems {
 		storageRel := "games/" + g.Slug + "/" + version + "/" + it.relPath
-		if so, inherited := storageOverride[it.relPath]; inherited { // 补丁继承条目：物理文件在基底版本目录
+		if direct {
+			storageRel = "" // 直连模式：文件本体在商户服务器，无服务端存储路径
+		} else if so, inherited := storageOverride[it.relPath]; inherited { // 补丁继承条目：物理文件在基底版本目录
 			storageRel = so
 		}
 		fileRows = append(fileRows, model.GameFile{VersionID: v.ID, RelPath: it.relPath,
@@ -1877,25 +1975,30 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	}
 	if err := store.DB.CreateInBatches(&fileRows, 500).Error; err != nil {
 		store.DB.Delete(&v)
-		s.gameVersionRollback(verRoot, items, false)
+		if !direct {
+			s.gameVersionRollback(verRoot, items, false)
+		}
 		adminFail(w, http.StatusInternalServerError, "文件清单登记失败")
 		return
 	}
 	// 最新版冗余刷新（版本号取字符串最大者：语义上"上架的最新版"以本次登记为准）
 	store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": version, "size_bytes": totalSize})
-	// 清理全部临时分片目录与会话
-	for _, it := range items {
-		gameUploadSessions.Lock()
-		delete(gameUploadSessions.m, it.uploadID)
-		gameUploadSessions.Unlock()
-		os.RemoveAll(s.gameTmpDir(it.uploadID))
+	// 清理全部临时分片目录与会话（直连模式无分片会话，整段跳过）
+	if !direct {
+		for _, it := range items {
+			gameUploadSessions.Lock()
+			delete(gameUploadSessions.m, it.uploadID)
+			gameUploadSessions.Unlock()
+			os.RemoveAll(s.gameTmpDir(it.uploadID))
+		}
 	}
 	logger.Info("游戏版本上架: %s (%s) v%s, 文件 %d 个, 共 %d 字节, 操作人=%s",
 		g.Name, g.Slug, version, len(items), totalSize, operator)
 	// 病毒扫描·异步模式（安全加固，默认）：仅商户名下游戏 + clamav.enabled 时异步逐文件扫描
 	// 本版本落位文件，不阻塞上架响应（大包扫描分钟级）；检出病毒自动驳回（audit=3 + remark
-	// 携带签名），clamd 不可达 fail-open 仅记日志（人工审核兜底不变）。同步模式见上方登记前拦截
-	if g.OwnerUsername != "" && s.cfg.ClamAV.Enabled && !s.cfg.ClamAV.Sync {
+	// 携带签名），clamd 不可达 fail-open 仅记日志（人工审核兜底不变）。同步模式见上方登记前拦截。
+	// 直连模式（dm=3）文件不在服务端，扫描不可达——跳过（同上兜底策略）
+	if g.OwnerUsername != "" && !direct && s.cfg.ClamAV.Enabled && !s.cfg.ClamAV.Sync {
 		go clamScanGameVersionAsync(g.ID, g.Name, g.Slug, version, verRoot)
 	}
 	adminJSON(w, map[string]interface{}{"version_id": v.ID, "version": version,
@@ -1904,13 +2007,15 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 }
 
 // merchantQuotaUsed 商户存储配额占用口径：名下全部游戏全部版本 size_bytes 之和
-// （官方游戏 OwnerUsername 为空天然不参与；空库/无版本 COALESCE 兜底 0）
+// （官方游戏 OwnerUsername 为空天然不参与；空库/无版本 COALESCE 兜底 0）。
+// 排除直连游戏（download_method=3，方案 D2：其版本文件不在平台磁盘，不占配额——
+// 否则商户切直连后配额占用虚高，进度条与实际平台磁盘占用脱节）
 func merchantQuotaUsed(owner string) int64 {
 	var used int64
 	store.DB.Model(&model.GameVersion{}).
 		Select("COALESCE(SUM(im_game_version.size_bytes), 0)").
 		Joins("JOIN im_game ON im_game.id = im_game_version.game_id").
-		Where("im_game.owner_username = ?", owner).
+		Where("im_game.owner_username = ? AND im_game.download_method <> 3", owner).
 		Scan(&used)
 	return used
 }

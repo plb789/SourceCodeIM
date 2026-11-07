@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1139,19 +1140,31 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 		return nil, errVersionNotFound
 	}
 	list := make([]map[string]interface{}, 0, len(files))
+	// 下载方式=3（商户直连 HTTP）：文件本体在商户服务器，服务端仅持清单——
+	// 逐文件 url = 商户根地址 + QueryEscape(rel_path)；完整性由清单 SHA256（服务端持权）
+	// 在客户端逐文件校验兜底，商户无法投毒（篡改任意文件即校验失败拒装）
+	directBase := ""
+	if g.DownloadMethod == 3 {
+		directBase = strings.TrimRight(g.DirectBaseURL, "/")
+	}
 	for _, f := range files {
+		fileURL := "/api/game/file/" + strconv.FormatUint(uint64(f.ID), 10)
+		if directBase != "" {
+			fileURL = directBase + "/" + url.QueryEscape(f.RelPath)
+		}
 		list = append(list, map[string]interface{}{
 			"id":       f.ID,
 			"rel_path": f.RelPath,
 			"size":     f.SizeBytes,
 			"sha256":   f.SHA256,
-			"url":      "/api/game/file/" + strconv.FormatUint(uint64(f.ID), 10),
+			"url":      fileURL,
 		})
 	}
 	return map[string]interface{}{
 		"game_id": g.ID, "slug": g.Slug, "name": g.Name,
 		"version": v.Version, "manifest_hash": v.ManifestHash,
 		"size_bytes": v.SizeBytes, "file_count": v.FileCount,
+		"download_method": g.DownloadMethod,
 		// 打包方式（新增字段，老客户端 JSON 解析忽略未知字段不受影响）：
 		// 0=散文件逐个下载（现状） 1=单 ZIP（下载后客户端解压） 2=分卷 ZIP（客户端 7z 分卷解压）
 		// 3=补丁包（服务端已解包合成完整散文件清单，客户端按散文件语义走——dedup 硬链接天然增量）
