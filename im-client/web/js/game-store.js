@@ -2482,6 +2482,8 @@
         return T('游戏 #') + (t.gameId || '?');
     }
 
+    var dlRowMap = {}; // taskId → 已渲染行（下载管理页增量更新：防进度帧高频整列重建导致暂停/取消按钮闪烁）
+
     function buildTaskRow(t) {
         var g = state.games[t.gameId] || (state.lib[t.gameId] && state.lib[t.gameId].game) || null;
         var row = el('div', 'gs-task');
@@ -2491,25 +2493,49 @@
         var head = el('div', 'gs-task-head');
         head.appendChild(el('div', 'gs-task-name', taskName(t)));
         if (t.via === 'bt') head.appendChild(el('div', 'gs-task-via', 'BT')); // 下载通道标识
-        var stText = TASK_STATE_TEXT[t.state] || t.state || '—';
-        // ZIP 打包版本解压阶段（state 仍为 downloading，phase='extract' 由主进程下载器标记）：
-        // 状态文案切"解压中"，进度条按解压字节推进（total 已被主进程换算为解压后大小）
-        if (t.state === 'downloading' && t.phase === 'extract') stText = T('解压中');
-        // BT 完成即转做种（最长 12h，任务留在表内期间引擎持续 announce）：状态显示"做种中"，
-        // 上传速率数字实时展示（随 peer 波动归零/恢复，状态文本不随流量抖动切换）
-        if (t.state === 'done' && t.via === 'bt') stText = T('做种中');
-        head.appendChild(el('div', 'gs-task-state' + (t.state === 'done' || t.state === 'error' ? ' gray' : ''), stText));
+        var stEl = el('div', 'gs-task-state', '');
+        head.appendChild(stEl);
         main.appendChild(head);
-        if (t.fileRelPath) main.appendChild(el('div', 'gs-task-file', t.fileRelPath));
+        var fileEl = el('div', 'gs-task-file', '');
+        fileEl.style.display = 'none';
+        main.appendChild(fileEl);
 
-        var pct = t.total > 0 ? Math.min(100, (t.received || 0) / t.total * 100) : 0;
         var track = el('div', 'gs-progress');
         var fill = el('div', 'gs-progress-fill');
-        fill.style.width = pct.toFixed(1) + '%';
         track.appendChild(fill);
         main.appendChild(track);
 
         var meta = el('div', 'gs-task-meta');
+        main.appendChild(meta);
+        var acts = el('div', 'gs-task-actions');
+        main.appendChild(acts);
+        body.appendChild(main);
+        row.appendChild(body);
+        // 行内动态区引用（updateTaskRow 原地刷新用）：进度条/状态/当前文件/meta/按钮行
+        row._fill = fill; row._stEl = stEl; row._fileEl = fileEl; row._meta = meta; row._acts = acts; row._sig = '';
+        updateTaskRow(row, t);
+        return row;
+    }
+
+    // 任务行原地刷新：进度条/百分比/meta 每帧更新（纯文本无交互态，不产生视觉闪烁）；
+    // 暂停/取消/继续按钮行走签名守卫（taskId|state|via 变化才重建）——与库页 syncLibGamePage
+    // 修复同款（原实现每帧 innerHTML='' 全量重建整行，按钮每 ~500ms 销毁重建一次导致闪烁/颤抖）
+    function updateTaskRow(row, t) {
+        var stText = TASK_STATE_TEXT[t.state] || t.state || '—';
+        // ZIP 打包版本解压阶段（state 仍为 downloading，phase='extract' 由主进程下载器标记）
+        if (t.state === 'downloading' && t.phase === 'extract') stText = T('解压中');
+        // BT 完成即转做种（最长 12h）：状态显示"做种中"，上传速率数字实时展示
+        if (t.state === 'done' && t.via === 'bt') stText = T('做种中');
+        row._stEl.textContent = stText;
+        row._stEl.className = 'gs-task-state' + (t.state === 'done' || t.state === 'error' ? ' gray' : '');
+        if (t.fileRelPath) { row._fileEl.textContent = t.fileRelPath; row._fileEl.style.display = ''; }
+        else row._fileEl.style.display = 'none';
+
+        var pct = t.total > 0 ? Math.min(100, (t.received || 0) / t.total * 100) : 0;
+        row._fill.style.width = pct.toFixed(1) + '%';
+
+        var meta = row._meta;
+        meta.innerHTML = '';
         meta.appendChild(el('span', '', pct.toFixed(1) + '%'));
         // 显示实际网络下载量与总量；去重复用文件不计入下载量；完成态显示总量以匹配 100% 进度条
         var netRecv = (typeof t.netReceived === 'number') ? t.netReceived : t.received;
@@ -2518,8 +2544,7 @@
         if (t.via === 'bt') {
             if (t.state !== 'done') meta.appendChild(el('span', '', T('下载 ') + fmtSpeed(t.speed)));
             meta.appendChild(el('span', '', T('上传 ') + fmtSpeed(t.upSpeed || 0)));
-            // 阶段二百九十八：BT peer 数量（引擎通过 progress 帧 conn/seeds/totalSeeds/totalPeers 字段上报）
-            // 连接中/下载中时展示，让用户知道是 0 peer（没人做种）还是有 peer 但没速度
+            // BT peer 数量（引擎通过 progress 帧 conn/seeds/totalSeeds/totalPeers 字段上报）
             if (t.state === 'connecting' || t.state === 'downloading' || t.state === 'queued' || t.state === 'metainfo') {
                 var peerInfo = T('Peer ') + (t.conn || 0);
                 if (typeof t.seeds === 'number' && t.seeds > 0) peerInfo += T(' (种子 ') + t.seeds + ')';
@@ -2535,30 +2560,30 @@
         }
         var remainBytes = Math.max(0, (t.total || 0) - netRecv);
         meta.appendChild(el('span', '', T('剩余 ') + (t.speed > 0 && t.total > 0 ? fmtEta(remainBytes / t.speed) : '—')));
-        // 阶段二百九十八：错误信息分层展示
-        // ERROR 态：优先显示显式 error（来自引擎 error 事件或 idle 检测），没有则回退到 engineError（progress 帧里的）
-        // 非 ERROR 态：如有 engineError（临时错误如 tracker 超时）也展示，帮助用户理解"为什么速度为 0"
+        // 错误信息分层展示：ERROR 态优先显式 error，非 ERROR 态展示临时 engineError
         if (t.state === 'error') {
             var finalErr = t.error || t.engineError || '';
             if (finalErr) meta.appendChild(el('span', '', T('原因：') + finalErr));
         } else if (t.engineError) {
             meta.appendChild(el('span', '', T('提示：') + t.engineError));
         }
-        main.appendChild(meta);
 
-        if (IN_ELECTRON && t.state !== 'done' && t.state !== 'verifying') {
-            var acts = el('div', 'gs-task-actions');
-            if (t.state === 'downloading' || t.state === 'connecting') {
-                acts.appendChild(mkBtn(T('暂停'), '', function () { taskAction(t.taskId, 'pause'); }));
-            } else { // paused / error → 继续
-                acts.appendChild(mkBtn(T('继续'), 'primary', function () { taskAction(t.taskId, 'resume'); }));
+        // 按钮行：签名守卫（仅任务/状态/通道变化才重建；meta 每帧刷新不触碰按钮 DOM）
+        var showActs = IN_ELECTRON && t.state !== 'done' && t.state !== 'verifying';
+        var sig = showActs ? (t.taskId + '|' + t.state + '|' + t.via) : '';
+        if (row._sig !== sig) {
+            row._acts.innerHTML = '';
+            if (showActs) {
+                if (t.state === 'downloading' || t.state === 'connecting') {
+                    row._acts.appendChild(mkBtn(T('暂停'), '', function () { taskAction(t.taskId, 'pause'); }));
+                } else { // paused / error → 继续
+                    row._acts.appendChild(mkBtn(T('继续'), 'primary', function () { taskAction(t.taskId, 'resume'); }));
+                }
+                row._acts.appendChild(mkBtn(T('取消'), '', function () { taskAction(t.taskId, 'cancel'); }));
             }
-            acts.appendChild(mkBtn(T('取消'), '', function () { taskAction(t.taskId, 'cancel'); }));
-            main.appendChild(acts);
+            row._sig = sig;
         }
-        body.appendChild(main);
-        row.appendChild(body);
-        return row;
+        row._acts.style.display = showActs ? '' : 'none';
     }
 
     // ==================== 下载吞吐曲线（Steam 同款：磁盘写入面积 + 网络下载线，60s 滚动窗口） ====================
@@ -2717,22 +2742,41 @@
     function renderDownloads() {
         renderDlGraph(); // 吞吐图卡显隐/重绘（无任务自动隐藏，页签隐藏时 canvas 尺寸 0 内部跳绘）
         var rows = $('gsDlRows');
-        rows.innerHTML = '';
         var empty = $('gsDlEmpty');
         var hint = $('gsDlHint');
         var ids = Object.keys(state.tasks);
+        // 行缓存增量维护：消失任务移除行；存量任务原地刷新（进度/按钮签名守卫，防整列重建闪烁）
+        for (var staleId in dlRowMap) {
+            if (ids.indexOf(staleId) < 0) {
+                if (dlRowMap[staleId].parentNode === rows) rows.removeChild(dlRowMap[staleId]);
+                delete dlRowMap[staleId];
+            }
+        }
         if (!IN_ELECTRON) {
             // 浏览器只读：下载由 PC 客户端主进程负责
+            rows.innerHTML = '';
+            dlRowMap = {};
             hint.textContent = T('请在 PC 客户端中查看下载管理');
             hint.classList.remove('hidden');
             empty.classList.add('hidden');
         } else if (!ids.length) {
+            rows.innerHTML = '';
+            dlRowMap = {};
             hint.classList.add('hidden');
             empty.classList.remove('hidden');
         } else {
             hint.classList.add('hidden');
             empty.classList.add('hidden');
-            ids.forEach(function (id) { rows.appendChild(buildTaskRow(state.tasks[id])); });
+            ids.forEach(function (id) {
+                var row = dlRowMap[id];
+                if (!row) {
+                    row = buildTaskRow(state.tasks[id]);
+                    dlRowMap[id] = row;
+                    rows.appendChild(row);
+                } else {
+                    updateTaskRow(row, state.tasks[id]);
+                }
+            });
         }
         osbTick($('gsDlList'));
     }
