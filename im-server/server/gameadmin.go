@@ -2018,7 +2018,7 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	// （扫描服务故障不阻断正常上架，人工审核兜底）。异步模式（默认）在登记成功后后台扫描。
 	// 直连模式（dm=3）文件不在服务端，扫描不可达——跳过（审核强提示 + 客户端哈希校验兜底）
 	if g.OwnerUsername != "" && !direct && s.cfg.ClamAV.Enabled && s.cfg.ClamAV.Sync {
-		_, hits, serr := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second)
+		_, hits, serr := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second, nil)
 		switch {
 		case serr != nil:
 			logger.Warn("病毒扫描服务异常（fail-open 放行）: 游戏=%s(%s) v%s, %v", g.Name, g.Slug, version, serr)

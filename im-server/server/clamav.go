@@ -76,7 +76,11 @@ func clamScanFile(conn net.Conn, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	line := strings.TrimSpace(string(resp))
+	// clamd INSTREAM 响应可能带 "stream:" 前缀（不同版本有/无冒号后空格均可能：
+	// "stream:OK" / "stream: OK" / 老版本裸 "OK"）。先去前缀再 TrimSpace，统一成
+	// 裸 "OK" / "<签名> FOUND" / "...ERROR" 三种格式做判定。
+	line := strings.TrimPrefix(strings.TrimSpace(string(resp)), "stream:")
+	line = strings.TrimSpace(line)
 	switch {
 	case line == "OK":
 		return "", nil
@@ -96,9 +100,10 @@ type clamHit struct {
 }
 
 // clamScanDir 逐个扫描目录下全部文件（WalkDir 顺序；复用同一 addr/timeout 配置）。
+// onFile 每扫完一个文件触发（含 clamd 异常跳过的文件也会回调），供上层实时反馈进度。
 // 返回扫描文件数与检出清单；clamd 不可达/拨号失败返回错误（fail-open 决策归调用方——
 // 上架同步/异步路径与存量回溯均为 fail-open 语义）；单文件扫描异常仅记日志跳过不中断
-func clamScanDir(addr, dir string, timeout time.Duration) (scanned int, hits []clamHit, err error) {
+func clamScanDir(addr, dir string, timeout time.Duration, onFile func(path string)) (scanned int, hits []clamHit, err error) {
 	err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, werr error) error {
 		if werr != nil || entry.IsDir() {
 			return nil // 单条目失败不中断整体扫描
@@ -110,6 +115,9 @@ func clamScanDir(addr, dir string, timeout time.Duration) (scanned int, hits []c
 		conn.SetDeadline(time.Now().Add(timeout))
 		sig, serr := clamScanFile(conn, path)
 		conn.Close()
+		if onFile != nil {
+			onFile(path)
+		}
 		if serr != nil {
 			logger.Warn("病毒扫描异常跳过: %s, %v", path, serr)
 			return nil
@@ -131,7 +139,7 @@ func clamScanGameVersionAsync(gameID uint, gameName, slug, version, verRoot stri
 		return
 	}
 	start := time.Now()
-	scanned, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second)
+	scanned, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second, nil)
 	if err != nil {
 		// fail-open：clamd 不可达不驳回不删档，仅记日志（人工审核兜底）
 		logger.Warn("病毒扫描跳过（clamd 不可达 %s）: 游戏=%s(%s) v%s, %v", s.cfg.ClamAV.Addr, gameName, slug, version, err)

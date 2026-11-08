@@ -46,6 +46,12 @@ type clamRescanJob struct {
 	FilesScanned    int
 	Hits            []clamRescanHit
 	Err             string // 任务级致命错误（如配置缺失）；版本级异常走日志不置位
+	// 实时进度反馈（每扫完一个文件更新，status 接口返回供前端轮询展示）
+	CurrentGameSlug  string // 当前正在扫描的游戏 slug
+	CurrentVersion   string // 当前正在扫描的版本
+	CurrentFile      string // 最近一个完成扫描的文件路径（绝对路径）
+	CurrentFileRel   string // 同上，版本目录内相对路径（正斜杠）
+	LastFileAt       time.Time
 }
 
 // clamRescan 包级单例任务态（单实例部署；集群模式每实例独立任务态，与告警/指标同水位）
@@ -89,6 +95,11 @@ func (s *Server) handleClamAVRescan(w http.ResponseWriter, r *http.Request) {
 	clamRescan.FilesScanned = 0
 	clamRescan.Hits = nil
 	clamRescan.Err = ""
+	clamRescan.CurrentGameSlug = ""
+	clamRescan.CurrentVersion = ""
+	clamRescan.CurrentFile = ""
+	clamRescan.CurrentFileRel = ""
+	clamRescan.LastFileAt = time.Time{}
 	clamRescan.Mu.Unlock()
 
 	go s.clamRescanRun(req.GameID)
@@ -103,19 +114,26 @@ func (s *Server) handleClamAVRescanStatus(w http.ResponseWriter, r *http.Request
 	hits := make([]clamRescanHit, len(clamRescan.Hits))
 	copy(hits, clamRescan.Hits)
 	resp := map[string]interface{}{
-		"running":          clamRescan.Running,
-		"game_id":          clamRescan.GameID,
-		"versions_total":   clamRescan.VersionsTotal,
-		"versions_scanned": clamRescan.VersionsScanned,
-		"files_scanned":    clamRescan.FilesScanned,
-		"hits":             hits,
-		"err":              clamRescan.Err,
+		"running":            clamRescan.Running,
+		"game_id":            clamRescan.GameID,
+		"versions_total":     clamRescan.VersionsTotal,
+		"versions_scanned":  clamRescan.VersionsScanned,
+		"files_scanned":      clamRescan.FilesScanned,
+		"hits":               hits,
+		"err":                clamRescan.Err,
+		"current_game_slug":  clamRescan.CurrentGameSlug,
+		"current_version":    clamRescan.CurrentVersion,
+		"current_file":       clamRescan.CurrentFile,
+		"current_file_rel":   clamRescan.CurrentFileRel,
 	}
 	if !clamRescan.StartedAt.IsZero() {
 		resp["started_at"] = clamRescan.StartedAt.Format("2006-01-02 15:04:05")
 	}
 	if !clamRescan.FinishedAt.IsZero() {
 		resp["finished_at"] = clamRescan.FinishedAt.Format("2006-01-02 15:04:05")
+	}
+	if !clamRescan.LastFileAt.IsZero() {
+		resp["last_file_at"] = clamRescan.LastFileAt.Format("2006-01-02 15:04:05")
 	}
 	adminJSON(w, resp)
 }
@@ -158,12 +176,30 @@ func (s *Server) clamRescanRun(gameID uint) {
 
 	timeout := time.Duration(s.cfg.ClamAV.TimeoutSec) * time.Second
 	rejected := map[uint]bool{} // 同一游戏多次命中只驳回一次（后续命中仍入明细）
+	// 节流：每个版本扫完让磁盘 IO 喘口气（100ms），避免大包连续读盘影响玩家下载
+	const perVersionThrottle = 100 * time.Millisecond
 	for _, row := range rows {
 		verRoot := filepath.Join(s.cfg.Game.LocalDir, "games", row.Slug, row.Version)
 		if st, err := os.Stat(verRoot); err != nil || !st.IsDir() {
 			continue // 落位目录不存在（历史数据被清理/BT 种子方式无本地版本）跳过
 		}
-		scanned, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, timeout)
+		// 标记当前正在扫描的游戏+版本（供前端轮询展示）
+		clamRescan.Mu.Lock()
+		clamRescan.CurrentGameSlug = row.Slug
+		clamRescan.CurrentVersion = row.Version
+		clamRescan.Mu.Unlock()
+		onFile := func(path string) {
+			rel, rerr := filepath.Rel(verRoot, path)
+			if rerr != nil {
+				rel = filepath.Base(path)
+			}
+			clamRescan.Mu.Lock()
+			clamRescan.CurrentFile = path
+			clamRescan.CurrentFileRel = filepath.ToSlash(rel)
+			clamRescan.LastFileAt = time.Now()
+			clamRescan.Mu.Unlock()
+		}
+		scanned, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, timeout, onFile)
 		clamRescan.Mu.Lock()
 		clamRescan.VersionsScanned++
 		clamRescan.FilesScanned += scanned
@@ -201,6 +237,7 @@ func (s *Server) clamRescanRun(gameID uint) {
 				logger.Error("存量回溯自动驳回: 游戏=%s(%s), 检出 %d 处, 首个=%s（%s）", row.GameName, row.Slug, len(hits), filepath.Base(first.Path), first.Sig)
 			}
 		}
+		time.Sleep(perVersionThrottle)
 	}
 }
 

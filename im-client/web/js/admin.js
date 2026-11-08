@@ -8539,25 +8539,74 @@
             }
             var j = result.data || {};
             clamavSetRunning(!!j.running);
-            var lines = [];
-            lines.push(j.running ? ('扫描进行中（启动于 ' + (j.started_at || '-') + '）')
-                : (j.started_at ? ('上次任务已完成（结束于 ' + (j.finished_at || '-') + '）') : '尚未执行过回溯扫描'));
-            lines.push('版本进度：' + (j.versions_scanned || 0) + ' / ' + (j.versions_total || 0)
-                + '，已扫文件 ' + (j.files_scanned || 0) + ' 个，检出 ' + ((j.hits || []).length) + ' 处'
-                + (j.game_id > 0 ? ('（范围：' + clamavScopeGameName(j.game_id) + '）') : '（范围：全部商户游戏）'));
-            if (j.err) lines.push('任务异常：' + j.err);
-            (j.hits || []).forEach(function (h) {
-                lines.push('检出：' + h.slug + ' v' + h.version + ' ← ' + h.rel_path + '（' + h.sig + '）');
-            });
             var box = $('clamav-result');
             box.style.display = '';
-            box.textContent = lines.join('\n');
+
+            // 标题行（语义色用固定色，其余走主题变量）
+            var headEl = $('clamav-head');
             if (j.running) {
-                if (!clamavPollTimer) clamavPollTimer = setTimeout(function () { clamavPollTimer = null; clamavStatusLoad(true); }, 5000);
+                headEl.textContent = '扫描进行中（启动于 ' + (j.started_at || '-') + '）';
+                headEl.style.color = 'var(--primary)';
+            } else if (j.started_at) {
+                headEl.textContent = '上次任务已完成（结束于 ' + (j.finished_at || '-') + '）';
+                headEl.style.color = ((j.hits || []).length > 0) ? '#e74c3c' : '#27ae60';
+            } else {
+                headEl.textContent = '尚未执行过回溯扫描';
+                headEl.style.color = 'var(--text-light)';
+            }
+
+            // 进度数字
+            var verTotal = j.versions_total || 0;
+            var verDone = j.versions_scanned || 0;
+            $('clamav-pver').textContent = verDone + ' / ' + verTotal;
+            $('clamav-pfiles').textContent = j.files_scanned || 0;
+            var hitsLen = (j.hits || []).length;
+            $('clamav-phits').textContent = hitsLen;
+
+            // 进度条（版本级百分比）
+            var pct = verTotal > 0 ? Math.round(verDone * 100 / verTotal) : 0;
+            $('clamav-bar').style.width = pct + '%';
+
+            // 当前文件（带相对路径和游戏信息）
+            var curEl = $('clamav-current');
+            if (j.running) {
+                var curText = '正在扫描：';
+                if (j.current_game_slug) curText += '「' + j.current_game_slug + '」';
+                if (j.current_version) curText += ' v' + j.current_version;
+                if (j.current_file_rel) curText += ' → ' + j.current_file_rel;
+                else curText += ' …';
+                curEl.innerHTML = curText + ' <span style="color:var(--text-light);">' + (j.last_file_at || '') + '</span>';
+            } else if (j.started_at) {
+                curEl.textContent = '扫描完成，共 ' + (j.files_scanned || 0) + ' 个文件，检出 ' + hitsLen + ' 处';
+            } else {
+                curEl.textContent = '点击「开始重扫」启动任务';
+            }
+            if (j.err) curEl.innerHTML += '<br><span style="color:#e74c3c;">任务异常：' + j.err + '</span>';
+
+            // 检出列表（病毒签名 + 相对路径 + 游戏）
+            var hitsBox = $('clamav-hitslist');
+            if (hitsLen === 0) {
+                hitsBox.innerHTML = (j.started_at && !j.running)
+                    ? '<div style="padding:8px 12px;color:#27ae60;font-size:12px;">✓ 全部文件干净，未检出病毒</div>'
+                    : '';
+            } else {
+                hitsBox.innerHTML = j.hits.map(function (h) {
+                    return '<div style="padding:6px 12px;border-bottom:1px solid var(--border);font-size:12px;">'
+                        + '<div><span style="color:#e74c3c;font-weight:600;">⚠ ' + h.sig + '</span></div>'
+                        + '<div style="color:var(--text);margin-top:2px;">' + h.slug + ' v' + h.version
+                        + ' → <code style="background:var(--header-bg);padding:1px 4px;border-radius:3px;color:var(--text);">' + h.rel_path + '</code></div>'
+                        + '</div>';
+                }).join('');
+                hitsBox.scrollTop = hitsBox.scrollHeight;
+            }
+
+            // 轮询
+            if (j.running) {
+                if (!clamavPollTimer) clamavPollTimer = setTimeout(function () { clamavPollTimer = null; clamavStatusLoad(true); }, 3000);
             } else if (clamavPollTimer) {
                 clearTimeout(clamavPollTimer);
                 clamavPollTimer = null;
-                if (!silent && j.started_at) showToast('存量回溯扫描已完成');
+                if (!silent && j.started_at) showToast('存量回溯扫描已完成（检出 ' + hitsLen + ' 处）');
             }
         });
     }

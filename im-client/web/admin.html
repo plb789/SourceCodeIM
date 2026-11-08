@@ -1695,7 +1695,17 @@
                     <button id="clamav-status" class="admin-btn small" type="button">刷新进度</button>
                     <span id="clamav-tip" class="admin-field-hint" style="flex:1;">对商户已上架版本做 ClamAV 病毒回溯扫描（检出自动驳回该游戏，明细见下方输出）；范围可选全部或单游戏；需服务端 clamav.enabled=true 并部署 clamd。</span>
                 </div>
-                <div id="clamav-result" class="admin-field-hint" style="display:none;white-space:pre-wrap;word-break:break-all;margin-bottom:10px;"></div>
+                <div id="clamav-result" style="display:none;margin-bottom:12px;border:1px solid var(--border);border-radius:8px;background:var(--panel-bg);overflow:hidden;">
+                    <div style="padding:8px 12px;background:var(--header-bg);font-weight:600;font-size:13px;color:var(--text);" id="clamav-head">—</div>
+                    <div style="padding:8px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);">
+                        版本进度：<span id="clamav-pver">0/0</span> &nbsp;|&nbsp; 已扫文件：<span id="clamav-pfiles">0</span> &nbsp;|&nbsp; 检出：<span id="clamav-phits" style="color:#e74c3c;font-weight:600;">0</span>
+                        <div style="margin-top:6px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+                            <div id="clamav-bar" style="height:100%;background:var(--primary);border-radius:3px;width:0%;transition:width .3s;"></div>
+                        </div>
+                    </div>
+                    <div style="padding:8px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);" id="clamav-current">等待开始…</div>
+                    <div style="max-height:240px;overflow-y:auto;" id="clamav-hitslist"></div>
+                </div>
                 <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">
                     <select id="gaudit-f-status" class="admin-input gm-num-input">
                         <option value="">全部状态</option>
