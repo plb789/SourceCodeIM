@@ -130,7 +130,20 @@
 
     // ==================== 视图切换 / 启动 ====================
     var profile = null;
+    var gamesRefreshTimer = null;
+    var GAMES_REFRESH_MS = 10000; // "我的游戏"列表定时刷新（兜底轮询：WS 没接时每 10s 自动拉取最新审核状态）
+    function startGamesRefresh() {
+        stopGamesRefresh();
+        gamesRefreshTimer = setInterval(function () { loadGames(true); }, GAMES_REFRESH_MS);
+    }
+    function stopGamesRefresh() {
+        if (gamesRefreshTimer) {
+            clearInterval(gamesRefreshTimer);
+            gamesRefreshTimer = null;
+        }
+    }
     function showLogin() {
+        stopGamesRefresh();
         $('m-boot').classList.add('hidden'); // 启动骨架层归口隐藏（boot 无 token 分支直接 return，若不在此处隐藏会永久盖住登录页）
         $('m-main').classList.add('hidden');
         $('m-login').classList.remove('hidden');
@@ -152,8 +165,13 @@
         for (var i = 0; i < items.length; i++) {
             items[i].classList.toggle('active', items[i].getAttribute('data-view') === v);
         }
-        if (v === 'games') loadGames();
-        if (v === 'stats') loadStats();
+        if (v === 'games') {
+            loadGames();
+            startGamesRefresh();
+        } else {
+            stopGamesRefresh();
+            if (v === 'stats') loadStats();
+        }
     }
     $('m-nav').addEventListener('click', function (e) {
         var btn = e.target.closest('.m-nav-item');
@@ -189,15 +207,20 @@
     var AUDIT_TEXT = { 0: ['off', '官方'], 1: ['pending', '待审核'], 2: ['ok', '已通过'], 3: ['rej', '已驳回'] };
     var STATUS_BADGE = { 0: ['on', '上架中'], 1: ['offshelf', '已下架'] };
 
-    function loadGames() {
+    var _gamesLoading = false;
+    function loadGames(silent) {
+        if (_gamesLoading) return; // 上一轮还没返回 → 跳过（防慢网并发积压）
+        _gamesLoading = true;
         var box = $('m-game-list');
-        box.innerHTML = '<div class="m-empty">加载中…</div>';
+        if (!silent) box.innerHTML = '<div class="m-empty">加载中…</div>';
         api('GET', '/api/merchant/games?page=1&size=100').then(function (res) {
+            _gamesLoading = false;
             var d = unwrap(res);
             games = d.list || [];
             renderGames();
         }).catch(function () {
-            box.innerHTML = '<div class="m-empty">加载失败</div>';
+            _gamesLoading = false;
+            if (!silent) box.innerHTML = '<div class="m-empty">加载失败</div>';
         });
         loadQuota();
     }

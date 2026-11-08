@@ -3,7 +3,7 @@ package server
 // ===== 商户独立后台·管理端增量（商户独立后台开发文档 §3.4，adminGuard 鉴权） =====
 //
 // 商户管理：建号（users.role=2 + im_merchant 行）/ 改显示名/分成比例 / 启停 / 重置密码
-// 游戏审核：待审核队列 + 通过（audit=2 且自动上架）/ 驳回（audit=3 + 必填理由）
+// 游戏审核：待审核队列 + 通过（audit=2，保持原上架状态，商户自主决定上架/下架）/ 驳回（audit=3 + 必填理由）
 
 import (
 	"fmt"
@@ -272,13 +272,14 @@ func (s *Server) handleAdminGameAuditAct(w http.ResponseWriter, r *http.Request)
 		updates := map[string]interface{}{
 			"audit_status": model.GameAuditApproved, "audit_remark": "",
 			"audit_time": &now, "audited_by": operator,
-			"status": 0, // 通过即上架（商户此前无从上架；玩家侧过滤墙随 audit=2 放行）
+			// 不再自动上架——商户自主决定上架/下架（审核通过后默认为下架，需商户主动点"申请上架"）
 		}
 		if err := store.DB.Model(&model.Game{}).Where("id = ?", g.ID).Updates(updates).Error; err != nil {
 			adminFail(w, http.StatusInternalServerError, "审核操作失败")
 			return
 		}
 		logger.Info("游戏审核通过: %s (%s), 商户=%s, 操作人=%s", g.Name, g.Slug, g.OwnerUsername, operator)
+		emitGameAuditChanged(s, g.OwnerUsername, g.ID, model.GameAuditApproved, "", g.Name)
 		adminJSON(w, map[string]interface{}{"ok": true, "audit_status": model.GameAuditApproved})
 	case "reject":
 		remark := strings.TrimSpace(req.Remark)
@@ -299,6 +300,7 @@ func (s *Server) handleAdminGameAuditAct(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		logger.Info("游戏审核驳回: %s (%s), 商户=%s, 理由=%s, 操作人=%s", g.Name, g.Slug, g.OwnerUsername, remark, operator)
+		emitGameAuditChanged(s, g.OwnerUsername, g.ID, model.GameAuditRejected, remark, g.Name)
 		adminJSON(w, map[string]interface{}{"ok": true, "audit_status": model.GameAuditRejected})
 	default:
 		adminFail(w, http.StatusBadRequest, fmt.Sprintf("未知审核动作: %s", req.Action))

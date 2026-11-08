@@ -8563,8 +8563,10 @@
             var hitsLen = (j.hits || []).length;
             $('clamav-phits').textContent = hitsLen;
 
-            // 进度条（版本级百分比）
-            var pct = verTotal > 0 ? Math.round(verDone * 100 / verTotal) : 0;
+            // 进度条：文件级百分比（更平滑，每扫一个文件都涨）
+            var filesTotal = j.files_total || 0;
+            var filesDone = j.files_scanned || 0;
+            var pct = filesTotal > 0 ? Math.round(filesDone * 100 / filesTotal) : 0;
             $('clamav-bar').style.width = pct + '%';
 
             // 当前文件（带相对路径和游戏信息）
@@ -8602,7 +8604,7 @@
 
             // 轮询
             if (j.running) {
-                if (!clamavPollTimer) clamavPollTimer = setTimeout(function () { clamavPollTimer = null; clamavStatusLoad(true); }, 3000);
+                if (!clamavPollTimer) clamavPollTimer = setTimeout(function () { clamavPollTimer = null; clamavStatusLoad(true); }, 1000);
             } else if (clamavPollTimer) {
                 clearTimeout(clamavPollTimer);
                 clamavPollTimer = null;

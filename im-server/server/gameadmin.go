@@ -1029,8 +1029,8 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	// 未变更（表单全量回写零影响）：
 	//   目标空 = 转官方：清审核字段回官方免审，玩家端即时恢复可见；
 	//   目标非空 = 转商户：目标必须是 users.role=2 商户账号（不存在/非商户整单拒绝并提示），
-	//   转移即回待审核——玩家侧过滤墙只放行 audit IN (0,2)，官方转商户后游戏即时从玩家端隐藏，
-	//   商户管理「游戏审核」通过后自动重新上架（商户后台按 owner 过滤，转移后立即可见可编辑）
+	//   转移即回待审核 + 强制下架——玩家侧过滤墙只放行 audit IN (0,2)，官方转商户后游戏即时从玩家端隐藏，
+	//   商户管理「游戏审核」通过后仍保持下架，商户自主点"申请上架"才上线（与新商户游戏语义一致）
 	ownTarget := strings.TrimSpace(u.OwnerUsername)
 	if req.OwnerTransfer && ownTarget != g.OwnerUsername {
 		if ownTarget == "" {
@@ -1054,6 +1054,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 			updates["audit_remark"] = ""
 			updates["audit_time"] = &nowOwn
 			updates["audited_by"] = ""
+			updates["status"] = 1 // 转商户后强制下架，商户审核通过后自主选择何时上架（与新商户游戏语义一致）
 			logger.Info("游戏归属转移: %s (%s), %s → %s, 操作人=%s", u.Name, g.Slug, g.OwnerUsername, ownTarget, adminUserFromCtx(r))
 		}
 	} else if g.OwnerUsername != "" {
@@ -2080,7 +2081,7 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	// 携带签名），clamd 不可达 fail-open 仅记日志（人工审核兜底不变）。同步模式见上方登记前拦截。
 	// 直连模式（dm=3）文件不在服务端，扫描不可达——跳过（同上兜底策略）
 	if g.OwnerUsername != "" && !direct && s.cfg.ClamAV.Enabled && !s.cfg.ClamAV.Sync {
-		go clamScanGameVersionAsync(g.ID, g.Name, g.Slug, version, verRoot)
+		go clamScanGameVersionAsync(g.ID, g.Name, g.Slug, version, verRoot, g.OwnerUsername)
 	}
 	adminJSON(w, map[string]interface{}{"version_id": v.ID, "version": version,
 		"file_count": len(items), "size_bytes": totalSize, "manifest_hash": manifestHash,

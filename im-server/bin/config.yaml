@@ -704,7 +704,7 @@ disk_monitor:
 # 后开启 enabled；病毒库由 clamd 侧 freshclam 自行更新
 # ============================================================
 clamav:
-  enabled: false                 # 总开关（默认关闭零开销；部署 clamd 后开启）
+  enabled: true                 # 总开关（默认关闭零开销；部署 clamd 后开启）
   addr: "127.0.0.1:3310"         # clamd TCP 地址（可异机部署）
   timeout_sec: 600               # 单文件扫描超时秒（大游戏包单文件可达数 GB，过小会误超时）
   # sync 同步扫描开关（默认 false=异步）：true 时商户版本登记前同步扫描——检出即整版回滚拒绝、

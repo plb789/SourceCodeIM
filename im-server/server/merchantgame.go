@@ -249,8 +249,8 @@ func (s *Server) handleMerchantGameList(w http.ResponseWriter, r *http.Request) 
 	adminJSON(w, map[string]interface{}{"list": list, "total": total, "page": page, "size": size})
 }
 
-// handleMerchantGameCreate 商户新增游戏（audit=1 待审核；status=0 预置上架——玩家侧过滤墙保证
-// 审核通过前不可见，管理员通过时无需再改状态）
+// handleMerchantGameCreate 商户新增游戏（audit=1 待审核；status=1 预置下架——
+// 审核通过后也保持下架，商户自主决定何时上架/下架；玩家侧过滤墙保证待审核态不可见）
 func (s *Server) handleMerchantGameCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
@@ -272,7 +272,7 @@ func (s *Server) handleMerchantGameCreate(w http.ResponseWriter, r *http.Request
 	}
 	g.OwnerUsername = merchantUserFromCtx(r)
 	g.AuditStatus = model.GameAuditPending
-	g.Status = 0
+	g.Status = 1 // 预置下架：审核通过后也保持下架，商户自主点"申请上架"才上线
 	g.GameSecret = gameRandomSecret()
 	g.ID = 0
 	if err := store.DB.Create(&g).Error; err != nil {

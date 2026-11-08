@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -76,10 +77,11 @@ func clamScanFile(conn net.Conn, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// clamd INSTREAM 响应可能带 "stream:" 前缀（不同版本有/无冒号后空格均可能：
-	// "stream:OK" / "stream: OK" / 老版本裸 "OK"）。先去前缀再 TrimSpace，统一成
-	// 裸 "OK" / "<签名> FOUND" / "...ERROR" 三种格式做判定。
-	line := strings.TrimPrefix(strings.TrimSpace(string(resp)), "stream:")
+	// clamd INSTREAM 响应可能带 "stream:" 前缀 + 末尾可能含 \x00 空字节（Windows 版 clamd 会加），
+	// 兼容 "stream:OK" / "stream: OK" / 老版本裸 "OK" 四种格式。
+	// 先清 \x00 空字节，再去前缀，再 TrimSpace，统一成裸 "OK" / "<签名> FOUND" / "...ERROR" 做判定。
+	line := strings.ReplaceAll(string(resp), "\x00", "")
+	line = strings.TrimPrefix(strings.TrimSpace(line), "stream:")
 	line = strings.TrimSpace(line)
 	switch {
 	case line == "OK":
@@ -108,16 +110,20 @@ func clamScanDir(addr, dir string, timeout time.Duration, onFile func(path strin
 		if werr != nil || entry.IsDir() {
 			return nil // 单条目失败不中断整体扫描
 		}
+		// 无论 clamd 连接是否成功，都算"扫过了"（供 onFile 回调展示进度）
+		if onFile != nil {
+			onFile(path)
+		}
 		conn, derr := net.DialTimeout("tcp", addr, timeout)
 		if derr != nil {
-			return derr // clamd 不可达：中止并上抛（调用方 fail-open）
+			// clamd 连接失败（比如 MaxConnections 被打满）：记日志跳过这个文件，
+			// 继续扫下一个。不再 return derr 中止整个 WalkDir。
+			logger.Warn("病毒扫描连接失败跳过: %s, %v", path, derr)
+			return nil
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 		sig, serr := clamScanFile(conn, path)
 		conn.Close()
-		if onFile != nil {
-			onFile(path)
-		}
 		if serr != nil {
 			logger.Warn("病毒扫描异常跳过: %s, %v", path, serr)
 			return nil
@@ -132,8 +138,8 @@ func clamScanDir(addr, dir string, timeout time.Duration, onFile func(path strin
 }
 
 // clamScanGameVersionAsync 商户版本病毒扫描异步入口（goroutine 内执行）：
-// 逐个扫描本版本落位文件，检出即自动驳回游戏（audit_status=3），全干净记 info 日志
-func clamScanGameVersionAsync(gameID uint, gameName, slug, version, verRoot string) {
+// 逐个扫描本版本落位文件，检出即自动驳回游戏（audit_status=3）+ 推 WS 通知商户，全干净记 info 日志
+func clamScanGameVersionAsync(gameID uint, gameName, slug, version, verRoot, owner string) {
 	s := defaultServer()
 	if s == nil {
 		return
@@ -161,6 +167,10 @@ func clamScanGameVersionAsync(gameID uint, gameName, slug, version, verRoot stri
 		if res.Error == nil && res.RowsAffected > 0 {
 			logger.Error("病毒扫描自动驳回: 游戏=%s(%s) v%s, 检出 %d 处, 首个=%s（%s）",
 				gameName, slug, version, len(hits), filepath.Base(first.Path), first.Sig)
+			// 推 WS 通知商户实时刷新
+			if owner != "" {
+				emitGameAuditChanged(s, owner, gameID, model.GameAuditRejected, remark, gameName)
+			}
 		} else if res.Error != nil {
 			logger.Error("病毒扫描检出但自动驳回失败（请人工处理）: 游戏=%d, %v", gameID, res.Error)
 		}
@@ -168,4 +178,32 @@ func clamScanGameVersionAsync(gameID uint, gameName, slug, version, verRoot stri
 	}
 	logger.Info("病毒扫描完成: 游戏=%s(%s) v%s, 文件 %d 个全部干净, 耗时 %s",
 		gameName, slug, version, scanned, time.Since(start).Round(time.Second))
+}
+
+// emitGameAuditChanged 统一的游戏审核状态变更 WS 推送：三个驳回/审核通过路径共用，
+// 给商户端实时刷新"我的游戏"列表（前端 WS 收到后立即刷新；未接 WS 的商户页靠定时轮询兜底）
+// 推送是尽力而为：hub 未就绪（测试环境/刚启动）时静默跳过，不影响主业务流程
+func emitGameAuditChanged(s *Server, owner string, gameID uint, auditStatus int8, remark, gameName string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("游戏审核变更 WS 推送 panic（已忽略）: %v", r)
+		}
+	}()
+	if s == nil || owner == "" {
+		return
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"type":          "game_audit_changed",
+		"game_id":       gameID,
+		"audit_status":  auditStatus,
+		"audit_remark":   remark,
+		"game_name":      gameName,
+		"audit_time":     time.Now().Format("2006-01-02 15:04:05"),
+	})
+	if err != nil {
+		logger.Warn("游戏审核变更 WS 推送序列化失败: %v", err)
+		return
+	}
+	s.sendToUser(owner, payload)
+	logger.Info("游戏审核变更 WS 推送: owner=%s, game_id=%d, audit_status=%d", owner, gameID, auditStatus)
 }

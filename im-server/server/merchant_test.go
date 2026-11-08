@@ -204,7 +204,7 @@ func TestMerchantAuditFlowAndPlayerFilter(t *testing.T) {
 		t.Fatalf("待审核游戏不应出现在玩家列表，实得 %d 条", len(items))
 	}
 
-	// ③ 管理员通过 → audit=2 + 自动上架 → 玩家列表可见
+	// ③ 管理员通过 → audit=2 + 保持下架（不再自动上架）→ 玩家列表仍不可见
 	areq := httptest.NewRequest("POST", "/admin/api/merchant/audit/"+fmt.Sprint(g.ID),
 		bytes.NewReader([]byte(`{"action":"pass"}`)))
 	areq.SetPathValue("id", fmt.Sprint(g.ID)) // 直调 handler 须手动注入路径参数（httptest 不解析模式）
@@ -214,15 +214,32 @@ func TestMerchantAuditFlowAndPlayerFilter(t *testing.T) {
 		t.Fatalf("审核通过应 200：%s", arec.Body.String())
 	}
 	store.DB.First(&g, g.ID)
-	if g.AuditStatus != model.GameAuditApproved || g.Status != 0 {
-		t.Fatalf("通过后应 audit=2 且上架：%+v", g)
+	if g.AuditStatus != model.GameAuditApproved || g.Status != 1 {
+		t.Fatalf("通过后应 audit=2 但保持下架（status=1）：%+v", g)
+	}
+	req = httptest.NewRequest("GET", "/api/game/list?page=1&size=60&keyword=商户测试", nil)
+	rec = httptest.NewRecorder()
+	s.HandleGameList(rec, req)
+	_, resp = gwrUnwrap(rec)
+	if items := resp["list"].([]interface{}); len(items) != 0 {
+		t.Fatalf("过审但未上架不应出现在玩家列表，实得 %d 条", len(items))
+	}
+
+	// ③.1 商户自主上架 → status=0 → 玩家列表可见
+	code, _ = merchantReq(t, s, tk, "POST", fmt.Sprintf("/api/merchant/games/%d/status", g.ID), map[string]interface{}{"status": 0})
+	if code != 200 {
+		t.Fatalf("商户上架应 200，实得 %d", code)
+	}
+	store.DB.First(&g, g.ID)
+	if g.Status != 0 {
+		t.Fatalf("商户上架后应 status=0：%+v", g)
 	}
 	req = httptest.NewRequest("GET", "/api/game/list?page=1&size=60&keyword=商户测试", nil)
 	rec = httptest.NewRecorder()
 	s.HandleGameList(rec, req)
 	_, resp = gwrUnwrap(rec)
 	if items := resp["list"].([]interface{}); len(items) != 1 {
-		t.Fatalf("过审游戏应出现在玩家列表，实得 %d 条", len(items))
+		t.Fatalf("商户上架后应出现在玩家列表，实得 %d 条", len(items))
 	}
 
 	// ④ 商户编辑对外字段 → 回待审核 → 玩家列表再次不可见

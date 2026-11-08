@@ -43,6 +43,7 @@ type clamRescanJob struct {
 	FinishedAt      time.Time
 	VersionsTotal   int
 	VersionsScanned int
+	FilesTotal      int // 启动扫描前预计算的总文件数（供前端文件级进度条）
 	FilesScanned    int
 	Hits            []clamRescanHit
 	Err             string // 任务级致命错误（如配置缺失）；版本级异常走日志不置位
@@ -118,6 +119,7 @@ func (s *Server) handleClamAVRescanStatus(w http.ResponseWriter, r *http.Request
 		"game_id":            clamRescan.GameID,
 		"versions_total":     clamRescan.VersionsTotal,
 		"versions_scanned":  clamRescan.VersionsScanned,
+		"files_total":        clamRescan.FilesTotal,
 		"files_scanned":      clamRescan.FilesScanned,
 		"hits":               hits,
 		"err":                clamRescan.Err,
@@ -151,13 +153,14 @@ func (s *Server) clamRescanRun(gameID uint) {
 
 	// 版本清单：全部商户名下游戏（可选单游戏过滤）；version/slug 均为服务端清洗过的安全命名
 	var rows []struct {
-		GameID   uint
-		GameName string
-		Slug     string
-		Version  string
+		GameID        uint
+		GameName      string
+		Slug          string
+		Version       string
+		OwnerUsername string
 	}
 	db := store.DB.Table("im_game_version v").
-		Select("v.game_id AS game_id, g.name AS game_name, g.slug AS slug, v.version AS version").
+		Select("v.game_id AS game_id, g.name AS game_name, g.slug AS slug, v.version AS version, g.owner_username AS owner_username").
 		Joins("JOIN im_game g ON g.id = v.game_id").
 		Where("g.owner_username <> ''")
 	if gameID > 0 {
@@ -172,6 +175,22 @@ func (s *Server) clamRescanRun(gameID uint) {
 	}
 	clamRescan.Mu.Lock()
 	clamRescan.VersionsTotal = len(rows)
+	// 预计算总文件数：WalkDir 每个版本目录，用于文件级进度条
+	var totalFiles int
+	for _, row := range rows {
+		verRoot := filepath.Join(s.cfg.Game.LocalDir, "games", row.Slug, row.Version)
+		if st, err := os.Stat(verRoot); err != nil || !st.IsDir() {
+			continue
+		}
+		_ = filepath.WalkDir(verRoot, func(p string, e os.DirEntry, werr error) error {
+			if werr != nil || e.IsDir() {
+				return nil
+			}
+			totalFiles++
+			return nil
+		})
+	}
+	clamRescan.FilesTotal = totalFiles
 	clamRescan.Mu.Unlock()
 
 	timeout := time.Duration(s.cfg.ClamAV.TimeoutSec) * time.Second
@@ -194,18 +213,20 @@ func (s *Server) clamRescanRun(gameID uint) {
 				rel = filepath.Base(path)
 			}
 			clamRescan.Mu.Lock()
+			// 每扫完一个文件立刻累加（包括 clamd 异常跳过的，因为"扫过了"就是扫过了）
+			clamRescan.FilesScanned++
 			clamRescan.CurrentFile = path
 			clamRescan.CurrentFileRel = filepath.ToSlash(rel)
 			clamRescan.LastFileAt = time.Now()
 			clamRescan.Mu.Unlock()
 		}
-		scanned, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, timeout, onFile)
-		clamRescan.Mu.Lock()
-		clamRescan.VersionsScanned++
-		clamRescan.FilesScanned += scanned
-		clamRescan.Mu.Unlock()
-		if err != nil {
-			// fail-open：clamd 异常跳过该版本记日志继续（不驳回），后续版本仍尝试
+		_, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, timeout, onFile)
+		if err == nil {
+			clamRescan.Mu.Lock()
+			clamRescan.VersionsScanned++
+			clamRescan.Mu.Unlock()
+		} else {
+			// clamd 拨号失败等硬错误：这个版本没完整扫完，不计 VersionsScanned
 			logger.Warn("存量回溯扫描跳过（clamd 异常）: %s(%s) v%s, %v", row.GameName, row.Slug, row.Version, err)
 			continue
 		}
@@ -235,6 +256,10 @@ func (s *Server) clamRescanRun(gameID uint) {
 			} else if res.RowsAffected > 0 {
 				rejected[row.GameID] = true
 				logger.Error("存量回溯自动驳回: 游戏=%s(%s), 检出 %d 处, 首个=%s（%s）", row.GameName, row.Slug, len(hits), filepath.Base(first.Path), first.Sig)
+				// 推 WS 通知商户实时刷新
+				if row.OwnerUsername != "" {
+					emitGameAuditChanged(s, row.OwnerUsername, row.GameID, model.GameAuditRejected, remark, row.GameName)
+				}
 			}
 		}
 		time.Sleep(perVersionThrottle)
