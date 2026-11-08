@@ -7362,6 +7362,42 @@
         }
     }
 
+    // 阶段三百零一：管理端上传日志面板
+    function gmLogInit() {
+        var wrap = $('gm-log-wrap'), body = $('gm-log-body'), title = $('gm-log-title'), toggle = $('gm-log-toggle');
+        wrap.classList.remove('hidden', 'open');
+        body.classList.add('hidden');
+        body.innerHTML = '';
+        title.textContent = '上传日志';
+        title.removeAttribute('data-err');
+        title.removeAttribute('data-warn');
+        toggle.textContent = '▼';
+    }
+    function gmLogAdd(text, cls) {
+        var wrap = $('gm-log-wrap'), body = $('gm-log-body'), title = $('gm-log-title');
+        wrap.classList.remove('hidden');
+        var errCount = (title.getAttribute('data-err') | 0) + (cls === 'err' ? 1 : 0);
+        var warnCount = (title.getAttribute('data-warn') | 0) + (cls === 'warn' ? 1 : 0);
+        title.setAttribute('data-err', errCount);
+        title.setAttribute('data-warn', warnCount);
+        var total = errCount + warnCount;
+        if (total > 0) title.textContent = '上传日志（' + errCount + ' 失败' + (warnCount > 0 ? ' / ' + warnCount + ' 警告' : '') + '）';
+        else title.textContent = '上传日志';
+        var row = document.createElement('div');
+        row.className = 'gm-log-line' + (cls ? ' ' + cls : '');
+        var ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        row.textContent = '[' + ts + '] ' + text;
+        body.appendChild(row);
+        wrap.classList.add('open');
+        body.classList.remove('hidden');
+        body.scrollTop = body.scrollHeight;
+    }
+    $('gm-log-head').addEventListener('click', function () {
+        var wrap = $('gm-log-wrap'), body = $('gm-log-body'), toggle = $('gm-log-toggle');
+        if (body.classList.contains('hidden')) { body.classList.remove('hidden'); wrap.classList.add('open'); toggle.textContent = '▲'; }
+        else { body.classList.add('hidden'); wrap.classList.remove('open'); toggle.textContent = '▼'; }
+    });
+
     function gmSetUploadUI(busy) {
         gmUploading = busy;
         $('gm-pub-ok').disabled = busy;
@@ -7379,20 +7415,31 @@
         return new Promise(function (res) { setTimeout(res, ms); });
     }
 
-    // 单文件上传归口：整文件读入算 SHA-256 → 8MB 分片顺序直传（单片失败重试 2 次，幂等覆盖）
-    async function gmUploadOneFile(item, idx) {
-        if (!window.crypto || !crypto.subtle) {
-            var se = new Error('当前环境不支持 SHA-256 计算（需安全上下文，请用客户端内置窗口或 https/localhost 打开）');
-            se.cancelled = false;
-            throw se;
+    // 流式 SHA256 分块喂入（避免大 .dat 文件 arrayBuffer() OOM/卡死）
+    var GM_HASH_CHUNK = 4 * 1024 * 1024; // 4MB
+    async function gmHashFile(item, onProgress) {
+        if (!window.SHA256Stream) throw new Error('SHA256 库未加载');
+        var hasher = window.SHA256Stream.create();
+        var offset = 0;
+        while (offset < item.size) {
+            var end = Math.min(offset + GM_HASH_CHUNK, item.size);
+            var buf = await item.file.slice(offset, end).arrayBuffer();
+            hasher.update(buf);
+            buf = null;
+            offset = end;
+            if (onProgress) onProgress(offset, item.size);
+            await new Promise(function (r) { setTimeout(r, 0); });
+            if (gmCancelFlag) { var xe = new Error('已取消'); xe.cancelled = true; throw xe; }
         }
+        return hasher.final();
+    }
+
+    // 单文件上传归口：流式 SHA-256 → 8MB 分片顺序直传（单片失败重试 2 次，幂等覆盖）
+    async function gmUploadOneFile(item, idx) {
         gmFileState(idx, '校验中…');
-        var buf = await item.file.arrayBuffer();
-        var digest = await crypto.subtle.digest('SHA-256', buf);
-        buf = null; // 尽早释放大块内存
-        var sha = '';
-        var bytes = new Uint8Array(digest);
-        for (var i = 0; i < bytes.length; i++) sha += ('0' + bytes[i].toString(16)).slice(-2);
+        var sha = await gmHashFile(item, function (done, total) {
+            gmFileProgress(idx, Math.round((done / total) * 50));
+        });
         var uploadId = 'gf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
         gmStartedIds.push(uploadId);
         var total = Math.ceil(item.size / GM_CHUNK);
@@ -7405,28 +7452,35 @@
             for (;;) {
                 try {
                     gmAbort = new AbortController();
-                    var resp = await fetch('/admin/api/game/upload/chunk?upload_id=' + encodeURIComponent(uploadId) +
-                        '&seq=' + seq + '&total=' + total + '&size=' + item.size, {
-                        method: 'POST',
-                        headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/octet-stream' },
-                        body: chunk,
-                        signal: gmAbort.signal
-                    });
+                    // 阶段二百九十九：fetch 加 60s 超时防服务端无响应卡死
+                    var timer = setTimeout(function () { gmAbort.abort(); }, 60000);
+                    var resp;
+                    try {
+                        resp = await fetch('/admin/api/game/upload/chunk?upload_id=' + encodeURIComponent(uploadId) +
+                            '&seq=' + seq + '&total=' + total + '&size=' + item.size, {
+                            method: 'POST',
+                            headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/octet-stream' },
+                            body: chunk,
+                            signal: gmAbort.signal
+                        });
+                    } finally { clearTimeout(timer); }
                     gmAbort = null;
                     var r = await resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
                     if (!r.ok) throw new Error(r.msg || ('HTTP ' + resp.status));
                     break;
                 } catch (e) {
                     gmAbort = null;
-                    if (e.name === 'AbortError' || gmCancelFlag) {
-                        var ce = new Error('已取消'); ce.cancelled = true; throw ce;
+                    if (e.name === 'AbortError') {
+                        if (gmCancelFlag) { var ce = new Error('已取消'); ce.cancelled = true; throw ce; }
+                        e = new Error('上传超时（60s 无响应）');
                     }
+                    if (gmCancelFlag) { var ce = new Error('已取消'); ce.cancelled = true; throw ce; }
                     attempt++;
-                    if (attempt >= 3) throw e; // 重试耗尽即整批中止（分片幂等，重开可整文件重传）
+                    if (attempt >= 3) throw e;
                     await gmSleep(600 * attempt);
                 }
             }
-            gmFileProgress(idx, Math.round(((seq + 1) / total) * 100));
+            gmFileProgress(idx, 50 + Math.round(((seq + 1) / total) * 50));
         }
         return { rel_path: item.rel_path, size: item.size, sha256: sha, upload_id: uploadId };
     }
@@ -7471,26 +7525,32 @@
         gmSetUploadUI(true);
         gmCancelFlag = false;
         gmStartedIds = [];
+        gmLogInit();
+        gmLogAdd('管理端上传模式，共 ' + gmFiles.length + ' 个文件，版本 v' + version);
         var okFiles = [], failMsg = '', cancelled = false;
         for (var i = 0; i < gmFiles.length; i++) {
             if (gmCancelFlag) { gmMarkFrom(i, '已取消'); cancelled = true; break; }
             try {
                 okFiles.push(await gmUploadOneFile(gmFiles[i], i));
                 gmFileState(i, '已完成', 'ok');
+                gmLogAdd('[OK] ' + (gmFiles[i].rel_path || gmFiles[i].name) + ' (' + fmtSize(gmFiles[i].size) + ')', 'ok');
             } catch (e) {
-                if (e && e.cancelled) { gmMarkFrom(i, '已取消'); cancelled = true; break; }
-                failMsg = (gmFiles[i].rel_path || '') + '：' + (e && e.message ? e.message : '上传失败');
+                failMsg = (gmFiles[i].rel_path || gmFiles[i].name) + '：' + (e && e.message ? e.message : '上传失败');
                 gmFileState(i, '失败', 'err');
+                gmLogAdd('[FAIL] ' + failMsg, 'err');
                 gmMarkFrom(i + 1, '已跳过');
-                break; // 版本清单必须完整，单文件失败即整批中止（清单保留可修复后重试）
+                break;
             }
         }
         if (cancelled || failMsg) {
             await gmCancelStarted();
             gmSetUploadUI(false);
-            showToast(cancelled ? '已取消上传，未登记版本' : ('上传中止：' + failMsg));
+            if (cancelled) gmLogAdd('用户取消，已清理未完成分片会话', 'warn');
+            else gmLogAdd('上传中止：' + failMsg, 'err');
+            showToast(cancelled ? '已取消上传（详见日志）' : ('上传中止：' + failMsg + '（详见日志面板）'));
             return;
         }
+        gmLogAdd('全部成功，正在登记版本…', 'ok');
         $('gm-pub-ok').textContent = '登记版本中…';
         var reg;
         try {
@@ -7499,11 +7559,13 @@
                   pack_type: gmPackType, pack_size: packSizeBytes, base_version: baseVer });
         } catch (e) {
             gmSetUploadUI(false);
+            gmLogAdd('✗ 版本登记失败：' + (e && e.message ? e.message : '网络异常'), 'err');
             showToast(e.message || '网络异常');
             return;
         }
         gmSetUploadUI(false);
-        if (!reg.ok) { showToast(reg.msg || '版本登记失败'); return; }
+        if (!reg.ok) { gmLogAdd('✗ 版本登记失败：' + (reg.msg || '服务端返回错误'), 'err'); showToast(reg.msg || '版本登记失败'); return; }
+        gmLogAdd('✓ 版本 v' + version + ' 已上架（' + reg.data.file_count + ' 个文件，共 ' + fmFormatSize(reg.data.size_bytes) + '）', 'ok');
         showToast('版本 ' + version + ' 已上架（' + reg.data.file_count + ' 个文件，共 ' + fmFormatSize(reg.data.size_bytes) + '）');
         $('gm-pub-version').value = '';
         $('gm-pub-changelog').value = '';

@@ -43,6 +43,11 @@ import (
 // 游戏分片上传会话超时：游戏包大、上传链路慢，放宽至 24 小时（惰性清理，不启定时器）
 const gameUploadSessionTimeout = 24 * time.Hour
 
+// 磁盘孤儿目录清理阈值（比会话超时短得多）：活跃会话靠 active map 跳过，
+// ModTime 只是二次兜底——10 分钟没动过的目录不可能是正常正在上传的分片。
+// 服务重启时内存表丢失，磁盘残留立刻触发清理（不会等 24h）。
+const gameUploadDiskCleanTimeout = 10 * time.Minute
+
 // gameUploadSessions 分片上传会话表（仅内存：重启丢失即重传，会话内分片已落盘仍有效但
 // 登记表丢失后 upload_id 不可续传——管理端上传失败重开即可，量级可接受）
 var gameUploadSessions = struct {
@@ -311,6 +316,77 @@ func (s *Server) sweepExpiredGameUploads() {
 			os.RemoveAll(s.gameTmpDir(id))
 		}
 	}
+}
+
+// gameActiveUploadIDs 取当前活跃会话的 upload_id 快照（磁盘清理前调用，跳过还在用的目录）
+func gameActiveUploadIDs() map[string]struct{} {
+	gameUploadSessions.Lock()
+	defer gameUploadSessions.Unlock()
+	set := make(map[string]struct{}, len(gameUploadSessions.m))
+	for id := range gameUploadSessions.m {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+// sweepGameTmpChunksDisk 扫描 game_data/tmp_chunks/ 目录，清理孤儿分片目录（服务重启后
+// 内存会话表丢失、磁盘残留超过 24h 未变更的 upload_id 子目录）。
+// 启动时跑一次兜底历史垃圾；后台每小时再跑一次防止长期无人上传时懒清理不触发。
+// 安全：跳过内存中还有活跃会话的 upload_id，避免并发清理误伤正在上传的分片目录。
+func (s *Server) sweepGameTmpChunksDisk() {
+	if s.cfg.Game.LocalDir == "" {
+		return
+	}
+	root := filepath.Join(s.cfg.Game.LocalDir, "tmp_chunks")
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return // 目录不存在直接返回——首次启动/从未上传过
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		logger.Warn("游戏分片临时目录扫描失败: %v", err)
+		return
+	}
+	active := gameActiveUploadIDs() // 拍快照，持锁时间很短
+	cutoff := time.Now().Add(-gameUploadDiskCleanTimeout)
+	cleaned := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		full := filepath.Join(root, e.Name())
+		st, err := os.Stat(full)
+		if err != nil {
+			continue
+		}
+		// 关键防护：内存中还活着的会话目录绝对跳过——哪怕磁盘 ModTime 超期
+		// （竞态场景：会话刚创建、首片还没写到磁盘，ModTime 没刷新但会话已活）
+		if _, alive := active[e.Name()]; alive {
+			continue
+		}
+		if st.ModTime().Before(cutoff) {
+			if err := os.RemoveAll(full); err != nil {
+				logger.Warn("清理过期游戏分片目录失败 %s: %v", full, err)
+			} else {
+				cleaned++
+			}
+		}
+	}
+	if cleaned > 0 {
+		logger.Info("清理过期游戏分片临时目录: %d 个（超过 %s 未更新，跳过 %d 个活跃会话）", cleaned, gameUploadDiskCleanTimeout, len(active))
+	}
+}
+
+// startGameTmpSweeper 启动后台定时清理游戏分片临时目录的协程（每小时一次）
+func (s *Server) startGameTmpSweeper() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.sweepExpiredGameUploads() // 内存会话
+			s.sweepGameTmpChunksDisk()  // 磁盘孤儿目录
+		}
+	}()
 }
 
 // registerGameAdminRoutes 管理端路由（adminGuard 包裹）
@@ -2438,6 +2514,18 @@ func (s *Server) gameMergeChunks(tmpDir, dst string, wantSize int64, wantSHA str
 	defer out.Close()
 	h := sha256.New()
 	var size int64
+	// 打印每个 part 的实际大小（排查分片覆盖/丢失）
+	var sizes []int64
+	for i := 0; i < len(entries); i++ {
+		partPath := filepath.Join(tmpDir, fmt.Sprintf("%d.part", i))
+		info, statErr := os.Stat(partPath)
+		if statErr != nil {
+			logger.Error("gameMergeChunks part[%d] stat 失败: %v", i, statErr)
+			return fmt.Errorf("分片缺失")
+		}
+		sizes = append(sizes, info.Size())
+	}
+	logger.Info("gameMergeChunks 分片列表: count=%d sizes=%v total=%d", len(entries), sizes, sumSizes(sizes))
 	for i := 0; i < len(entries); i++ {
 		part, err := os.Open(filepath.Join(tmpDir, fmt.Sprintf("%d.part", i)))
 		if err != nil {
@@ -2451,12 +2539,22 @@ func (s *Server) gameMergeChunks(tmpDir, dst string, wantSize int64, wantSHA str
 		size += n
 	}
 	if size != wantSize {
+		logger.Error("gameMergeChunks 大小不符: tmpDir=%s, 期望=%d, 实际=%d", tmpDir, wantSize, size)
 		return fmt.Errorf("大小不符（期望 %d 实际 %d）", wantSize, size)
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != wantSHA {
+		logger.Error("gameMergeChunks SHA256 不符: tmpDir=%s, 前端传=%s, 服务端合并=%s, 总大小=%d", tmpDir, wantSHA, got, size)
 		return fmt.Errorf("SHA256 不符")
 	}
 	return nil
+}
+
+func sumSizes(sizes []int64) int64 {
+	var s int64
+	for _, sz := range sizes {
+		s += sz
+	}
+	return s
 }
 
 // gameVersionRollback 版本上架中途失败回滚：删已写文件/整版本目录；clearTmp=false 时保留

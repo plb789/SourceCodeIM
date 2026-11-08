@@ -88,6 +88,9 @@ func NewServer(cfg *config.Config) *Server {
 		time.Sleep(5 * time.Second)
 		s.gnStartupSweep()
 	}()
+	// 游戏分片临时目录启动清理 + 后台定时扫描（解决 tmp_chunks 孤儿目录只靠懒清理的问题）
+	s.sweepGameTmpChunksDisk() // 启动立即清一次历史垃圾
+	s.startGameTmpSweeper()    // 后台每小时定时
 	return s
 }
 

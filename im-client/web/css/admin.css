@@ -2142,6 +2142,25 @@ td .skel-line {
     cursor: pointer;
 }
 
+/* 阶段三百零一：管理端上传日志面板（与 merchant.css 同构，色值沿用管理端 --danger） */
+.gm-log-wrap { margin-top: 8px; border: 1px solid var(--border-color, rgba(250,81,81,.35)); border-radius: 6px; overflow: hidden; }
+.gm-log-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 12px; background: rgba(250,81,81,.08); cursor: pointer; user-select: none;
+    font-size: 13px;
+}
+.gm-log-title { font-weight: 600; color: var(--danger, #fa5151); }
+.gm-log-toggle { font-size: 12px; color: var(--text-secondary, rgba(255,255,255,.55)); transition: transform .15s; }
+.gm-log-wrap.open .gm-log-toggle { transform: rotate(180deg); }
+.gm-log-body {
+    max-height: 200px; overflow-y: auto; padding: 8px 12px; font-family: Consolas, Menlo, monospace;
+    font-size: 12px; line-height: 1.6; background: rgba(0,0,0,.12);
+}
+.gm-log-line { color: var(--text-color); word-break: break-all; }
+.gm-log-line.err { color: var(--danger, #fa5151); }
+.gm-log-line.ok { color: var(--primary, #4caf50); }
+.gm-log-line.warn { color: #f5a524; }
+
 /* ===== 版本文件清单浏览弹窗（人工审核：汇总/过滤/分页；只读） =====
    表格区自绘滚动条（禁用系统默认样式，与全站口径一致），主题变量随明暗切换 */
 .gm-files-box {

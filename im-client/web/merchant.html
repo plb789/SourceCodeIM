@@ -230,6 +230,14 @@
                 </div>
                 <div id="m-ver-list" class="m-ver-list"></div>
                 <div class="m-progress hidden" id="m-ver-progress"><div class="m-progress-bar" id="m-ver-bar"></div></div>
+                <!-- 阶段三百零一：上传日志面板（默认折叠，有失败自动展开；商户可查看具体哪个文件、什么错误） -->
+                <div id="m-ver-log-wrap" class="m-ver-log-wrap hidden">
+                    <div id="m-ver-log-head" class="m-ver-log-head">
+                        <span class="m-ver-log-title" id="m-ver-log-title">上传日志</span>
+                        <span class="m-ver-log-toggle" id="m-ver-log-toggle">▼</span>
+                    </div>
+                    <div class="m-ver-log-body hidden" id="m-ver-log-body"></div>
+                </div>
             </div>
             <div class="m-modal-btns">
                 <button id="m-ver-cancel" class="admin-btn">关闭</button>
@@ -269,6 +277,7 @@
     <!-- 自绘 Toast -->
     <div id="m-toast" class="m-toast hidden"></div>
 
+    <script src="js/sha256.js?v=1.0"></script>
     <script src="js/merchant.js?v=1.7"></script>
 </body>
 </html>

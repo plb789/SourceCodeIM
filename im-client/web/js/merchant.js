@@ -478,7 +478,7 @@
     // ==================== 版本管理（分片上传） ====================
     var verGame = null;
     var verFiles = []; // {file, rel_path, size, state}
-    var verUploading = false, verCancelFlag = false, verStartedIds = [];
+    var verUploading = false, verCancelFlag = false, verStartedIds = [], verAbort = null;
     var verBaseDir = ''; // 最新版文件首段公共目录名（如 War3），单文件上传时自动前缀
     // 上传方式（ZIP 打包新增通道）：0=散文件逐个下载（现状） 1=单 ZIP（下载后自动解压）
     // 2=分卷 ZIP 3=补丁包（GamePatchTool 产出 patch.zip + base_version，服务端解包合成完整清单）
@@ -747,8 +747,56 @@
             f._st.className = 'st' + (cls ? ' ' + cls : '');
         }
     }
+    // 阶段三百零一：上传日志面板（持久化显示，商户可查看具体哪个文件、什么错误）
+    function verLogInit() {
+        var wrap = $('m-ver-log-wrap'), body = $('m-ver-log-body'), title = $('m-ver-log-title'), toggle = $('m-ver-log-toggle');
+        wrap.classList.remove('hidden', 'open');
+        body.classList.add('hidden');
+        body.innerHTML = '';
+        title.textContent = '上传日志';
+        toggle.textContent = '▼';
+    }
+    function verLogAdd(text, cls) {
+        var wrap = $('m-ver-log-wrap'), body = $('m-ver-log-body'), title = $('m-ver-log-title');
+        wrap.classList.remove('hidden');
+        // 累计计数
+        var errCount = (title.getAttribute('data-err') | 0) + (cls === 'err' ? 1 : 0);
+        var warnCount = (title.getAttribute('data-warn') | 0) + (cls === 'warn' ? 1 : 0);
+        title.setAttribute('data-err', errCount);
+        title.setAttribute('data-warn', warnCount);
+        var total = errCount + warnCount;
+        if (total > 0) title.textContent = '上传日志（' + errCount + ' 失败' + (warnCount > 0 ? ' / ' + warnCount + ' 警告' : '') + '）';
+        else title.textContent = '上传日志';
+        // 追加行（时间戳 + 内容）
+        var row = document.createElement('div');
+        row.className = 'm-ver-log-line' + (cls ? ' ' + cls : '');
+        var ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        row.textContent = '[' + ts + '] ' + text;
+        body.appendChild(row);
+        // 自动展开并滚到底
+        wrap.classList.add('open');
+        body.classList.remove('hidden');
+        body.scrollTop = body.scrollHeight;
+    }
+    // 日志面板折叠/展开
+    $('m-ver-log-head').addEventListener('click', function () {
+        var wrap = $('m-ver-log-wrap'), body = $('m-ver-log-body'), toggle = $('m-ver-log-toggle');
+        if (body.classList.contains('hidden')) {
+            body.classList.remove('hidden');
+            wrap.classList.add('open');
+            toggle.textContent = '▲';
+        } else {
+            body.classList.add('hidden');
+            wrap.classList.remove('open');
+            toggle.textContent = '▼';
+        }
+    });
     $('m-ver-cancel').addEventListener('click', function () {
-        if (verUploading) { verCancelFlag = true; return; }
+        if (verUploading) {
+            verCancelFlag = true;
+            if (verAbort) { try { verAbort.abort(); } catch (e) { /* 忽略 */ } } // 即时断开当前分片
+            return;
+        }
         $('m-ver-mask').classList.add('hidden');
         loadGames();
     });
@@ -756,14 +804,39 @@
     function verSleep(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
     // 直连模式判定（商户直连·安全加固）：dm=3 时仅登记清单（本地算 SHA256），文件不上传
     function verGameDirect() { return !!(verGame && Number(verGame.download_method) === 3); }
-    async function verHashFile(f) {
-        if (!window.crypto || !crypto.subtle) throw new Error('需安全上下文（https/localhost 或客户端内置窗口）才能计算 SHA-256');
-        var buf = await f.file.arrayBuffer();
-        var digest = await crypto.subtle.digest('SHA-256', buf);
-        buf = null;
-        var sha = '';
-        var bytes = new Uint8Array(digest);
-        for (var i = 0; i < bytes.length; i++) sha += ('0' + bytes[i].toString(16)).slice(-2);
+    // 流式 SHA256：分块读取文件喂入 SHA256Stream（js/sha256.js），
+    // 避免 f.file.arrayBuffer() 将整文件（GB 级 .dat）一次性压入内存导致 OOM/卡死
+    var HASH_CHUNK = 4 << 20; // 4MB 一块
+    async function verHashFile(f, onProgress) {
+        if (!window.SHA256Stream) throw new Error('SHA256 库未加载');
+        var hasher = window.SHA256Stream.create();
+        var offset = 0;
+        var fileSize = f.size;
+        while (offset < fileSize) {
+            var end = Math.min(offset + HASH_CHUNK, fileSize);
+            var chunk = f.file.slice(offset, end);
+            var buf = await chunk.arrayBuffer();
+            hasher.update(buf);
+            buf = null;
+            offset = end;
+            if (onProgress) onProgress(offset, fileSize);
+            // 每块让出事件循环，避免长任务阻塞 UI
+            await new Promise(function (r) { setTimeout(r, 0); });
+            if (verCancelFlag) { var xe = new Error('已取消'); xe.cancelled = true; throw xe; }
+        }
+        var sha = hasher.final();
+        console.log('[verHashFile]', f.rel_path, 'size=', f.size, 'sha256=', sha);
+        // 如果浏览器支持 crypto.subtle (localhost/https)，同时算一遍对照
+        if (window.crypto && window.crypto.subtle && fileSize <= 200 * 1024 * 1024) {
+            try {
+                var ab = await f.file.arrayBuffer();
+                var subtleBuf = await crypto.subtle.digest('SHA-256', ab);
+                var hex = Array.from(new Uint8Array(subtleBuf)).map(function (b) {
+                    return ('0' + b.toString(16)).slice(-2);
+                }).join('');
+                console.log('[verHashFile.crypto.subtle]', f.rel_path, 'sha256=', hex, 'match=', hex === sha);
+            } catch (e) { /* 忽略 */ }
+        }
         return sha;
     }
     // 直连登记单文件：本地流式算 SHA256（不读服务端、不产生 upload_id）
@@ -774,7 +847,10 @@
     }
     async function verUploadOne(f) {
         verSetState(f, 1);
-        var sha = await verHashFile(f);
+        // 流式 hash（带进度回调，避免大 .dat 文件无反馈像卡死）
+        var sha = await verHashFile(f, function (done, total) {
+            if (f._bar) f._bar.style.width = Math.round((done / total) * 50) + '%';
+        });
         var uploadId = 'mf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
         verStartedIds.push(uploadId);
         var total = Math.ceil(f.size / CHUNK);
@@ -784,23 +860,34 @@
             var start = seq * CHUNK;
             var chunk = await f.file.slice(start, Math.min(start + CHUNK, f.size)).arrayBuffer();
             for (var attempt = 0; ; attempt++) {
+                verAbort = new AbortController();
+                var timer = setTimeout(function () { try { verAbort.abort(); } catch (e) { /* 忽略 */ } }, 60000);
                 try {
                     var resp = await fetch('/api/merchant/upload/chunk?upload_id=' + encodeURIComponent(uploadId) +
                         '&seq=' + seq + '&total=' + total + '&size=' + f.size, {
                         method: 'POST',
                         headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/octet-stream' },
-                        body: chunk
+                        body: chunk,
+                        signal: verAbort.signal
                     });
                     var r = await resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
                     if (!r.ok) throw new Error(r.msg || ('HTTP ' + resp.status));
                     break;
                 } catch (e) {
+                    clearTimeout(timer);
+                    verAbort = null;
+                    if (e && e.name === 'AbortError') {
+                        if (verCancelFlag) { var ce = new Error('已取消'); ce.cancelled = true; throw ce; }
+                        e = new Error('上传超时（60s 无响应）');
+                    }
                     if (verCancelFlag) { var ce = new Error('已取消'); ce.cancelled = true; throw ce; }
                     if (attempt >= 2) throw e;
                     await verSleep(600 * (attempt + 1));
                 }
             }
-            if (f._bar) f._bar.style.width = Math.round(((seq + 1) / total) * 100) + '%';
+            clearTimeout(timer);
+            verAbort = null;
+            if (f._bar) f._bar.style.width = 50 + Math.round(((seq + 1) / total) * 50) + '%';
         }
         return { rel_path: f.rel_path, size: f.size, sha256: sha, upload_id: uploadId };
     }
@@ -834,9 +921,12 @@
         verUploading = true;
         verCancelFlag = false;
         verStartedIds = [];
+        verAbort = null;
+        verLogInit();
+        verLogAdd((isDirect ? '清单计算模式' : '分片上传模式') + '，共 ' + verFiles.length + ' 个文件，版本 v' + version);
         $('m-ver-ok').textContent = isDirect ? '登记中…（仅计算清单，文件不上传）' : '上传中…（再次点击取消）';
         $('m-ver-progress').classList.remove('hidden');
-        var okFiles = [], failMsg = '', cancelled = false;
+        var okFiles = [], failedList = [], cancelled = false;
         for (var i = 0; i < verFiles.length; i++) {
             if (verCancelFlag) {
                 for (var j = i; j < verFiles.length; j++) verSetState(verFiles[j], 5);
@@ -846,32 +936,36 @@
             try {
                 okFiles.push(await (isDirect ? verDirectOne(verFiles[i]) : verUploadOne(verFiles[i])));
                 verSetState(verFiles[i], 3);
+                verLogAdd('[OK] ' + (verFiles[i].rel_path || verFiles[i].name) + ' (' + fmtSize(verFiles[i].size) + ')', 'ok');
             } catch (e) {
                 if (e && e.cancelled) {
                     for (var k = i; k < verFiles.length; k++) verSetState(verFiles[k], 5);
                     cancelled = true;
                 } else {
-                    failMsg = (verFiles[i].rel_path || '') + '：' + (e && e.message ? e.message : (isDirect ? '清单计算失败' : '上传失败'));
+                    var errMsg = (verFiles[i].rel_path || verFiles[i].name) + '：' + (e && e.message ? e.message : (isDirect ? '清单计算失败' : '上传失败'));
+                    failedList.push(errMsg);
                     verSetState(verFiles[i], 4);
-                    for (var m = i + 1; m < verFiles.length; m++) verSetState(verFiles[m], 5);
+                    verLogAdd('[FAIL] ' + errMsg, 'err');
                 }
-                break;
             }
             $('m-ver-bar').style.width = Math.round(((i + 1) / verFiles.length) * 100) + '%';
         }
         verUploading = false;
         if (cancelled) {
             if (!isDirect) await verCancelStarted();
+            verLogAdd('用户取消，已清理 ' + verStartedIds.length + ' 个未完成分片会话', 'warn');
             $('m-ver-ok').textContent = isDirect ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
             toast('已取消');
             return;
         }
-        if (failMsg) {
+        if (failedList.length > 0) {
             if (!isDirect) await verCancelStarted();
+            verLogAdd('处理完成：成功 ' + okFiles.length + ' 个，失败 ' + failedList.length + ' 个。已清理所有分片会话，请查看上方日志', 'warn');
             $('m-ver-ok').textContent = isDirect ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
-            toast((isDirect ? '清单计算失败：' : '上传失败：') + failMsg);
+            toast('有 ' + failedList.length + ' 个文件失败（详见上传日志面板）');
             return;
         }
+        verLogAdd('全部成功，正在登记版本…', 'ok');
         var res = await api('POST', '/api/merchant/games/' + verGame.id + '/version', {
             version: version, changelog: $('m-ver-log').value, files: okFiles,
             pack_type: verPackType, pack_size: packSizeBytes, base_version: baseVer
@@ -879,13 +973,16 @@
         $('m-ver-ok').textContent = isDirect ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
         try {
             unwrap(res);
+            verLogAdd('✓ 版本 v' + version + ' 登记成功，玩家端即时生效', 'ok');
             toast('版本 v' + version + ' 登记成功，玩家端即时生效');
             verFiles = [];
             renderVerList();
             $('m-ver-progress').classList.add('hidden');
             loadVersions();
             loadQuota(); // 上架占用配额，进度条即时前进
-        } catch (e) { /* toast 已提示 */ }
+        } catch (e) {
+            verLogAdd('✗ 版本登记失败：' + (e && e.message ? e.message : '服务端返回错误'), 'err');
+        }
     }
 
     // ==================== 公告管理 ====================

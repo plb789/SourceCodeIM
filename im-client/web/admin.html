@@ -2213,6 +2213,14 @@
                     </div>
                     <div class="admin-field-hint" id="gm-pick-hint">选目录按相对路径登记（自动去掉根目录名），追加文件按文件名登记；同路径重复项与空文件自动跳过；单文件前端上限 2GB。上传期间逐文件计算 SHA-256 并按 8MB 分片直传，请勿关闭窗口。</div>
                     <div id="gm-file-list" class="gm-file-list"></div>
+                    <!-- 阶段三百零一：管理端上传日志面板 -->
+                    <div id="gm-log-wrap" class="gm-log-wrap hidden">
+                        <div id="gm-log-head" class="gm-log-head">
+                            <span class="gm-log-title" id="gm-log-title">上传日志</span>
+                            <span class="gm-log-toggle" id="gm-log-toggle">▼</span>
+                        </div>
+                        <div class="gm-log-body hidden" id="gm-log-body"></div>
+                    </div>
                     <div id="gm-file-summary" class="admin-view-tip">未选择文件</div>
                 </div>
             </div>
@@ -2260,6 +2268,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
+    <script src="js/sha256.js?v=1.0"></script>
     <script src="js/admin.js?v=1.79"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
