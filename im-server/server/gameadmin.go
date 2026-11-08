@@ -26,6 +26,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -323,6 +324,10 @@ func registerGameAdminRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/game/version/{vid}", s.adminGuard(s.handleAdminGameVersionDelete))
 	// 版本清单导出（GamePatchTool -base-list 基准数据源；与上面 version/{vid} 段数不同无冲突）
 	http.HandleFunc("GET /admin/api/game/version/{vid}/filelist", s.adminGuard(s.handleAdminVersionFilelist))
+	// 管理端版本文件清单浏览（JSON，人工审核/病毒排查用；只读，不落任何解析）
+	http.HandleFunc("GET /admin/api/game/version/{vid}/files", s.adminGuard(s.handleAdminVersionFiles))
+	// 管理端单文件下载（核对文件本体；dm=3 商户直连版本无平台存储，此接口直接拒绝）
+	http.HandleFunc("GET /admin/api/game/version/{vid}/file/{fid}", s.adminGuard(s.handleAdminVersionFileDownload))
 	// 补丁工具下载（与商户端 /api/merchant/gametool 同一文件托管核心，adminGuard 鉴权）
 	http.HandleFunc("GET /admin/api/game/gametool", s.adminGuard(s.handleAdminGameToolDownload))
 	// 游戏公告（库内游戏页"动态"区数据源）
@@ -926,7 +931,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"developer": u.Developer, "publisher": u.Publisher,
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
 		"direct_base_url": u.DirectBaseURL,
-		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
+		"launch_exe":      u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"steam_emu": u.SteamEmu, "steam_app_id": u.SteamAppId,
 		"port_forwards": u.PortForwards,
 		"dbwrite_gw":    u.DbwriteGw,
@@ -2268,6 +2273,156 @@ func (s *Server) handleAdminVersionFilelist(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.gameVersionFilelistText(w, &v)
+}
+
+// gameAdminExecExts 管理端文件清单「可执行」提示扩展名（人工审核辅助标注，只标不拦）：
+// 命中即 exec=true，前端显示 ⚠ 徽标并支持一键只看可执行文件。仅按扩展名判定，
+// 无扩展名的 ELF/脚本识别不了（清单随附 sha256 供人工比对）；.js/.html 等网页游戏常见
+// 资源不计入，避免噪声淹没真实可执行文件。
+var gameAdminExecExts = map[string]bool{
+	".exe": true, ".dll": true, ".sys": true, ".scr": true, ".com": true, ".cpl": true,
+	".msi": true, ".msp": true, ".msu": true, ".bat": true, ".cmd": true,
+	".ps1": true, ".psm1": true, ".psd1": true, ".vbs": true, ".vbe": true,
+	".wsf": true, ".wsh": true, ".hta": true, ".jar": true, ".sh": true,
+	".so": true, ".dylib": true, ".elf": true,
+}
+
+// handleAdminVersionFiles 管理端版本文件清单浏览（只读 JSON，人工审核/病毒排查用）：
+// 输出逐文件 rel_path/size/sha256/可执行标记/是否平台存储 + 下载地址（dm=3 为商户直链）。
+// 明确不做：文件内容在线解析/预览、dm=3 商户服务器代理下载（服务端零外联，杜绝 SSRF）。
+func (s *Server) handleAdminVersionFiles(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	vid, _ := strconv.ParseUint(r.PathValue("vid"), 10, 64)
+	var v model.GameVersion
+	if err := store.DB.First(&v, vid).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "版本不存在")
+		return
+	}
+	var g model.Game
+	if err := store.DB.First(&g, v.GameID).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "游戏不存在")
+		return
+	}
+	var files []model.GameFile
+	if err := store.DB.Where("version_id = ?", v.ID).Order("rel_path ASC").Find(&files).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询文件清单失败")
+		return
+	}
+	// 下载方式=3：文件本体在商户服务器，逐文件地址 = 商户根地址 + QueryEscape(rel_path)
+	// （与用户端 manifest 拼接口径一致，管理员看到的就是客户端将访问的地址）
+	directBase := ""
+	if g.DownloadMethod == 3 {
+		directBase = strings.TrimRight(strings.TrimSpace(g.DirectBaseURL), "/")
+	}
+	list := make([]map[string]interface{}, 0, len(files))
+	execCount := 0
+	var execBytes int64
+	for _, f := range files {
+		isExec := gameAdminExecExts[strings.ToLower(filepath.Ext(f.RelPath))]
+		if isExec {
+			execCount++
+			execBytes += f.SizeBytes
+		}
+		fileURL := ""
+		switch {
+		case g.DownloadMethod == 3 && directBase != "":
+			fileURL = directBase + "/" + url.QueryEscape(f.RelPath)
+		case g.DownloadMethod != 3 && f.StoragePath != "":
+			// 管理端专用下载口（不复用 /api/game/file/{fid}：那条路要求「已加入库」，
+			// 管理员账号通常没有入库该游戏，会 403）
+			fileURL = "/admin/api/game/version/" + strconv.FormatUint(uint64(v.ID), 10) +
+				"/file/" + strconv.FormatUint(uint64(f.ID), 10)
+		}
+		list = append(list, map[string]interface{}{
+			"id": f.ID, "rel_path": f.RelPath, "size": f.SizeBytes, "sha256": f.SHA256,
+			"exec": isExec, "storage": f.StoragePath != "", "url": fileURL,
+		})
+	}
+	adminJSON(w, map[string]interface{}{
+		"version": map[string]interface{}{
+			"id": v.ID, "version": v.Version, "pack_type": v.PackType, "pack_size": v.PackSize,
+			"file_count": v.FileCount, "size_bytes": v.SizeBytes, "manifest_hash": v.ManifestHash,
+			"base_version": v.BaseVersion, "create_time": v.CreateTime,
+		},
+		"game": map[string]interface{}{
+			"id": g.ID, "name": g.Name, "slug": g.Slug,
+			"download_method": g.DownloadMethod, "direct_base_url": g.DirectBaseURL,
+		},
+		"files":      list,
+		"exec_count": execCount,
+		"exec_bytes": execBytes,
+		// dm=3 但商户根地址为空：清单里没有可用直链，前端提示管理员先补地址
+		"direct_ready": directBase != "",
+	})
+}
+
+// handleAdminVersionFileDownload 管理端单文件下载（核对文件本体；adminGuard 已在路由层）。
+// 与用户端 HandleGameFileDownload 的安全口径一致：归属校验 + 路径穿越二次校验 + 强制 attachment。
+func (s *Server) handleAdminVersionFileDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	vid, _ := strconv.ParseUint(r.PathValue("vid"), 10, 64)
+	fid, _ := strconv.ParseUint(r.PathValue("fid"), 10, 64)
+	var f model.GameFile
+	if err := store.DB.First(&f, fid).Error; err != nil || f.VersionID != uint(vid) {
+		adminFail(w, http.StatusNotFound, "文件不存在")
+		return
+	}
+	if f.StoragePath == "" {
+		adminFail(w, http.StatusBadRequest, "该文件不在平台存储（商户直连方式），请从上架地址直接访问")
+		return
+	}
+	abs := filepath.Join(s.cfg.Game.LocalDir, filepath.FromSlash(f.StoragePath))
+	root := filepath.Clean(s.cfg.Game.LocalDir)
+	if !strings.HasPrefix(filepath.Clean(abs), root+string(os.PathSeparator)) {
+		adminFail(w, http.StatusForbidden, "非法文件路径")
+		return
+	}
+	fp, err := os.Open(abs)
+	if err != nil {
+		adminFail(w, http.StatusNotFound, "文件已丢失，请重新上架该版本")
+		return
+	}
+	defer fp.Close()
+	st, err := fp.Stat()
+	if err != nil || st.IsDir() {
+		adminFail(w, http.StatusNotFound, "文件已丢失，请重新上架该版本")
+		return
+	}
+	// 文件名取 rel_path 末段：ASCII 安全回退 + RFC 5987 中文名，避免非 ASCII 直接落 header
+	base := filepath.Base(filepath.FromSlash(f.RelPath))
+	safe := strings.Map(func(r rune) rune {
+		if r < 0x20 || r >= 0x7f || strings.ContainsRune("\"\\;", r) {
+			return '_'
+		}
+		return r
+	}, base)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+safe+"\"; filename*=UTF-8''"+rfc5987Escape(base))
+	http.ServeContent(w, r, "", st.ModTime(), fp)
+}
+
+// rfc5987Escape Content-Disposition filename* 编码（GET 口径 attr-char 白名单，
+// 单引号/空格/中文等一律百分号编码；url.PathEscape 会漏掉 ' 与一些子分隔符）
+func rfc5987Escape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			strings.IndexByte("!#$&+-.^_`|~", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteString("%")
+		const hexDigits = "0123456789ABCDEF"
+		b.WriteByte(hexDigits[c>>4])
+		b.WriteByte(hexDigits[c&0x0f])
+	}
+	return b.String()
 }
 
 // gameMergeChunks 流式合并分片并复算 SHA256（MultiWriter 单遍完成写盘+校验）

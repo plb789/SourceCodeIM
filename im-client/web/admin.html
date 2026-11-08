@@ -16,7 +16,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.53">
-    <link rel="stylesheet" href="css/admin.css?v=1.38">
+    <link rel="stylesheet" href="css/admin.css?v=1.39">
     <link rel="stylesheet" href="css/merchant.css?v=1.0">
 </head>
 <body>
@@ -2224,12 +2224,43 @@
         </div>
     </div>
 
+    <!-- 版本文件清单浏览（人工审核：汇总/过滤/分页 + 文件本体下载或商户直链；只读） -->
+    <div id="gm-files-mask" class="modal-mask hidden">
+        <div class="modal-box gm-ver-box gm-files-box">
+            <div id="gm-files-title" class="modal-title">文件清单</div>
+            <div id="gm-files-summary" class="gm-files-summary">加载中…</div>
+            <div id="gm-files-hint" class="admin-field-hint hidden"></div>
+            <div class="gm-files-toolbar">
+                <input id="gm-files-search" class="admin-input" placeholder="按路径过滤（如 .dll、config、中文文件名）">
+                <button id="gm-files-exectoggle" class="admin-btn small" type="button">只看可执行</button>
+            </div>
+            <div class="gm-files-table-wrap">
+                <table class="vec-table gm-files-table">
+                    <thead>
+                        <tr><th style="width:52px">#</th><th>相对路径</th><th style="width:92px">大小</th><th style="width:150px">SHA-256</th><th style="width:150px">操作</th></tr>
+                    </thead>
+                    <tbody id="gm-files-tbody">
+                        <tr><td colspan="5" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div id="gm-files-pager" class="gm-files-pager hidden">
+                <button id="gm-files-prev" class="admin-btn small" type="button">上一页</button>
+                <span id="gm-files-page" class="admin-field-hint"></span>
+                <button id="gm-files-next" class="admin-btn small" type="button">下一页</button>
+            </div>
+            <div class="modal-btns">
+                <button id="gm-files-close" class="modal-btn">关 闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast 轻提示 -->
     <div id="admin-toast" class="toast hidden"></div>
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.78"></script>
+    <script src="js/admin.js?v=1.79"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

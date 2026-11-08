@@ -595,18 +595,12 @@ func TestAdminGameOwnershipTransfer(t *testing.T) {
 }
 
 func TestGatewayPackageBuild(t *testing.T) {
-	exe := ""
-	for _, p := range gatewayExeCandidates() {
-		if _, err := os.Stat(p); err == nil {
-			exe = p
-			break
-		}
+	sources := gatewayCollectSources()
+	if len(sources) == 0 {
+		t.Skip("bin 下无任何网关构建产物，跳过打包测试")
 	}
-	if exe == "" {
-		t.Skip("bin/im-gateway-2008r2.exe 构建产物不存在，跳过打包测试")
-	}
-	zipPath := filepath.Join(t.TempDir(), "im-gateway-2008r2.zip")
-	if err := gatewayZipBuild(zipPath, exe); err != nil {
+	zipPath := filepath.Join(t.TempDir(), "im-gateway.zip")
+	if err := gatewayZipBuild(zipPath, sources); err != nil {
 		t.Fatalf("打包失败：%v", err)
 	}
 	r, err := zip.OpenReader(zipPath)
@@ -626,6 +620,13 @@ func TestGatewayPackageBuild(t *testing.T) {
 			yamlContent = string(buf)
 		}
 	}
+	// 每个归集到的二进制都必须在包内（多平台一次下载）
+	for _, src := range sources {
+		if !names[src.ZipName] {
+			t.Fatalf("zip 缺少二进制 %s：%v", src.ZipName, names)
+		}
+	}
+	// 2008R2 兼容版为本仓库必有产物；yaml 与说明必在
 	if !names["im-gateway-2008r2.exe"] || !names["gateway.yaml"] || !names["部署说明.txt"] {
 		t.Fatalf("zip 缺少必备文件：%v", names)
 	}

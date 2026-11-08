@@ -1066,6 +1066,12 @@
     $('m-ord-next').addEventListener('click', function () { ordPage++; loadOrders(); });
 
     // ==================== 网关部署包下载（Blob 下载，带鉴权） ====================
+    // 使用说明（与 gametool-help / merchant-direct-help 同模式：新开说明页，商户照步骤部署）。
+    // null 守卫：浏览器缓存旧版 merchant.html 时新节点不存在，跳过绑定避免 TypeError 中断后续 boot()
+    (function () {
+        var gh = document.getElementById('m-gw-help');
+        if (gh) gh.addEventListener('click', function () { window.open('/gateway-help.html', '_blank'); });
+    })();
     $('m-gw-dl').addEventListener('click', function () {
         var tip = $('m-gw-tip');
         tip.textContent = '下载中…';
@@ -1075,7 +1081,7 @@
                 if (!r.ok) return r.json().then(function (j) { throw new Error(j.msg || ('HTTP ' + r.status)); });
                 var cd = r.headers.get('Content-Disposition') || '';
                 var m = /filename="?([^";]+)"?/.exec(cd);
-                return r.blob().then(function (b) { return { blob: b, name: (m && m[1]) || 'im-gateway-2008r2.zip' }; });
+                return r.blob().then(function (b) { return { blob: b, name: (m && m[1]) || 'im-gateway.zip' }; });
             })
             .then(function (p) {
                 var a = document.createElement('a');

@@ -1,6 +1,6 @@
 {
   "name": "im-client-pc",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "即时通讯 PC 桌面客户端",
   "author": {
     "name": "山西梗阳新能源有限公司"
@@ -62,7 +62,14 @@
       "!dll/**",
       "!elevator/**",
       "!overlay-native/**",
-      "!game-visible/**"
+      "!game-visible/**",
+      "!Steam/**",
+      "!hook/**",
+      "!*.log",
+      "!dev.bat",
+      "!double.bat",
+      "!publish-update.bat",
+      "!installer.nsh"
     ],
     "win": {
       "target": "nsis",

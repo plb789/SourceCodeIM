@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网关部署使用教程</title>
+<style>
+    /* 与商户后台同风格（跟随主题变量，缺省深色），骨架与 gametool-help.html 一致 */
+    :root { --bg:#1a1a1a; --panel:#242424; --border:rgba(255,255,255,.08); --text:#e8e8e8;
+            --text-light:#9a9a9a; --primary:#07c160; --code-bg:#111; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+           font-family:'Segoe UI','Microsoft YaHei',sans-serif; font-size:14px; line-height:1.8; }
+    .wrap { max-width:860px; margin:0 auto; padding:32px 24px 64px; }
+    h1 { font-size:22px; margin:0 0 6px; }
+    .sub { color:var(--text-light); font-size:13px; margin-bottom:28px; }
+    h2 { font-size:17px; margin:34px 0 12px; padding-left:10px; border-left:3px solid var(--primary); }
+    h3 { font-size:14px; margin:20px 0 8px; color:var(--text); }
+    p { margin:8px 0; color:var(--text); }
+    .tip { background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--primary);
+           border-radius:8px; padding:10px 14px; margin:12px 0; font-size:13px; color:var(--text-light); }
+    .warn { border-left-color:#e6a23c; }
+    code { background:var(--code-bg); border:1px solid var(--border); border-radius:4px;
+           padding:1px 7px; font-family:Consolas,monospace; font-size:12.5px; color:#d4d4d4; }
+    pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+          padding:14px 16px; overflow-x:auto; font-size:12.5px; line-height:1.7; }
+    pre code { background:none; border:none; padding:0; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+    th,td { border:1px solid var(--border); padding:8px 12px; text-align:left; }
+    th { background:var(--panel); color:var(--text-light); font-weight:600; white-space:nowrap; }
+    td code { white-space:nowrap; }
+    .step { display:flex; gap:12px; margin:18px 0; }
+    .step-no { flex:none; width:28px; height:28px; border-radius:50%; background:var(--primary);
+               color:#fff; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:14px; }
+    .step-body { flex:1; min-width:0; }
+    ol li { margin:4px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>网关部署使用教程</h1>
+    <div class="sub">游戏联机加密隧道 / 积分赞助充值写库 / 带参启动免登录进游戏，按需选用 ｜ 支持 Windows 与 Linux 服务器（部署包已内含全平台程序，一次下载按系统选用）</div>
+
+    <h2>一、网关是什么（三大用途，可只用其一）</h2>
+    <p><b>用途 1：游戏联机加密隧道（端口转发）</b>——玩家的 PC 客户端经网关的 TLS 加密隧道，连到你服务器
+    <b>本机（127.0.0.1）</b>的游戏服务端端口。你只需在配置里写一个监听端口和一组允许转发的本机端口白名单，
+    <b>不需要数据库</b>，联机数据全程加密转发。它带来的网络安全价值（防火墙只开一个端口、其余全部封闭）见
+    下一章详解。</p>
+    <p><b>用途 2：积分赞助充值写库</b>——玩家在游戏内用积分向平台<b>兑换游戏币</b>：平台记录订单与扣分 →
+    你服务器上的网关按固定周期向平台拉取新订单 → 用<b>参数化 SQL</b> 把充值直接写进你的游戏数据库，
+    数据库账号无需对公网开放。</p>
+    <p><b>用途 3：带参启动，免登录进游戏</b>——配合「游戏账号写库」：网关把玩家的 IM 账号与平台生成的
+    专属密码写入你的游戏库，玩家点开始游戏时平台按你配置的启动参数模板（<code>{0}</code>=账号、
+    <code>{1}</code>=专属密码）<b>带参数拉起游戏客户端</b>，玩家无需手动输入账号密码直接进游戏。
+    <b>前提：你的游戏客户端须支持带账号/密码命令行参数启动</b>（在游戏编辑页「启动程序 / 启动参数」里配置）。</p>
+
+    <div class="tip">三个用途<b>互相独立、可只用其一</b>：只用隧道联机，就不启用管理后台里的写库/充值（默认关闭）；
+    只用充值，监听与白名单按模板填你游戏的本机端口即可（网关要求至少一个监听组，不联机也无妨）；
+    要免登录进游戏，需启用「游戏账号写库」并在游戏编辑页配置带 <code>{0}</code>/<code>{1}</code> 的启动参数。
+    充值场景平台只下发「订单号 / 账号 / 金额」，<b>不接触你的数据库密码以外的任何游戏数据</b>；
+    写库 SQL 由你自己填写，平台无法越权操作你的库。</div>
+
+    <h2>二、走隧道为什么更安全（网络安全详解）</h2>
+    <p>传统开服要把游戏端口直接暴露在公网：玩家直连游戏端口，扫描器也扫得到你的游戏端口、数据库端口、
+    管理端口——任何一个服务有漏洞都可能被直接利用。走网关隧道后，架构变成
+    <b>「玩家 → TLS 加密隧道（网关唯一入口）→ 127.0.0.1 本机端口」</b>，安全模型彻底改变：</p>
+    <table>
+        <tr><th></th><th>传统直连开服</th><th>走网关隧道</th></tr>
+        <tr><td>公网必须开放的端口</td><td>游戏端口（可能还有多个）</td><td><b>仅网关 listen_tcp 一个</b></td></tr>
+        <tr><td>游戏服务端暴露</td><td>直接暴露公网，可被扫描探测</td><td>只绑 127.0.0.1，公网<b>完全不可见</b></td></tr>
+        <tr><td>数据库端口</td><td>可能被波及暴露</td><td>与公网隔离，仅网关本机可达</td></tr>
+        <tr><td>联机流量</td><td>明文（多数老游戏无加密）</td><td>TLS 全程加密</td></tr>
+        <tr><td>能连到哪些目标</td><td>端口开了就是全开</td><td>仅 <code>allow_targets</code> 白名单内的 127.0.0.1 端口</td></tr>
+    </table>
+    <p>具体是<b>四层防护</b>在起作用：</p>
+    <ol>
+        <li><b>入口收敛</b>：防火墙只放行网关的 <code>listen_tcp</code> 一个端口（<code>listen_udp</code> 配了不同端口则一并放行），游戏端口、数据库端口、远程桌面等<b>全部对公网封闭</b>——公网扫描器与攻击者只能看到网关一个入口，攻击面缩到最小；</li>
+        <li><b>目标白名单</b>：网关只转发到 <code>allow_targets</code> 列出的 <b>127.0.0.1 端口</b>，白名单外一律拒绝——即使网关被盯上，也触达不了内网其他目标；</li>
+        <li><b>链路加密</b>：玩家到网关全程 TLS（证书首次启动自动生成），账号密码与联机数据不在公网明文传输；</li>
+        <li><b>服务隐身</b>：游戏服务端绑定 127.0.0.1（最安全），不监听公网网卡——不开放就等于不存在，扫描器探无可探。</li>
+    </ol>
+    <div class="tip">一句话：<b>公网只见一个门（网关），门后所有房间（游戏、数据库）都在内网里</b>。
+    防火墙配置一句话——放行 listen_tcp，其余全封；游戏服务端监听地址改成 127.0.0.1 即可。</div>
+
+    <h2>三、开始前：找平台管理员拿两样东西</h2>
+    <table>
+        <tr><th>需要</th><th>说明</th></tr>
+        <tr><td>网关名</td><td>由平台管理员在后台「网关地址簿」为你分配（小写字母/数字/_/-），后续填在游戏编辑的「充值网关名」里</td></tr>
+        <tr><td>专属密钥 <code>token_secret</code></td><td>同一条地址簿条目的 64 位十六进制密钥，填进网关配置文件——<b>平台不会把密钥打进部署包</b>，需单独向你提供</td></tr>
+    </table>
+
+    <h2>四、部署步骤</h2>
+
+    <div class="step"><div class="step-no">1</div><div class="step-body">
+        <h3>下载部署包并选用对应程序</h3>
+        <p>商户后台 → 网关部署 → 「<b>下载网关部署包（Windows + Linux）</b>」。包内文件：</p>
+        <table>
+            <tr><th>文件</th><th>选用</th></tr>
+            <tr><td><code>im-gateway.exe</code></td><td>Windows 10 / Server 2016 及以上（<b>多数情况用这个</b>）</td></tr>
+            <tr><td><code>im-gateway-2008r2.exe</code></td><td>Windows Server 2008 R2 / 2012 专用兼容版</td></tr>
+            <tr><td><code>im-gateway-linux</code></td><td>Linux 服务器（amd64，静态编译零依赖，无需安装任何运行库）</td></tr>
+            <tr><td><code>im-gateway-linux-arm64</code></td><td>Linux ARM 架构服务器（如有）</td></tr>
+            <tr><td><code>gateway.yaml</code></td><td>配置模板（<b>不含任何密钥</b>），两端通用</td></tr>
+        </table>
+        <p>按你的服务器系统选用对应程序即可，部署步骤见下文；Linux 部署另见「五、Linux 服务器部署」。</p>
+    </div></div>
+
+    <div class="step"><div class="step-no">2</div><div class="step-body">
+        <h3>解压并填写 gateway.yaml</h3>
+        <p>解压到任意目录（如 <code>D:\im-gateway\</code>），用文本编辑器打开 <code>gateway.yaml</code>，
+        改三处（<b>写库 / 充值配置不在 yaml 里手填</b>，见第 4 步的网关管理后台）：</p>
+        <pre><code>listen_tcp: "0.0.0.0:30100"      # 隧道监听端口（联机用，可自定；TLS 证书首次启动自动生成）
+allow_targets: [7777]            # 转发白名单：改成你游戏服务端在本机监听的端口（可多个）
+admin_listen: "127.0.0.1:30101"  # 本机管理后台地址，保持仅内网
+admin_password: "你的后台登录密码"     # 自行新增这一行：第 4 步登录管理后台用
+token_secret: "管理员给你的64位密钥"   # 替换模板占位值！
+dbwrite:
+  poll_interval: 3s
+  games: []                      # 保持为空即可，配置在第 4 步后台在线填写</code></pre>
+        <div class="tip"><code>allow_targets</code> 是联机隧道的关键：只允许转发到你列出的 <b>127.0.0.1 本机端口</b>，
+        按你游戏服务端实际监听的端口填写（多个用逗号分隔，如 <code>[7777, 7778]</code>）。
+        <code>admin_password</code> 是管理后台登录密码（模板里没有这行，需自行新增），请使用强密码——
+        <b>admin_listen 只能本机/内网访问</b>，切勿绑定公网。</div>
+    </div></div>
+
+    <div class="step"><div class="step-no">3</div><div class="step-body">
+        <h3>运行并放行端口</h3>
+        <p>双击运行选定的网关程序（或命令行运行），并在服务器防火墙放行 <code>listen_tcp</code> 端口。
+        建议用 NSSM / 计划任务把它注册为系统服务，避免关掉命令行窗口后网关停摆。</p>
+        <div class="tip"><b>只用隧道联机、不需要充值？到这一步就完成了</b>——写库/充值默认关闭，无需再做第 4、5 步；
+        转发白名单以后可在管理后台在线调整（热生效）。</div>
+    </div></div>
+
+    <div class="step"><div class="step-no">4</div><div class="step-body">
+        <h3>在网关管理后台在线配置写库 / 充值（只用隧道可跳过）</h3>
+        <p>网关自带本机 Web 管理后台，<b>写库与充值配置都在这里在线填写</b>，保存即热生效并自动写回
+        gateway.yaml（无需手动改文件、无需重启）：</p>
+        <ol>
+            <li>在网关所在服务器打开浏览器，访问 <code>http://127.0.0.1:30101</code>（即 gateway.yaml 的 <code>admin_listen</code> 地址），用第 2 步设置的 <code>admin_password</code> 登录；</li>
+            <li>「<b>游戏账号写库</b>」卡片：勾选启用 → 填自报网关名（与地址簿条目一致）和 im-server 地址 → 选数据库类型（连接串有默认模板，可点「<b>测试连接</b>」验证）→ 按提示改 INSERT/UPDATE 模板 → 「保存并热生效」。<b>用途 3 的免登录进游戏依赖此卡片</b>（把账号/专属密码写进游戏库）；</li>
+            <li>「<b>积分兑换充值</b>」卡片：勾选启用 → 填网关名与 im-server 地址 → 「+ 添加游戏」填游戏 ID、数据库类型、DSN 与充值 SQL 模板（占位符 <code>{user}</code>/<code>{amount}</code>/<code>{order}</code>）→ 「保存并热生效」。</li>
+        </ol>
+        <div class="tip">页面内置了各数据库的连接串模板、TLS 老版本兼容（<code>;encrypt=disable</code>）、存储过程写法等完整提示，
+        照页面说明填写即可；复杂充值逻辑建议写在游戏库的存储过程里、按订单号 <code>{order}</code> 去重防重复加钱。</div>
+    </div></div>
+
+    <div class="step"><div class="step-no">5</div><div class="step-body">
+        <h3>在游戏编辑页开启积分赞助</h3>
+        <ol>
+            <li>商户后台 → 我的应用 → 编辑游戏；</li>
+            <li>勾选「<b>开放积分赞助</b>」；</li>
+            <li>填写<b>汇率</b>（1 积分 = N 游戏币）、<b>单日限额</b>（0=不限）；</li>
+            <li>填写<b>充值档位</b>（逗号分隔，如 <code>100,500,1000</code>——档位即单笔白名单，不在档位内的金额无法充值）；</li>
+            <li>填写「<b>充值网关名</b>」（开始前平台管理员分配的网关名）→ 保存。</li>
+        </ol>
+    </div></div>
+
+    <div class="step"><div class="step-no">6</div><div class="step-body">
+        <h3>平台侧连通验证</h3>
+        <p>通知平台管理员在后台「网关地址簿」确认本网关条目的地址/指纹正确并<b>启用</b>，由平台侧发起连通验证。
+        验证通过后玩家即可在游戏内使用积分赞助，充值自动写入你的数据库。</p>
+    </div></div>
+
+    <h2>五、Linux 服务器部署（可选）</h2>
+    <p>你的游戏数据库在 Linux 服务器上时，网关可以直接跑在 Linux 上（同一台机或同内网均可）。
+    网关是<b>静态编译的单文件程序，零依赖</b>——不需要安装 Go / 任何运行库，任何发行版直接运行。
+    部署包已内含 Linux 版 <code>im-gateway-linux</code>（ARM 服务器用包内 <code>im-gateway-linux-arm64</code>），
+    无需另行索取，直接从包中取出使用即可。</p>
+
+    <div class="step"><div class="step-no">1</div><div class="step-body">
+        <h3>上传并赋执行权限</h3>
+        <p>用 <b>scp / sftp（二进制方式）</b>上传到服务器任意目录（如 <code>/opt/im-gateway/</code>）——
+        切勿用文本模式 FTP，会损坏二进制导致 <code>cannot execute binary file</code>。然后执行：</p>
+        <pre><code>chmod +x im-gateway-linux
+file im-gateway-linux   # 显示 "statically linked" 即完整（x86-64=64位服务器；arm64 用 arm64 版）</code></pre>
+    </div></div>
+
+    <div class="step"><div class="step-no">2</div><div class="step-body">
+        <h3>准备 gateway.yaml</h3>
+        <p>与 Windows 版<b>第 2 步填法完全相同</b>（同目录放一份：<code>token_secret</code> 填地址簿密钥、
+        自行新增 <code>admin_password</code> 一行、<code>dbwrite.games</code> 留空）。
+        配置文件两端通用，从 Windows 包里取模板改即可。</p>
+    </div></div>
+
+    <div class="step"><div class="step-no">3</div><div class="step-body">
+        <h3>启动与常驻</h3>
+        <p>前台试跑：<code>./im-gateway-linux</code>（须在 gateway.yaml 所在目录运行）。确认无报错后注册 systemd 常驻：</p>
+        <pre><code># /etc/systemd/system/im-gateway.service
+[Unit]
+Description=im-gateway
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/im-gateway
+ExecStart=/opt/im-gateway/im-gateway-linux
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+        <pre><code>systemctl daemon-reload &amp;&amp; systemctl enable --now im-gateway
+systemctl status im-gateway   # 查看运行状态与日志</code></pre>
+    </div></div>
+
+    <div class="step"><div class="step-no">4</div><div class="step-body">
+        <h3>防火墙与管理后台访问</h3>
+        <ul>
+            <li>防火墙放行 <code>listen</code> 端口（firewalld：<code>firewall-cmd --permanent --add-port=30100/tcp</code> 后 reload；ufw：<code>ufw allow 30100/tcp</code>）；</li>
+            <li><code>admin_listen</code> 只监听 127.0.0.1：<b>远程访问走 SSH 隧道</b>——本机执行
+            <code>ssh -L 30101:127.0.0.1:30101 用户@服务器</code>，然后浏览器开 <code>http://127.0.0.1:30101</code>
+            即可按「三、部署步骤」第 4 步的方式在线配置写库与充值。</li>
+        </ul>
+        <div class="tip">其余步骤与 Windows 版完全一致：网关管理后台在线配置写库/充值 → 商户后台游戏编辑页开启积分赞助 → 平台侧连通验证。</div>
+    </div></div>
+
+    <h2>六、配置项对照</h2>
+    <table>
+        <tr><th>配置项</th><th>在哪配</th><th>说明</th></tr>
+        <tr><td><code>listen_tcp</code></td><td>gateway.yaml</td><td>联机隧道监听地址（TLS 加密，证书缺省自动生成 gateway.crt/key）</td></tr>
+        <tr><td><code>allow_targets</code></td><td>gateway.yaml / 管理后台</td><td>隧道转发白名单：<b>仅允许转发到本机 127.0.0.1 的这些端口</b>，至少一个；后台可在线调整（热生效）</td></tr>
+        <tr><td><code>admin_listen</code></td><td>gateway.yaml</td><td>网关本机管理后台地址，<b>仅限内网访问，严禁绑定公网</b></td></tr>
+        <tr><td><code>admin_password</code></td><td>gateway.yaml（自行新增）</td><td>管理后台登录密码，强密码并妥善保管</td></tr>
+        <tr><td><code>token_secret</code></td><td>gateway.yaml</td><td>与平台「网关地址簿」该条目专属密钥<b>完全一致</b>（64 位 hex）；两端不一致时平台验签失败</td></tr>
+        <tr><td>游戏账号写库（dbwrite）</td><td>网关管理后台在线填写</td><td>启用开关 / 网关名 / im-server 地址 / 数据库类型 / DSN（带默认模板与「测试连接」）/ 写入策略 / SQL 模板（占位符 <code>{user}</code>/<code>{password}</code>），保存即热生效并自动落盘</td></tr>
+        <tr><td>积分兑换充值（recharge）</td><td>网关管理后台在线填写</td><td>逐游戏配置：游戏 ID / 数据库类型 / DSN / 充值 SQL 模板（占位符 <code>{user}</code>/<code>{amount}</code>/<code>{order}</code>）；执行失败的订单自动重试，持续失败 30 分钟平台自动退分</td></tr>
+    </table>
+
+    <h2>七、安全须知</h2>
+    <div class="tip warn">
+        1. <code>token_secret</code> 泄露等同于放弃网关鉴权：请妥善保管，疑似泄露立即联系平台管理员在地址簿中<b>轮换密钥</b>（换后同步改 gateway.yaml 并重启网关）；<br>
+        2. 写库数据库账号使用<b>强密码 + 最小权限</b>（只给目标表所需的 INSERT/UPDATE 权限）；<br>
+        3. 网关机只放行 <code>listen_tcp</code> 端口（其余全部封闭，详见第二章）；<code>admin_listen</code> 保持 127.0.0.1，<code>admin_password</code> 使用强密码（管理后台可改写库配置，泄露等同开放数据库）；<br>
+        4. 配置文件含数据库密码，注意服务器本身的访问控制与备份安全。
+    </div>
+
+    <h2>八、常见问题</h2>
+    <table>
+        <tr><th>现象</th><th>原因 / 处理</th></tr>
+        <tr><td>防火墙到底要开哪些端口？</td><td>只放行网关的 <code>listen_tcp</code>（若 <code>listen_udp</code> 配了不同端口则一并放行）——游戏服务端端口、数据库端口等<b>全部封闭</b>，游戏服务端建议绑定 127.0.0.1；这正是走隧道的安全意义：公网只见一个网关入口</td></tr>
+        <tr><td>启动报「allow_targets 白名单不能为空」</td><td>白名单被清空了——填回你游戏服务端的本机端口（至少一个）</td></tr>
+        <tr><td>启动报端口占用</td><td><code>listen_tcp</code> 端口被其他程序使用——修改端口后重启网关</td></tr>
+        <tr><td>平台侧验签失败</td><td><code>token_secret</code> 与地址簿条目不一致（复制时多了空格/少了字符）——核对后重启网关</td></tr>
+        <tr><td>平台侧连通验证不通</td><td>防火墙未放行 <code>listen_tcp</code> 端口，或服务器有安全组/运营商封锁——放行后再验证</td></tr>
+        <tr><td>玩家充值提示不可用</td><td>游戏未勾选「开放积分赞助」、充值网关名没填/填错，或该网关在平台侧未启用——逐项核对</td></tr>
+        <tr><td>玩家扣了积分但游戏币没到账</td><td>① 网关进程没在运行；② 网关管理后台「积分兑换充值」里没配置该游戏、未启用或 DSN 连不通（用「测试连接」验证）；③ 充值 SQL 模板与你的表结构不匹配——按页面提示修正后「保存并热生效」，平台侧失败订单会自动重试补写</td></tr>
+        <tr><td>充值金额不在档位内失败</td><td>玩家单笔金额不在「充值档位」白名单——编辑游戏增补档位</td></tr>
+        <tr><td>换了数据库密码</td><td>在网关管理后台把 DSN 改成新密码 → 「保存并热生效」（自动落盘，无需重启）</td></tr>
+        <tr><td>Linux 报 cannot execute binary file</td><td>① 上传时用了文本模式 FTP 损坏了二进制——改用 scp/sftp 二进制方式重传；② 服务器是 ARM 架构——换 arm64 版网关文件</td></tr>
+        <tr><td>Linux 上 systemctl 启动后连不上管理后台</td><td><code>admin_listen</code> 只监听服务器本机 127.0.0.1——按「五、Linux 服务器部署」第 4 步用 SSH 隧道访问，切勿改成 0.0.0.0 暴露公网</td></tr>
+    </table>
+</div>
+</body>
+</html>

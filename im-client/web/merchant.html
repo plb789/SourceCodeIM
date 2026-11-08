@@ -99,9 +99,10 @@
             <section class="m-view hidden" id="m-view-gateway">
                 <header class="m-head"><h2>网关部署</h2></header>
                 <div class="m-card">
-                    <p class="m-p">下载网关部署包并在您的服务器上部署，玩家的积分赞助经网关参数化 SQL 写入您的游戏数据库。包内含 2008R2/2012 兼容版程序、<b>不含任何密钥</b>的配置模板与部署说明。</p>
+                    <p class="m-p">下载网关部署包并在您的服务器上部署。网关三大用途按需选用：<b>游戏联机加密隧道</b>（防火墙只需开放网关一个端口，其余全部封闭）、<b>积分赞助充值写库</b>（玩家积分兑换游戏币直接写入您的游戏数据库）、<b>带参启动免登录进游戏</b>（客户端支持带账号/密码参数启动时）。包内含 <b>Windows 标准版 / 2008R2 兼容版 / Linux 版</b>程序、<b>不含任何密钥</b>的配置模板与部署说明——一次下载，按您的服务器系统选用对应程序。</p>
                     <p class="m-p">部署要点：解压后按说明填写 <code>token_secret</code>（由平台管理员在后台「网关地址簿」分配）与游戏数据库配置，运行后由平台侧连通验证。</p>
-                    <button id="m-gw-dl" class="admin-btn primary">⬇ 下载 im-gateway-2008r2.zip</button>
+                    <button id="m-gw-dl" class="admin-btn primary">⬇ 下载网关部署包（Windows + Linux）</button>
+                    <button id="m-gw-help" class="admin-btn" type="button">使用说明</button>
                     <span id="m-gw-tip" class="m-head-tip"></span>
                 </div>
             </section>
@@ -268,6 +269,6 @@
     <!-- 自绘 Toast -->
     <div id="m-toast" class="m-toast hidden"></div>
 
-    <script src="js/merchant.js?v=1.5"></script>
+    <script src="js/merchant.js?v=1.7"></script>
 </body>
 </html>

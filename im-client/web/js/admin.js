@@ -7039,6 +7039,9 @@
             var tdT = document.createElement('td'); tdT.textContent = v.create_time || '-'; tr.appendChild(tdT);
             var tdOp = document.createElement('td');
             tdOp.className = 'vec-td-actions';
+            tdOp.appendChild(opBtn('查看文件(' + (v.file_count || 0) + ')', '', function () {
+                gmvfOpen(v.id, v.version);
+            }));
             tdOp.appendChild(opBtn('导出清单', '', function () {
                 gmExportFilelist(v.id, v.version);
             }));
@@ -7055,6 +7058,209 @@
             tr.appendChild(tdOp);
             tbody.appendChild(tr);
         });
+    }
+
+    // ===== 版本文件清单浏览（人工审核：清单 + 可执行标记 + 下载 / 商户直链） =====
+    // 只读接口 GET /admin/api/game/version/{vid}/files；过滤与分页全部在前端本地完成
+    // （清单一次性载入内存，数千文件的大版本也不额外打服务端）。dm=3 版本不代理下载——
+    // 文件本体在商户服务器，服务端零外联（杜绝 SSRF），行尾给「打开直链」「复制地址」；
+    // 平台存储版本走管理端专用下载口 /admin/api/game/version/{vid}/file/{fid}（adminGuard）。
+    var GMVF_PAGE = 100;
+    var gmvfState = { vid: 0, ver: '', data: null, keyword: '', execOnly: false, page: 0 };
+
+    function gmvfOpen(vid, ver) {
+        gmvfState.vid = vid;
+        gmvfState.ver = ver;
+        gmvfState.data = null;
+        gmvfState.keyword = '';
+        gmvfState.execOnly = false;
+        gmvfState.page = 0;
+        $('gm-files-title').textContent = '文件清单 - ' + ((gmVerGame && gmVerGame.name) || '') + ' v' + ver;
+        $('gm-files-summary').textContent = '加载中…';
+        $('gm-files-hint').classList.add('hidden');
+        $('gm-files-search').value = '';
+        $('gm-files-exectoggle').classList.remove('active');
+        $('gm-files-tbody').innerHTML = '<tr><td colspan="5" class="vec-empty">加载中…</td></tr>';
+        $('gm-files-pager').classList.add('hidden');
+        $('gm-files-mask').classList.remove('hidden');
+        api('GET', '/admin/api/game/version/' + vid + '/files').then(function (res) {
+            if (!res.ok) {
+                showToast(res.msg || '加载失败');
+                $('gm-files-summary').textContent = res.msg || '加载失败';
+                $('gm-files-tbody').innerHTML = '<tr><td colspan="5" class="vec-empty">加载失败</td></tr>';
+                return;
+            }
+            gmvfState.data = res.data;
+            gmvfRender();
+        }).catch(function () {
+            showToast('网络异常');
+            $('gm-files-summary').textContent = '网络异常';
+            $('gm-files-tbody').innerHTML = '<tr><td colspan="5" class="vec-empty">网络异常</td></tr>';
+        });
+    }
+
+    function gmvfFiltered() {
+        var d = gmvfState.data;
+        if (!d) return [];
+        var kw = gmvfState.keyword.trim().toLowerCase();
+        return (d.files || []).filter(function (f) {
+            if (gmvfState.execOnly && !f.exec) return false;
+            if (kw && String(f.rel_path || '').toLowerCase().indexOf(kw) < 0) return false;
+            return true;
+        });
+    }
+
+    function gmvfRender() {
+        var d = gmvfState.data;
+        var tbody = $('gm-files-tbody');
+        tbody.innerHTML = '';
+        if (!d) return;
+        var v = d.version || {}, g = d.game || {};
+        var isDirect = Number(g.download_method) === 3;
+        // 汇总头：文件数 / 总大小 / 可执行统计 / 分发方式
+        var head = ['共 ' + (v.file_count || (d.files || []).length) + ' 个文件',
+            '总大小 ' + fmFormatSize(v.size_bytes || 0),
+            '分发方式：' + (isDirect ? '商户直连 HTTP' : '平台分发')];
+        if (d.exec_count) {
+            head.push('可执行 ' + d.exec_count + ' 个（' + fmFormatSize(d.exec_bytes || 0) + '）');
+        }
+        $('gm-files-summary').textContent = head.join(' · ');
+        // dm=3 提示：直链即客户端实际访问地址；未配置根地址时无法生成
+        var hint = $('gm-files-hint');
+        if (isDirect) {
+            hint.textContent = d.direct_ready
+                ? '文件本体在商户服务器，平台不存储；直链 = 商户根地址 + 相对路径（与客户端实际访问一致）。'
+                : '该游戏为商户直连方式，但商户根地址为空，无法生成直链——请先到游戏编辑页补全地址。';
+            hint.classList.remove('hidden');
+        } else {
+            hint.classList.add('hidden');
+        }
+        var files = gmvfFiltered();
+        var total = files.length;
+        var pages = Math.max(1, Math.ceil(total / GMVF_PAGE));
+        if (gmvfState.page >= pages) gmvfState.page = pages - 1;
+        if (gmvfState.page < 0) gmvfState.page = 0;
+        if (!total) {
+            var tr0 = document.createElement('tr');
+            var td0 = document.createElement('td');
+            td0.colSpan = 5;
+            td0.className = 'vec-empty';
+            td0.textContent = (d.files && d.files.length) ? '没有匹配的文件' : '该版本没有文件记录';
+            tr0.appendChild(td0);
+            tbody.appendChild(tr0);
+            $('gm-files-pager').classList.add('hidden');
+            return;
+        }
+        var start = gmvfState.page * GMVF_PAGE;
+        var rows = files.slice(start, start + GMVF_PAGE);
+        rows.forEach(function (f, i) {
+            var tr = document.createElement('tr');
+            var tdN = document.createElement('td'); tdN.textContent = start + i + 1; tr.appendChild(tdN);
+            var tdP = document.createElement('td');
+            tdP.className = 'gm-files-path';
+            tdP.textContent = f.rel_path || '';
+            tdP.title = f.rel_path || '';
+            if (f.exec) {
+                var badge = document.createElement('span');
+                badge.className = 'gm-files-exec';
+                badge.textContent = '可执行';
+                tdP.appendChild(badge);
+            }
+            tr.appendChild(tdP);
+            var tdS = document.createElement('td'); tdS.textContent = fmFormatSize(f.size || 0); tr.appendChild(tdS);
+            var tdH = document.createElement('td');
+            tdH.className = 'gm-files-sha';
+            tdH.textContent = f.sha256 || '-';
+            tdH.title = f.sha256 || '';
+            tr.appendChild(tdH);
+            var tdOp = document.createElement('td');
+            tdOp.className = 'vec-td-actions';
+            if (isDirect) {
+                if (f.url) {
+                    tdOp.appendChild(gmvfBtn('打开直链', function () {
+                        window.open(f.url, '_blank', 'noopener');
+                    }));
+                    tdOp.appendChild(gmvfBtn('复制地址', function () {
+                        gmvfCopy(f.url);
+                    }));
+                } else {
+                    tdOp.textContent = '-';
+                }
+            } else if (f.url) {
+                tdOp.appendChild(gmvfBtn('下载', function () { gmvfDownload(f); }));
+            } else {
+                tdOp.textContent = '-';
+            }
+            tr.appendChild(tdOp);
+            tbody.appendChild(tr);
+        });
+        var pager = $('gm-files-pager');
+        if (pages > 1) {
+            pager.classList.remove('hidden');
+            $('gm-files-page').textContent = '第 ' + (gmvfState.page + 1) + ' / ' + pages + ' 页 · 共 ' + total + ' 条';
+            $('gm-files-prev').disabled = gmvfState.page <= 0;
+            $('gm-files-next').disabled = gmvfState.page >= pages - 1;
+        } else {
+            pager.classList.add('hidden');
+        }
+    }
+
+    function gmvfBtn(text, fn) {
+        var b = document.createElement('button');
+        b.className = 'admin-btn small';
+        b.type = 'button';
+        b.textContent = text;
+        b.addEventListener('click', fn);
+        return b;
+    }
+
+    // 文件本体下载（管理端专用下载口，需带 Bearer；与全站 fetch→Blob 下载口径一致）。
+    // 超 512MB 先确认：fetch→Blob 会整份驻留浏览器内存，避免无谓占用。
+    function gmvfDownload(f) {
+        if (!f || !f.url) { showToast('该文件没有可用下载地址'); return; }
+        function doFetch() {
+            fetch(f.url, { headers: { 'Authorization': 'Bearer ' + getToken() } }).then(function (r) {
+                if (!r.ok) {
+                    return r.json().then(function (j) { throw new Error(j.msg || ('HTTP ' + r.status)); });
+                }
+                return r.blob();
+            }).then(function (blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = String(f.rel_path || 'file').split('/').pop();
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+            }).catch(function (e) {
+                showToast('下载失败：' + (e && e.message ? e.message : '网络异常'));
+            });
+        }
+        if (Number(f.size) > 512 * 1024 * 1024) {
+            confirmBox('该文件约 ' + fmFormatSize(f.size) + '，浏览器下载会占用大量内存，确定继续？', doFetch);
+            return;
+        }
+        doFetch();
+    }
+
+    // 复制文本（安全上下文用 Clipboard API；内网 http 回退临时 textarea + execCommand）
+    function gmvfCopy(text) {
+        function fallback() {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            ta.remove();
+            showToast(ok ? '地址已复制' : '复制失败，请手动选择地址');
+        }
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(function () { showToast('地址已复制'); }, fallback);
+            return;
+        }
+        fallback();
     }
 
     // ===== 文件清单（目录/多文件选择 → 归口清洗 → 逐行预览） =====
@@ -7551,6 +7757,34 @@
     $('gm-ver-close').addEventListener('click', function () {
         if (gmUploading) { showToast('上传进行中，请先取消上传'); return; }
         $('gm-ver-mask').classList.add('hidden');
+    });
+    // 版本文件清单浏览弹窗（遮罩点击/关闭按钮均可关；与版本弹窗同层，后挂 DOM 在上）
+    $('gm-files-mask').addEventListener('click', function (e) {
+        if (e.target !== this) return;
+        this.classList.add('hidden');
+    });
+    $('gm-files-close').addEventListener('click', function () {
+        $('gm-files-mask').classList.add('hidden');
+    });
+    $('gm-files-search').addEventListener('input', function () {
+        gmvfState.keyword = this.value || '';
+        gmvfState.page = 0;
+        gmvfRender();
+    });
+    $('gm-files-exectoggle').addEventListener('click', function () {
+        gmvfState.execOnly = !gmvfState.execOnly;
+        this.classList.toggle('active', gmvfState.execOnly);
+        gmvfState.page = 0;
+        gmvfRender();
+    });
+    $('gm-files-prev').addEventListener('click', function () {
+        if (gmvfState.page <= 0) return;
+        gmvfState.page -= 1;
+        gmvfRender();
+    });
+    $('gm-files-next').addEventListener('click', function () {
+        gmvfState.page += 1;
+        gmvfRender();
     });
     // 文件选择区
     $('gm-pick-dir').addEventListener('click', function () { $('gm-file-dir').click(); });

@@ -1,8 +1,9 @@
 // Go 工作区（多模块仓库）：Trae/VS Code 语言服务器（gopls）从工作区根 E:\SourceCodeIM
 // 加载时据此确定性地发现各 Go 模块——根目录本身无 go.mod，缺失本文件会导致 gopls
 // "initial workspace load failed: cannot find main module"，编辑器对模块内文件显示
-// 误报红线（编译/vet/gofmt 实际全部通过）。对 go build/test 无行为影响（各模块内
-// 构建口径不变），仅服务于 IDE 工作区发现。
+// 误报红线（编译/vet/gofmt 实际全部通过）。现代 Go 工具链对 go build/test 无行为影响；
+// 但旧工具链（如 2008R2 网关用的 Go 1.20）无法解析新版 go 指令——build-gateway-2008r2.bat
+// 内已设 GOWORK=off 屏蔽本文件（gateway-legacy 自带独立 go.mod，依赖解析不受影响）。
 go 1.26.0
 
 use (

@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 title im-gateway 2008R2 兼容版一键编译
+setlocal
 cd /d "%~dp0"
 
 echo ============================================
@@ -16,6 +17,9 @@ set "GOROOT=%GOTOOLS%\go"
 set "GOBIN=%GOROOT%\bin"
 set "GOCACHE=%LOCALAPPDATA%\go1.20-build-cache"
 set "CGO_ENABLED=0"
+rem 屏蔽仓库根 go.work（其 go 指令为新版格式 "1.26.0"，Go 1.20 解析直接报错退出；
+rem gateway-legacy 自带独立 go.mod，关闭工作区不影响依赖解析）
+set "GOWORK=off"
 
 rem [0/3] 工具链检查：无则自动下载官方 Go 1.20.14 zip 并解压（不影响已安装的 Go）
 if exist "%GOBIN%\go.exe" goto tools_ok
@@ -40,15 +44,9 @@ rem [1/1] 在 gateway-legacy（独立 module，go 1.20 + 依赖钉版）内编�
 echo [1/1] 编译 2008R2 兼容版（Windows amd64）...
 pushd gateway-legacy
 "%GOBIN%\go.exe" build -ldflags "-s -w" -o "..\bin\im-gateway-2008r2.exe" .
-if errorlevel 1 (
-    popd
-    echo.
-    echo [错误] 2008R2 兼容版编译失败，请检查上方报错
-    echo        提示：依赖版本被改动会破坏 go1.20 兼容（go.mod 已钉版，勿升级）
-    pause
-    exit /b 1
-)
+set "BUILD_RC=%errorlevel%"
 popd
+if not "%BUILD_RC%"=="0" goto build_fail
 echo        OK: bin\im-gateway-2008r2.exe
 echo.
 echo        部署：本 exe 与 gateway.yaml 拷到 Server2008R2/2012 机器同目录运行；
@@ -85,5 +83,12 @@ exit /b 1
 :nodir
 echo.
 echo [错误] 未找到 gateway-legacy 源码目录（%cd%\gateway-legacy）
+pause
+exit /b 1
+
+:build_fail
+echo.
+echo [错误] 2008R2 兼容版编译失败，请检查上方报错
+echo        提示: 依赖版本被改动会破坏 go1.20 兼容（go.mod 已钉版，勿升级）
 pause
 exit /b 1
