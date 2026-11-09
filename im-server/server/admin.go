@@ -197,6 +197,8 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /admin/api/points/logs", s.adminGuard(s.handleAdminPointsLogs))
 	// 阶段七十八：流水 CSV 导出（服务端流式生成，支持与查询一致的过滤条件）
 	http.HandleFunc("GET /admin/api/points/logs/export", s.adminGuard(s.handleAdminPointsLogsExport))
+	// 一键清空所有账号积分（全局清零）：需输入当前管理员密码二次验证，事务内批量清零 + 批量流水
+	http.HandleFunc("POST /admin/api/points/clear", s.adminGuard(s.handleAdminPointsClear))
 	// 阶段一百三十四：后台账号管理（资料修改/密码重置，实现归口 adminaccounts.go）
 	http.HandleFunc("PUT /admin/api/users/{username}/profile", s.adminGuard(s.handleAdminUserProfilePut))
 	http.HandleFunc("PUT /admin/api/users/{username}/password", s.adminGuard(s.handleAdminUserPasswordPut))

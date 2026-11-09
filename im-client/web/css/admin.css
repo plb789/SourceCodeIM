@@ -233,6 +233,82 @@ td .skel-line {
     /* 中性化 hover：灰底加深（同 admin-btn 统一） */
     background: var(--hover);
 }
+.admin-side-head-btns {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* 导航编辑模式：齿轮按钮高亮 */
+.admin-nav-setting-active {
+    background: var(--primary) !important;
+    color: #fff !important;
+    border-color: var(--primary) !important;
+}
+/* 隐藏的导航项 */
+.admin-nav-item.nav-hidden {
+    display: none !important;
+}
+/* 编辑模式下：导航项尾部显示胶囊切换按钮 */
+.admin-nav-edit .admin-nav-item {
+    position: relative;
+}
+.admin-nav-edit .admin-nav-item::after {
+    content: '';
+    flex: none;
+}
+/* 编辑模式：导航项尾部胶囊按钮 */
+.admin-nav-toggle {
+    margin-left: auto;
+    flex: none;
+    border: none;
+    background: transparent;
+    padding: 2px 0;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+    display: flex;
+    align-items: center;
+}
+.admin-nav-edit .admin-nav-toggle {
+    opacity: 1;
+}
+.admin-nav-toggle svg {
+    width: 14px;
+    height: 14px;
+}
+/* 胶囊按钮：可见=眼睛（绿色），隐藏=眼睛斜线（灰色）；
+   类名用 nav-togg-* 避开 style.css / merchant.css 里全局 .hidden { display:none !important } 工具类冲突 */
+.admin-nav-toggle.nav-togg-visible svg {
+    color: #4caf50;
+}
+.admin-nav-toggle.nav-togg-hidden svg {
+    color: var(--text-light, #888);
+}
+.admin-nav-toggle:hover {
+    filter: brightness(1.15);
+}
+/* 编辑模式提示条 */
+.admin-nav-edit-tip {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--primary);
+    background: rgba(0, 0, 0, 0.08);
+    border-radius: 6px;
+    margin: 4px 8px;
+    text-align: center;
+    border: 1px dashed var(--primary);
+}
+.admin-nav-edit-tip .btn {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 11px;
+    cursor: pointer;
+    border: none;
+}
 .admin-nav {
     flex: 1;
     padding: 8px;

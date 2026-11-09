@@ -56,6 +56,11 @@ type Config struct {
 	// 指针语义区分"未配置"与"显式写 0"：配置文件缺省该键=回退默认 100（存量部署零回归）；
 	// 写 0=注册不赠送积分（Load 归一，负数同 0）。修改后需重启服务端生效
 	RegisterGiftPoints *float64 `yaml:"register_gift_points"`
+	// 全局一键清空积分开关（allow_points_clear）：控制后台"一键清空所有账号积分"功能是否允许执行。
+	// true  = 允许（默认，与新增功能零回归），管理员通过密码二次验证后可执行全局清零
+	// false = 禁止，即便管理员权限+密码正确，接口也会拒绝并返回"功能已禁用"提示。修改后需重启生效
+	// 指针语义区分"未配置"（nil → 默认 true）与"显式写 false"（禁用）
+	AllowPointsClear *bool `yaml:"allow_points_clear"`
 	// 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）
 	// 留空时 /api/secure-file 密文接口停用（返回 503），PC 端自动回退明文链路
 	// 与 PC 构建期注入密钥（secure-key.js 掩码扰乱）同源，明文仅存本文件不下发
@@ -869,6 +874,12 @@ func Load() *Config {
 	} else if *cfg.RegisterGiftPoints < 0 {
 		v := 0.0
 		cfg.RegisterGiftPoints = &v
+	}
+	// 一键清空积分开关兜底：nil 表示未配置 → 默认 true（允许，零回归）；
+	// 显式写 true/false 保留原值（用户可通过配置文件写 false 禁用全局清零）
+	if cfg.AllowPointsClear == nil {
+		v := true
+		cfg.AllowPointsClear = &v
 	}
 	if cfg.RecallWindow <= 0 {
 		cfg.RecallWindow = 120

@@ -251,6 +251,8 @@ func pointsReasonText(reason string) string {
 		return "AI 问答扣除"
 	case "admin_adjust":
 		return "管理员调整"
+	case "admin_clear_all":
+		return "全局一键清空"
 	case "register_grant":
 		return "注册赠送"
 	default:
@@ -279,6 +281,124 @@ func csvSafe(s string) string {
 		return "'" + s
 	}
 	return s
+}
+
+// handleAdminPointsClear POST /admin/api/points/clear
+// 一键清空所有账号积分（全局清零）；需输入当前管理员密码二次验证
+// 安全设计：
+//   1. 前端弹窗输入密码，后端复用 verifyUser 校验（防绕过 adminGuard 后直接调接口）
+//   2. 事务内批量 UPDATE + 批量流水，保证清零原子性
+//   3. 流水 reason = "admin_clear_all"，操作人为当前管理员，detail 标注"全局一键清空"
+//   4. 返回清零用户数与原积分总量，便于管理员核对影响范围
+func (s *Server) handleAdminPointsClear(w http.ResponseWriter, r *http.Request) {
+	// 开关门禁：配置 allow_points_clear=false 时彻底禁用，任何管理员权限+密码也不允许执行
+	// 放在密码验证之前，最快返回避免不必要的开销
+	if s.cfg.AllowPointsClear == nil || !*s.cfg.AllowPointsClear {
+		adminFail(w, http.StatusForbidden, "功能已禁用：allow_points_clear 配置为 false")
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	req.Password = strings.TrimSpace(req.Password)
+	if req.Password == "" {
+		adminFail(w, http.StatusBadRequest, "请输入管理员密码")
+		return
+	}
+
+	// 二次密码校验：复用 IM 账号密码验证（与 handleAdminLogin 同口径）
+	adminUsername := adminUserFromCtx(r)
+	user, err := verifyUser(adminUsername, req.Password)
+	if err != nil {
+		adminFail(w, http.StatusUnauthorized, "密码错误，无法执行清空操作")
+		return
+	}
+	if user.Role != 1 && !s.isAdminWhitelisted(user.Username) {
+		adminFail(w, http.StatusForbidden, "非管理员账号无权执行此操作")
+		return
+	}
+
+	// 事务内：先查所有非零积分用户 → 记录旧余额 → 批量清零 → 批量写流水
+	var users []model.User
+	if err := store.DB.Select("id", "username", "points").
+		Where("status <> ? AND points > 0", model.UserStatusDeleted).
+		Find(&users).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询用户积分失败")
+		return
+	}
+
+	var clearedCount int
+	var totalCleared float64
+	if len(users) > 0 {
+		// 收集流水记录 + 清零目标 ID（一次遍历搞定）
+		type logRec struct {
+			Username     string
+			OldPoints    float64
+			Change       float64
+			BalanceAfter float64
+		}
+		logs := make([]logRec, 0, len(users))
+		ids := make([]uint, 0, len(users))
+		for _, u := range users {
+			if u.Points <= 0 {
+				continue
+			}
+			totalCleared += u.Points
+			ids = append(ids, u.ID)
+			logs = append(logs, logRec{
+				Username:     u.Username,
+				OldPoints:    u.Points,
+				Change:       -u.Points, // 负数变动量
+				BalanceAfter: 0,
+			})
+		}
+
+		err = store.DB.Transaction(func(tx *gorm.DB) error {
+			// 批量清零
+			if err := tx.Model(&model.User{}).
+				Where("id IN ?", ids).
+				Update("points", 0).Error; err != nil {
+				return err
+			}
+			// 批量写积分流水
+			if len(logs) > 0 {
+				ptsLogs := make([]model.PointsLog, 0, len(logs))
+				now := time.Now()
+				for _, l := range logs {
+					ptsLogs = append(ptsLogs, model.PointsLog{
+						Username:     l.Username,
+						Change:       l.Change,
+						BalanceAfter: 0,
+						Reason:       "admin_clear_all",
+						Operator:     adminUsername,
+						Detail:       fmt.Sprintf("全局一键清空积分：%s → 0", fmtF2(l.OldPoints)),
+						CreateTime:   now,
+					})
+				}
+				if err := tx.CreateInBatches(ptsLogs, 1000).Error; err != nil {
+					return err
+				}
+			}
+			clearedCount = len(logs)
+			return nil
+		})
+		if err != nil {
+			adminFail(w, http.StatusInternalServerError, "积分清零失败，请重试")
+			return
+		}
+	}
+
+	adminJSON(w, map[string]interface{}{
+		"ok":             true,
+		"cleared_count":  clearedCount,
+		"total_cleared":  math.Round(totalCleared*1000) / 1000, // 3 位小数
+		"operator":       adminUsername,
+	})
 }
 
 // handleAdminPointsLogs GET /admin/api/points/logs?username=&reason=&page=&page_size=

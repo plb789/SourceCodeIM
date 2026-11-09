@@ -16,7 +16,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.53">
-    <link rel="stylesheet" href="css/admin.css?v=1.39">
+    <link rel="stylesheet" href="css/admin.css?v=1.41">
     <link rel="stylesheet" href="css/merchant.css?v=1.0">
 </head>
 <body>
@@ -44,7 +44,10 @@
         <aside class="admin-side">
             <div class="admin-side-head">
                 <span class="admin-side-title">后台管理</span>
-                <button id="admin-theme-btn" class="admin-theme-btn" title="切换主题（浅色/深色/跟随系统）"><svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg></button>
+                <div class="admin-side-head-btns">
+                    <button id="admin-nav-setting-btn" class="admin-theme-btn" data-tip-text="导航显示设置（点击进入编辑模式）"><svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></button>
+                    <button id="admin-theme-btn" class="admin-theme-btn" data-tip-text="切换主题（浅色/深色/跟随系统）"><svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg></button>
+                </div>
             </div>
             <nav class="admin-nav">
                 <button class="admin-nav-item" data-view="dashboard">性能仪表盘</button>
@@ -571,6 +574,7 @@
                 <div class="vec-toolbar">
                     <input type="text" id="points-search" class="admin-input vec-search-input" placeholder="按用户名/昵称搜索（实时过滤）">
                     <button id="points-refresh" class="admin-btn small">刷新</button>
+                    <button id="points-clear-all" class="admin-btn small danger" title="清空所有账号积分（需输入管理员密码二次确认）">⚠ 一键清空所有积分</button>
                 </div>
                 <!-- 用户积分表格 -->
                 <div class="vec-table-wrap">
@@ -607,6 +611,7 @@
                         <option value="">全部类型</option>
                         <option value="ai_deduct">AI 问答扣除</option>
                         <option value="admin_adjust">管理员调整</option>
+                        <option value="admin_clear_all">全局一键清空</option>
                         <option value="register_grant">注册赠送</option>
                     </select>
                     <button id="plog-refresh" class="admin-btn primary">查询</button>
@@ -2279,7 +2284,7 @@
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
     <script src="js/sha256.js?v=1.0"></script>
-    <script src="js/admin.js?v=1.79"></script>
+    <script src="js/admin.js?v=1.82"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

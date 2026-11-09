@@ -60,6 +60,156 @@
         });
     })();
 
+    // ===== 导航项隐藏/显示设置（localStorage 持久化） =====
+    var NAV_VISIBLE_KEY = 'im_admin_nav_visible';
+    var NAV_EDIT_MODE = false;
+    // 默认可见的导航项列表（全部可见）
+    function loadNavVisibility() {
+        try {
+            var raw = localStorage.getItem(NAV_VISIBLE_KEY);
+            if (raw) return JSON.parse(raw);
+        } catch (e) { }
+        return null; // null 表示全部可见
+    }
+    function saveNavVisibility(map) {
+        try { localStorage.setItem(NAV_VISIBLE_KEY, JSON.stringify(map)); } catch (e) { }
+    }
+    // 应用可见性到 DOM：给 nav-hidden 的项加 hidden 类
+    function applyNavVisibility() {
+        var nav = document.querySelector('.admin-nav');
+        if (!nav) return;
+        var saved = loadNavVisibility();
+        // 编辑模式下显示所有项（包括已隐藏的），方便用户恢复
+        var inEditMode = nav.classList.contains('admin-nav-edit');
+        nav.querySelectorAll('.admin-nav-item').forEach(function (btn) {
+            var view = btn.getAttribute('data-view');
+            // dashboard 不可隐藏（保底项）
+            if (view === 'dashboard') {
+                btn.classList.remove('nav-hidden');
+                return;
+            }
+            if (inEditMode) {
+                btn.classList.remove('nav-hidden'); // 编辑模式全部显示
+            } else if (!saved) {
+                btn.classList.remove('nav-hidden');
+            } else {
+                // saved 中存的是隐藏项的 set（值为 true 表示隐藏）
+                if (saved[view]) {
+                    btn.classList.add('nav-hidden');
+                } else {
+                    btn.classList.remove('nav-hidden');
+                }
+            }
+        });
+    }
+    // 切换单个导航项可见性
+    function toggleNavItem(view) {
+        var saved = loadNavVisibility() || {};
+        if (saved[view]) {
+            delete saved[view]; // 可见了
+        } else {
+            saved[view] = true; // 隐藏
+        }
+        saveNavVisibility(saved);
+        applyNavVisibility();
+        // 刷新胶囊按钮状态
+        updateToggleButtons();
+    }
+    // 重置所有导航项为可见（内部函数，不挂 window）
+    function resetAllNavToVisible() {
+        localStorage.removeItem(NAV_VISIBLE_KEY);
+        applyNavVisibility();
+        updateToggleButtons();
+        showToast('导航项已恢复默认');
+    }
+    // 切换编辑模式
+    function setNavEditMode(enable) {
+        NAV_EDIT_MODE = !!enable;
+        var nav = document.querySelector('.admin-nav');
+        var tip = document.querySelector('.admin-nav-edit-tip');
+        if (NAV_EDIT_MODE) {
+            nav.classList.add('admin-nav-edit');
+            $('admin-nav-setting-btn').classList.add('admin-nav-setting-active');
+            $('admin-nav-setting-btn').setAttribute('data-tip-text', '点击退出导航编辑模式');
+            // 确保提示条存在
+            if (!tip) {
+                tip = document.createElement('div');
+                tip.className = 'admin-nav-edit-tip';
+                tip.innerHTML = '导航编辑模式：点击眼睛切换显示<span class="btn">恢复默认</span>';
+                nav.parentNode.insertBefore(tip, nav);
+                // 用事件绑定代替内联 onclick，避免 window 全局污染
+                tip.querySelector('.btn').addEventListener('click', resetAllNavToVisible);
+            }
+            tip.style.display = '';
+            applyNavVisibility(); // 编辑模式下显示所有项
+            injectToggleButtons();
+        } else {
+            nav.classList.remove('admin-nav-edit');
+            $('admin-nav-setting-btn').classList.remove('admin-nav-setting-active');
+            $('admin-nav-setting-btn').setAttribute('data-tip-text', '导航显示设置（点击进入编辑模式）');
+            if (tip) tip.style.display = 'none';
+            applyNavVisibility(); // 退出编辑模式后应用隐藏
+            removeToggleButtons();
+        }
+        showToast(NAV_EDIT_MODE ? '已进入导航编辑模式' : '已退出导航编辑模式');
+    }
+    // 注入胶囊按钮到每个导航项末尾
+    function injectToggleButtons() {
+        var nav = document.querySelector('.admin-nav');
+        if (!nav) return;
+        nav.querySelectorAll('.admin-nav-item').forEach(function (btn) {
+            // dashboard 不显示切换按钮
+            if (btn.getAttribute('data-view') === 'dashboard') return;
+            // 已存在则跳过
+            if (btn.querySelector('.admin-nav-toggle')) return;
+            var view = btn.getAttribute('data-view');
+            var toggle = document.createElement('button');
+            toggle.className = 'admin-nav-toggle';
+            toggle.setAttribute('type', 'button');
+            toggle.setAttribute('data-view', view);
+            toggle.innerHTML = NAV_TOGGLE_ICONS.visible; // 默认可见图标
+            toggle.addEventListener('click', function (e) {
+                e.stopPropagation();
+                toggleNavItem(view);
+            });
+            btn.appendChild(toggle);
+        });
+        updateToggleButtons();
+    }
+    // 更新胶囊按钮的图标/状态
+    function updateToggleButtons() {
+        var nav = document.querySelector('.admin-nav');
+        if (!nav) return;
+        var saved = loadNavVisibility() || {};
+        nav.querySelectorAll('.admin-nav-toggle').forEach(function (toggle) {
+            var view = toggle.getAttribute('data-view');
+            var hidden = !!saved[view];
+            toggle.innerHTML = hidden ? NAV_TOGGLE_ICONS.hidden : NAV_TOGGLE_ICONS.visible;
+            toggle.classList.toggle('nav-togg-hidden', hidden);
+            toggle.classList.toggle('nav-togg-visible', !hidden);
+        });
+    }
+    // 移除所有胶囊按钮
+    function removeToggleButtons() {
+        var nav = document.querySelector('.admin-nav');
+        if (!nav) return;
+        nav.querySelectorAll('.admin-nav-toggle').forEach(function (t) { t.remove(); });
+    }
+    // 眼睛图标：可见=正常，隐藏=斜线
+    var NAV_TOGGLE_ICONS = {
+        visible: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>',
+        hidden: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>'
+    };
+    // 齿轮按钮事件
+    var navSettingBtn = $('admin-nav-setting-btn');
+    if (navSettingBtn) {
+        navSettingBtn.addEventListener('click', function () {
+            setNavEditMode(!NAV_EDIT_MODE);
+        });
+    }
+    // 页面加载时应用导航可见性
+    applyNavVisibility();
+
     // ===== Toast 轻提示（复用聊天端 .toast 样式） =====
     var toastTimer = null;
     function showToast(msg) {
@@ -325,6 +475,7 @@
     // ===== 阶段一百六十七：刷新后视图原位恢复 =====
     // 读 location.hash 匹配导航项并模拟点击（完整复用点击分发：active 态/视图切换/数据加载/轮询归口）；
     // hash 缺失或非法（含 #logout 等历史残留）时保持默认仪表盘不动
+    // 修复：若目标导航项被隐藏，自动恢复其可见性，避免 hash 恢复后用户"迷路"看不到自己在哪
     function restoreViewFromHash() {
         var hv = (location.hash || '').replace(/^#/, '');
         if (!hv) return false;
@@ -332,7 +483,17 @@
         navItems.forEach(function (item) {
             if (item.dataset.view === hv) hit = item;
         });
-        if (hit) { hit.click(); return true; }
+        if (hit) {
+            // 如果命中的导航项被隐藏，自动恢复可见性（退出编辑模式后生效）
+            var saved = loadNavVisibility();
+            if (saved && saved[hv]) {
+                delete saved[hv];
+                saveNavVisibility(saved);
+                applyNavVisibility();
+            }
+            hit.click();
+            return true;
+        }
         return false;
     }
 
@@ -3218,6 +3379,27 @@
     // 搜索实时过滤 + 刷新重拉
     $('points-search').addEventListener('input', function () { applyPointsFilter(false); });
     $('points-refresh').addEventListener('click', loadPointsUsers);
+    // 一键清空所有积分：两次点击确认 + 密码弹窗输入
+    $('points-clear-all').addEventListener('click', function () {
+        if (!showConfirmBool('危险操作', '确定要清空所有账号的积分吗？此操作不可恢复！')) return;
+        // 二次弹窗确认（输入密码）
+        openEditModal('一键清空所有积分', [
+            { key: 'password', label: '管理员密码', type: 'password', placeholder: '请输入当前登录管理员的密码', hint: '此操作将把所有用户的积分余额清零，并写入积分流水（类型：全局一键清空）' }
+        ], {}, function (data) {
+            var pwd = String(data.password || '').trim();
+            if (!pwd) { showToast('请输入管理员密码'); return; }
+            api('POST', '/admin/api/points/clear', { password: pwd }).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+                closeEditModal();
+                var d = result.data || {};
+                var msg = '积分清零完成：' + (d.cleared_count || 0) + ' 个用户被清零';
+                if (d.total_cleared > 0) msg += '，共清空 ' + fmtPts(d.total_cleared) + ' 积分';
+                showToast(msg);
+                loadPointsUsers(); // 重刷列表/统计卡片
+                loadPointsLogs();  // 流水表同步刷新
+            }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    });
     // 分页
     $('points-prev').addEventListener('click', function () {
         if (pointsPage > 1) { pointsPage--; renderPointsTable(); }
@@ -3250,11 +3432,13 @@
     var PLOG_REASON_TEXT = {
         ai_deduct: 'AI 问答扣除',
         admin_adjust: '管理员调整',
+        admin_clear_all: '全局一键清空',
         register_grant: '注册赠送'
     };
     var PLOG_REASON_CLS = {
         ai_deduct: 'plog-badge-ai',
         admin_adjust: 'plog-badge-admin',
+        admin_clear_all: 'plog-badge-admin',
         register_grant: 'plog-badge-reg'
     };
 
