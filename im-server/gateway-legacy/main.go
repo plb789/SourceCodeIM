@@ -262,9 +262,9 @@ type listenRuntime struct {
 	name  string
 	allow atomic.Pointer[map[int]bool] // 白名单（后台热更归口：整表原子替换，转发读侧无锁）
 	tbl   *sessionTable
-	sock  *net.UDPConn // 该组 UDP 数据面 socket（回包经它发出，保证同一公网映射）
-	conns int64        // 该组 TCP 透传连接数
-	mu    sync.Mutex
+	sock  *net.UDPConn    // 该组 UDP 数据面 socket（回包经它发出，保证同一公网映射）
+	conns atomic.Int64    // 该组 TCP 连接计数（Accept 加，handleTLSConn defer 统一减——所有 return 路径必释放）
+	mu    sync.Mutex      // 仅 allowTarget/setAllow 外的白名单热更等场景用
 }
 
 // allowTarget 白名单命中判断（读侧无锁：atomic.Pointer 整表替换，热更不阻塞转发路径）
@@ -332,6 +332,11 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 // ===== TLS 连接分流（TCP 数据连接 / UDP 控制连接共用同一 TLS 端口，按首帧 udp 字段路由） =====
 
 func handleTLSConn(conn net.Conn, grp *listenRuntime) {
+	// 连接计数统一在本函数入口释放：Accept 后 conns++，这里 defer conns--
+	// 覆盖所有 return 路径（首帧超时/JSON 失败/UDP 分流/TCP 数据面），
+	// 扫描探测连接虽然在首帧就被拒，但计数必还，不会被耗尽
+	defer grp.conns.Add(-1)
+
 	remote := conn.RemoteAddr().String()
 	// 首帧声明：限 512B / 5s（明文探测与慢速占位都在此被拒）
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -370,12 +375,7 @@ func handleTCPData(conn net.Conn, grp *listenRuntime, req struct {
 	Target int    `json:"target"`
 	UDP    bool   `json:"udp"`
 }, reader *bufio.Reader) {
-	defer func() {
-		grp.mu.Lock()
-		grp.conns--
-		grp.mu.Unlock()
-		conn.Close()
-	}()
+	defer conn.Close() // conns-- 已由 handleTLSConn 入口 defer 统一处理
 	remote := conn.RemoteAddr().String()
 	user, terr := verifyToken(grp.cfg.TokenSecret, req.Token)
 	if terr != nil {
@@ -692,11 +692,9 @@ func main() {
 					log.Printf("[tcp][%s] Accept 异常: %v", grp.name, err)
 					continue
 				}
-				grp.mu.Lock()
-				grp.conns++
-				over := grp.conns > int64(grp.cfg.MaxTCPConns)
-				grp.mu.Unlock()
-				if over {
+				n := grp.conns.Add(1)
+				if n > int64(grp.cfg.MaxTCPConns) {
+					grp.conns.Add(-1)
 					conn.Close()
 					log.Printf("[tcp][%s] 连接数超上限 %d，拒绝 %s", grp.name, grp.cfg.MaxTCPConns, conn.RemoteAddr())
 					continue

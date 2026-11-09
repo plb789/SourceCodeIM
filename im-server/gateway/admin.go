@@ -197,7 +197,7 @@ func (a *adminServer) snapshot() []groupSnapshot {
 		}
 		sort.Ints(allow)
 		cfgG := a.cfg.Listens[i]
-		out = append(out, groupSnapshot{Name: g.name, TCPAddr: cfgG.ListenTCP, UDPAddr: cfgG.ListenUDP, Allow: allow, Conns: g.conns, UDPSess: n})
+		out = append(out, groupSnapshot{Name: g.name, TCPAddr: cfgG.ListenTCP, UDPAddr: cfgG.ListenUDP, Allow: allow, Conns: g.conns.Load(), UDPSess: n})
 	}
 	return out
 }

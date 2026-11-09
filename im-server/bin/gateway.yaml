@@ -8,7 +8,8 @@
 # 「专属密钥」一致（逐网关独立：泄露/轮换半径=仅本网关，其他网关零影响）。服务端按它为本网关签发
 # 客户端隧道 token，并用它验签本网关的写库拉取请求（签名通过=网关身份证明）。
 # 仅存本文件，不下发客户端；生产环境务必使用强随机值（64 位十六进制）；更换后须同步服务端地址簿
-token_secret: "2f21e3b9527fd8567e266b552ce41a0733da9933c7271c61e9b0775ceaaedd7b"
+# 与 config.yaml game.gateway_token_secret 保持一致（服务端签发 token，网关验签）
+token_secret: "975bc47d0852cabb56f1bbbfe6562e61fbc518c92175f7003f62b8bb31159c28"
 
 # TCP 透传连接数上限（每组监听独立计数；默认 512）
 max_tcp_conns: 512
