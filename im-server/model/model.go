@@ -1115,7 +1115,10 @@ type Merchant struct {
 	// StorageQuotaBytes 商户专属存储配额（安全加固，管理员后台分配）：0=跟随全局
 	// game.merchant_quota_bytes（默认），-1=不限，>0=专属配额（字节）。
 	// AutoMigrate 自动加列，存量商户默认 0=跟随全局
-	StorageQuotaBytes int64     `gorm:"column:storage_quota_bytes;type:bigint;default:0" json:"storage_quota_bytes"`
+	StorageQuotaBytes int64 `gorm:"column:storage_quota_bytes;type:bigint;default:0" json:"storage_quota_bytes"`
+	// MaxFilesPerVersion 商户专属单版本文件清单条数上限：0=跟随全局
+	// game.max_files_per_version（默认 5000），-1=不限，>0=专属条数
+	MaxFilesPerVersion int `gorm:"column:max_files_per_version;type:int;default:0" json:"max_files_per_version"`
 	Remark            string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
 	CreateTime        time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime        time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
@@ -1491,3 +1494,148 @@ type GameReviewReply struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (GameReviewReply) TableName() string { return "im_game_review_reply" }
+
+// ============= 阶段二百九十三：服务号功能（微信同款公众号） =============
+
+// OfficialAccount 服务号主表 im_official_account（微信同款公众号）
+// 每个服务号独立 AppID/AppSecret，归属商户（owner）管理；空 owner 为系统级由管理员维护。
+// API 签名鉴权、会话路由、用户订阅、消息推送均以 app_id 为唯一锚点。
+type OfficialAccount struct {
+	ID   uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// Owner 归属商户用户名（空=系统级；非空=商户自有）
+	Owner string `gorm:"column:owner;type:varchar(32);index" json:"owner"`
+	// AppID 全局唯一标识（会话 target = 'o_' + app_id）
+	AppID string `gorm:"column:app_id;type:varchar(32);uniqueIndex;not null" json:"app_id"`
+	// AppSecret API 签名密钥（bcrypt hash 存储，仅服务端内存明文字段比较）
+	AppSecret string `gorm:"column:app_secret;type:varchar(128);default:''" json:"-"`
+	// PlainSecret API 签名明文（服务端启动时从 hash 恢复用于签名比较；不序列化）
+	PlainSecret string `gorm:"column:-" json:"-"`
+	DisplayName string `gorm:"column:display_name;type:varchar(64);not null" json:"display_name"`
+	Avatar      string `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`
+	Description string `gorm:"column:description;type:varchar(255);default:''" json:"description"`
+	// Status 0 正常 / 1 停用 / 2 审核中
+	Status int8 `gorm:"column:status;type:tinyint;default:0" json:"status"`
+	// NeedAudit 推送是否进入审核队列（企业系统对接默认开启）
+	NeedAudit bool `gorm:"column:need_audit;default:false" json:"need_audit"`
+	// SubscribeCount 订阅人数缓存（定期刷新）
+	SubscribeCount int64 `gorm:"column:subscribe_count;default:0" json:"subscribe_count"`
+	// MaxPerDay 每日最大推送量（0=不限）
+	MaxPerDay int `gorm:"column:max_per_day;default:0" json:"max_per_day"`
+	// TodaySent 今日已推送（Redis 实时计数，DB 仅快照）
+	TodaySent  int       `gorm:"column:today_sent;default:0" json:"today_sent"`
+	Auditors   string    `gorm:"column:auditors;type:varchar(512);default:'[]'" json:"auditors"` // 授权审核人 JSON 数组
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (OfficialAccount) TableName() string { return "im_official_account" }
+
+// OfficialSubscribe 服务号-用户订阅关系表 im_official_subscribe
+// 每个用户每个服务号一条记录；取消关注不删行仅置 unsubscribed=1，保留历史审计。
+type OfficialSubscribe struct {
+	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID    uint      `gorm:"column:account_id;not null;index:idx_sub_pair" json:"account_id"`
+	AppID        string    `gorm:"column:app_id;type:varchar(32);index" json:"app_id"`
+	Username     string    `gorm:"column:username;type:varchar(32);index:idx_sub_pair" json:"username"`
+	Source       string    `gorm:"column:source;type:varchar(16);default:'search'" json:"source"` // scan/search/api
+	Unsubscribed bool      `gorm:"column:unsubscribed;default:false;index" json:"unsubscribed"`
+	SubscribeTime    time.Time  `gorm:"column:subscribe_time;autoCreateTime" json:"subscribe_time"`
+	UnsubscribeTime  *time.Time `gorm:"column:unsubscribe_time" json:"unsubscribe_time,omitempty"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (OfficialSubscribe) TableName() string { return "im_official_subscribe" }
+
+// OfficialMenu 服务号自定义菜单 im_official_menu
+// 最多 3 个一级菜单 × 5 个二级菜单；action=click 点击后触发关键词自动回复，action=view 跳转 URL。
+type OfficialMenu struct {
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID uint   `gorm:"column:account_id;not null;index" json:"account_id"`
+	ParentID  uint   `gorm:"column:parent_id;default:0;index" json:"parent_id"` // 0=一级菜单
+	Name      string `gorm:"column:name;type:varchar(32);not null" json:"name"`
+	Action    string `gorm:"column:action;type:varchar(16);default:'click'" json:"action"` // click/view
+	Value     string `gorm:"column:value;type:varchar(512);default:''" json:"value"`       // click→关键词；view→URL
+	SortOrder int    `gorm:"column:sort_order;default:0" json:"sort_order"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (OfficialMenu) TableName() string { return "im_official_menu" }
+
+// OfficialKeyword 服务号关键词自动回复 im_official_keyword
+// 商户/管理员配置：触发词 → 回复内容；支持 exact / fuzzy（LIKE %kw%）两种匹配模式。
+// 命中优先级：exact 精确 > fuzzy 包含；同优先级按 sort_order 升序取首个命中。
+type OfficialKeyword struct {
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID uint   `gorm:"column:account_id;not null;index" json:"account_id"`
+	Keyword   string `gorm:"column:keyword;type:varchar(64);not null;index" json:"keyword"` // 触发词
+	ReplyText string `gorm:"column:reply_text;type:text;not null" json:"reply_text"`        // 回复内容
+	MatchType string `gorm:"column:match_type;type:varchar(8);default:'fuzzy'" json:"match_type"` // exact / fuzzy
+	Enabled   bool   `gorm:"column:enabled;default:true" json:"enabled"`
+	SortOrder int    `gorm:"column:sort_order;default:0" json:"sort_order"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (OfficialKeyword) TableName() string { return "im_official_keyword" }
+
+// OfficialTemplate 服务号模板消息 im_official_template
+// content 支持 {{key}} 占位符；API 对接时传 template_id + template_data 即可。
+type OfficialTemplate struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID  uint      `gorm:"column:account_id;not null;index" json:"account_id"`
+	TemplateID string    `gorm:"column:template_id;type:varchar(64);uniqueIndex;not null" json:"template_id"`
+	Name       string    `gorm:"column:name;type:varchar(64);not null" json:"name"`
+	Content    string    `gorm:"column:content;type:text" json:"content"`
+	Example    string    `gorm:"column:example;type:text" json:"example"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (OfficialTemplate) TableName() string { return "im_official_template" }
+
+// OfficialMessage 服务号消息推送记录 im_official_message
+// 入库后触发审核（need_audit=true）或直接发送；支持单推/多推/群发。
+type OfficialMessage struct {
+	ID         uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID  uint   `gorm:"column:account_id;not null;index" json:"account_id"`
+	AppID      string `gorm:"column:app_id;type:varchar(32);index" json:"app_id"`
+	// Recipient 接收人用户名；空=群发
+	Recipient string `gorm:"column:recipient;type:varchar(32);default:'';index" json:"recipient"`
+	Title     string `gorm:"column:title;type:varchar(128);default:''" json:"title"`
+	// ContentType text/image/news/template
+	ContentType string `gorm:"column:content_type;type:varchar(16);default:'text'" json:"content_type"`
+	Content     string `gorm:"column:content;type:text" json:"content"`
+	// AuditStatus none / pending / approved / rejected
+	AuditStatus string `gorm:"column:audit_status;type:varchar(16);default:'none';index" json:"audit_status"`
+	AuditBy     string `gorm:"column:audit_by;type:varchar(32);default:''" json:"audit_by"`
+	AuditTime   *time.Time `gorm:"column:audit_time" json:"audit_time"`
+	AuditRemark string `gorm:"column:audit_remark;type:varchar(255);default:''" json:"audit_remark"`
+	// SendStatus pending / sending / sent / failed
+	SendStatus string `gorm:"column:send_status;type:varchar(16);default:'pending';index" json:"send_status"`
+	SentCount  int    `gorm:"column:sent_count;default:0" json:"sent_count"`
+	FailCount  int    `gorm:"column:fail_count;default:0" json:"fail_count"`
+	// TriggerType api / manual / menu / event
+	TriggerType string `gorm:"column:trigger_type;type:varchar(16);default:'api';index" json:"trigger_type"`
+	MsgID       uint   `gorm:"column:msg_id;default:0;index" json:"msg_id"` // 关联 im_message 落库 ID
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (OfficialMessage) TableName() string { return "im_official_message" }
+
+// OfficialAudit 消息审核记录 im_official_audit
+// 单人审批：owner 或 whitelisted auditors 之一点通过 → approved；点驳回 → rejected（remark 必填）。
+// Auditors 记录实际审批人（JSON 数组，单人场景下只有 1 人）。
+type OfficialAudit struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	MessageID  uint      `gorm:"column:message_id;not null;uniqueIndex" json:"message_id"`
+	AccountID  uint      `gorm:"column:account_id;not null;index" json:"account_id"`
+	AppID      string    `gorm:"column:app_id;type:varchar(32);index" json:"app_id"`
+	Auditors   string    `gorm:"column:auditors;type:varchar(512);default:'[]'" json:"auditors"` // 实际审批人（JSON）
+	Status     string    `gorm:"column:status;type:varchar(16);default:'pending';index" json:"status"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (OfficialAudit) TableName() string { return "im_official_audit" }

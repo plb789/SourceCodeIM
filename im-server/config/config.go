@@ -47,6 +47,8 @@ type Config struct {
 	// 高德"Web服务"类型 Key：位置气泡静态地图缩略图 REST（restapi.amap.com）专用——
 	// 该接口按平台校验 Key，JS API 类型 Key 调用报 USERKEY_PLAT_NOMATCH；留空回退 amap_key
 	AmapWebKey string `yaml:"amap_web_key"`
+	// 阶段二百九十三：服务号功能配置（微信同款公众号服务）
+	Official OfficialConfig `yaml:"official"`
 	// 阶段一四五：注册开关（后台 config.yaml 归口）
 	// true  = 登录时账号不存在自动注册（保留"首次登录即注册"默认行为），独立注册页亦可正常注册
 	// false = 登录不再自动注册，账号不存在时提示"该账号不存在，请先注册账号"引导用户前往注册页；
@@ -235,6 +237,9 @@ type GameConfig struct {
 	// size_bytes 之和的上限（版本登记前预检+落位后复检双保险；官方游戏不受限）。
 	// 0=默认 50GB（Load 兜底），-1=不限
 	MerchantQuotaBytes int64 `yaml:"merchant_quota_bytes"`
+	// MaxFilesPerVersion 单个版本的文件清单条数上限（版本登记时校验）：
+	// 0=默认 5000（Load 兜底），-1=不限。商户可在商户行专属覆盖（im_merchant.max_files_per_version）
+	MaxFilesPerVersion int `yaml:"max_files_per_version"`
 	// DirectHTTPOnly 商户直连（download_method=3）是否强制 https（nil=默认 true）：
 	// 内网部署可显式 false 放开 http。直连模式下文件本体在商户服务器，https 防中间人篡改
 	DirectHTTPOnly *bool `yaml:"direct_http_only"`
@@ -836,6 +841,8 @@ func Default() *Config {
 			LaunchSecret:  "im-game-launch-secret", // 启动参数专属密码派生密钥（生产建议在 config.yaml 覆写）
 			// 商户存储总量配额默认 50GB（-1 不限；0 由 Load 兜底回默认，显式 -1 直接生效）
 			MerchantQuotaBytes: 50 << 30,
+			// 单版本文件清单上限默认 5000 条
+			MaxFilesPerVersion: 5000,
 			// 云存档默认启用：config.yaml 缺 save 节（旧配置升级）时仍可用；
 			// 显式 enabled: false 才会关闭（yaml.v3 仅覆盖文件中出现的键）
 			Save: GameSaveConfig{Enabled: true},
@@ -1138,6 +1145,10 @@ func Load() *Config {
 	if cfg.Game.MerchantQuotaBytes == 0 || (cfg.Game.MerchantQuotaBytes < 0 && cfg.Game.MerchantQuotaBytes != -1) {
 		cfg.Game.MerchantQuotaBytes = 50 << 30
 	}
+	// 单版本文件清单上限兜底（0/非法值回默认 5000；-1=不限）
+	if cfg.Game.MaxFilesPerVersion == 0 || (cfg.Game.MaxFilesPerVersion < 0 && cfg.Game.MaxFilesPerVersion != -1) {
+		cfg.Game.MaxFilesPerVersion = 5000
+	}
 	// 磁盘水位监控兜底（水位百分比 1~99 夹取，避免误配 0/100 失效）
 	if cfg.DiskMonitor.WarnPercent <= 0 || cfg.DiskMonitor.WarnPercent >= 100 {
 		cfg.DiskMonitor.WarnPercent = 80
@@ -1162,13 +1173,69 @@ func Load() *Config {
 func exeDir() string {
 	exePath, err := os.Executable()
 	if err != nil {
-		// 极端情况下获取失败回退进程工作目录
 		return "."
 	}
 	return filepath.Dir(exePath)
 }
 
-// resolvePath 将配置路径解析为绝对路径：绝对路径直接返回，相对路径基于 exe 所在目录解析
+// ============= 阶段二百九十三：服务号功能配置节 =============
+
+// OfficialConfig 服务号功能配置（微信同款公众号）
+type OfficialConfig struct {
+	Enabled          bool   `yaml:"enabled"`
+	GlobalQPS        int    `yaml:"global_qps"`
+	APIPerMinute     int    `yaml:"api_per_minute"`
+	UserPerHour      int    `yaml:"user_per_hour"`
+	DefaultNeedAudit bool   `yaml:"default_need_audit"`
+	BatchWorkers     int    `yaml:"batch_workers"`
+	BatchSize        int    `yaml:"batch_size"`
+	DefaultReply     string `yaml:"default_reply"`
+}
+
+// BatchWorkersVal 配置缺失回退默认 10，上限 256
+func (o OfficialConfig) BatchWorkersVal() int {
+	if o.BatchWorkers <= 0 || o.BatchWorkers > 256 {
+		return 10
+	}
+	return o.BatchWorkers
+}
+
+// BatchSizeVal 批次大小，默认 500，上限 5000
+func (o OfficialConfig) BatchSizeVal() int {
+	if o.BatchSize <= 0 {
+		return 500
+	}
+	if o.BatchSize > 5000 {
+		return 5000
+	}
+	return o.BatchSize
+}
+
+// UserPerHourVal 单用户接收频率，默认 5
+func (o OfficialConfig) UserPerHourVal() int {
+	if o.UserPerHour <= 0 {
+		return 5
+	}
+	return o.UserPerHour
+}
+
+// APIPerMinuteVal 单 API 频率上限，默认 60
+func (o OfficialConfig) APIPerMinuteVal() int {
+	if o.APIPerMinute <= 0 {
+		return 60
+	}
+	return o.APIPerMinute
+}
+
+// GlobalQPSVal 全局 QPS，默认 50
+func (o OfficialConfig) GlobalQPSVal() int {
+	if o.GlobalQPS <= 0 {
+		return 50
+	}
+	return o.GlobalQPS
+}
+
+// resolveWebDir 解析前端 web 目录：配置项优先，缺省时从 exe 所在目录逐级向上查找 im-client/web
 func resolvePath(p string) string {
 	if filepath.IsAbs(p) {
 		return p

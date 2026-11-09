@@ -500,6 +500,56 @@ td .skel-line {
     max-width: calc(100vw - 40px);
 }
 
+/* 通用表单行：label 右对齐固定宽度，input 自动撑满剩余空间 */
+.admin-field-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+.admin-field-label {
+    flex: none;
+    width: 88px;
+    text-align: right;
+    font-size: 13px;
+    color: var(--text-light);
+    padding-right: 4px;
+    flex-shrink: 0;
+}
+/* input 默认撑满剩余空间，但尊重内联 style="width:xxx" 覆盖 */
+.admin-field-row .admin-input {
+    flex: 0 1 auto;          /* 不强制 grow，basis=auto 尊重自身 width */
+    width: 100%;             /* 默认撑满 */
+    height: 38px;
+    box-sizing: border-box;  /* width 包含 padding/border */
+}
+.admin-field-row textarea.admin-input {
+    height: auto;
+    min-height: 80px;
+    padding: 8px 12px;
+}
+.admin-field-row input[type="checkbox"] {
+    flex: none;
+    width: auto !important;   /* checkbox 不撑满 */
+}
+.admin-field-hint {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-left: 4px;
+}
+/* 表单只读值（审核详情弹窗等场景：label + 值显示） */
+.admin-field-val {
+    flex: 1 1 auto;
+    color: var(--text);
+    font-size: 13px;
+    padding: 8px 12px;
+    background: var(--search-bg, #2a2a2a);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    min-height: 36px;
+    box-sizing: border-box;
+}
+
 /* 客户端更新上传弹窗表单项多（外链模式含 URL/校验和大输入框），单独加宽加高 */
 #av-upload-mask .admin-edit-box {
     width: 860px;
@@ -970,6 +1020,37 @@ td .skel-line {
     border-bottom: 1px solid var(--border);
     vertical-align: top;
     color: var(--text);
+}
+/* 服务号管理表格：操作列 6 个按钮一行排不下时强制不换行 */
+#off-tbl td:last-child, #off-audit-tbl td:last-child {
+    white-space: nowrap;
+    min-width: 320px;
+}
+/* 导航图标尺寸 / 颜色强制可见 */
+.admin-nav-item svg {
+    display: inline-block !important;
+    width: 15px !important;
+    height: 15px !important;
+    margin-right: 6px;
+    vertical-align: middle;
+    color: var(--text, #333) !important;      /* 浅色：深色文字 */
+    flex: none !important;
+}
+.admin-nav-item svg path {
+    fill: currentColor !important;
+}
+/* active 高亮状态：图标强制白色（否则主题绿图标叠绿背景看不见） */
+.admin-nav-item.active svg,
+.admin-nav-item.active svg path {
+    color: #fff !important;
+    fill: #fff !important;
+}
+/* 深色模式：非 active 状态图标用更亮的浅灰（原 #ccc 太暗，侧栏黑底上几乎看不见） */
+[data-theme="dark"] .admin-nav-item:not(.active) svg {
+    color: #c8c8c8 !important;               /* 比 #ccc 更亮一档 */
+}
+[data-theme="dark"] .admin-nav-item:not(.active) svg:hover {
+    color: var(--primary, #07c160) !important;  /* hover 时主题绿 */
 }
 .vec-table tbody tr:hover td {
     background: var(--hover);
@@ -2720,4 +2801,75 @@ td .skel-line {
 .gn-f-game-sel {
     width: 200px;
     flex: none;
+}
+/* ===== 服务号审核面板 Tab / Segmented Control（P5） ===== */
+.admin-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--border, #e5e5e5);
+    padding-bottom: 0;
+}
+.admin-tab {
+    position: relative;
+    padding: 10px 20px;
+    font-size: 14px;
+    color: var(--text-secondary, #888);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-weight: 500;
+    transition: color .18s;
+}
+.admin-tab:hover { color: var(--text-primary, #333); }
+.admin-tab.active { color: var(--primary, #07c160); }
+.admin-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 16px;
+    right: 16px;
+    height: 2px;
+    background: var(--primary, #07c160);
+    border-radius: 1px;
+}
+.admin-tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 6px;
+    margin-left: 6px;
+    font-size: 11px;
+    color: #fff;
+    background: #fa5151;
+    border-radius: 9px;
+    font-weight: 600;
+    line-height: 1;
+}
+.admin-tab-pane.hidden { display: none; }
+
+.admin-seg {
+    display: inline-flex;
+    background: var(--bg-tertiary, #f4f4f4);
+    border-radius: 6px;
+    padding: 3px;
+    gap: 2px;
+}
+.admin-seg-btn {
+    padding: 6px 16px;
+    font-size: 13px;
+    color: var(--text-secondary, #888);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all .15s;
+}
+.admin-seg-btn:hover { color: var(--text-primary, #333); }
+.admin-seg-btn.active {
+    background: var(--primary, #07c160);
+    color: #fff;
+    font-weight: 500;
 }

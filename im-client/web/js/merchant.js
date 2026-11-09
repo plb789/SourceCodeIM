@@ -130,6 +130,7 @@
 
     // ==================== 视图切换 / 启动 ====================
     var profile = null;
+    var maxFilesLimit = 5000; // 单版本文件清单条数上限，默认 5000，loadQuota 从服务端 profile 接口拉取动态值（-1=不限）
     var gamesRefreshTimer = null;
     var GAMES_REFRESH_MS = 10000; // "我的游戏"列表定时刷新（兜底轮询：WS 没接时每 10s 自动拉取最新审核状态）
     function startGamesRefresh() {
@@ -238,7 +239,14 @@
     function loadQuota() {
         api('GET', '/api/merchant/profile').then(function (res) {
             var d = unwrap(res);
+            // 顺便获取文件清单条数上限（管理员可后台调整，实时生效）
+            if (typeof d.max_files_per_version === 'number') maxFilesLimit = d.max_files_per_version;
             var txt = $('m-quota-txt'), fill = $('m-quota-fill');
+            // 同步更新文件清单上限提示行
+            var filesHint = $('m-files-hint');
+            if (filesHint) {
+                filesHint.textContent = '单版本文件清单上限：' + (maxFilesLimit === -1 ? '不限' : maxFilesLimit + ' 项');
+            }
             if (!txt || !fill) return;
             var used = d.storage_used_bytes || 0, quota = d.storage_quota_bytes;
             if (quota === -1 || quota === undefined || quota === null || quota <= 0) {
@@ -709,6 +717,11 @@
             if (!useRelPath && verBaseDir) rel = verBaseDir + '/' + rel;
             verFiles.push({ file: f, rel_path: rel, size: f.size, state: 0 });
         });
+        // 文件清单条数上限预检（管理员可后台调整，maxFilesLimit=-1 不限）
+        if (maxFilesLimit !== -1 && verFiles.length > maxFilesLimit) {
+            toast('文件清单已达 ' + maxFilesLimit + ' 项上限（当前 ' + verFiles.length + ' 项），多余文件已跳过');
+            verFiles = verFiles.slice(0, maxFilesLimit);
+        }
         renderVerList();
     }
     // ZIP 打包清单前端预校验（服务端 gameVersionCreateCore 还有同名规则兜底）

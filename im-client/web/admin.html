@@ -15,8 +15,8 @@
         })();
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
-    <link rel="stylesheet" href="css/style.css?v=1.53">
-    <link rel="stylesheet" href="css/admin.css?v=1.41">
+    <link rel="stylesheet" href="css/style.css?v=1.56">
+    <link rel="stylesheet" href="css/admin.css?v=1.46">
     <link rel="stylesheet" href="css/merchant.css?v=1.0">
 </head>
 <body>
@@ -65,6 +65,10 @@
                 <button class="admin-nav-item sub" data-view="cards">充值卡</button>
                 <button class="admin-nav-item sub" data-view="gaudit">游戏审核</button>
                 <button class="admin-nav-item sub" data-view="merchants">商户管理</button>
+                <button class="admin-nav-item" data-view="official">
+                    <svg viewBox="0 0 24 24" width="15" height="15" style="flex:none"><path fill="currentColor" d="M18 11v-2c0-3.07-1.64-5.64-4.5-6.32V2c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 3.36 6 5.92 6 9v2H4v2h2v4c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-4h.91l4.09 3.6V17c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-1.76l4-3.6v-.64l-2-.56zm-5 7.83l-2.11-1.83H8V9h5V4.07c1.42.72 2.5 2.53 2.5 4.93v2.27l2 .56V11h2v-2h-2z"/></svg>
+                    服务号管理
+                </button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -1408,7 +1412,7 @@
                 <h2>新增游戏</h2>
                 <span id="gm-status" class="admin-view-tip">加载中…</span>
             </header>
-            <p class="admin-view-tip">游戏中心运营归口：维护游戏元数据与版本安装包。新建游戏先填 slug（即安装目录名，创建后不可修改）；版本经列表「版本」选择整个游戏目录上传——逐文件 SHA-256 校验、8MB 分片直传、登记后客户端商店立即可见。单文件前端上限 2GB（超出请压缩后上传），文件清单上限 5000 项，空文件自动跳过。</p>
+            <p class="admin-view-tip">游戏中心运营归口：维护游戏元数据与版本安装包。新建游戏先填 slug（即安装目录名，创建后不可修改）；版本经列表「版本」选择整个游戏目录上传——逐文件 SHA-256 校验、8MB 分片直传、登记后客户端商店立即可见。单文件前端上限 2GB（超出请压缩后上传），文件清单条数上限由管理员在后台配置（默认 5000 项），空文件自动跳过。</p>
             <!-- 新建/编辑表单卡（进入本页即新建态；点列表「编辑」切换为编辑态并回填） -->
             <div class="gm-layout-card" id="gm-edit-card">
                 <div class="gm-layout-head">
@@ -1750,6 +1754,7 @@
                         <input id="merchants-f-rate" type="number" min="0" max="100" step="0.1" class="admin-input gm-num-input" placeholder="分成比例%" value="100" title="商户分成比例（0~100）">
                         <input id="merchants-f-remark" class="admin-input" style="max-width:200px;" placeholder="备注（可空）" maxlength="255">
                         <input id="merchants-f-quota" type="number" min="-1" step="0.1" class="admin-input gm-num-input" style="max-width:150px;" placeholder="存储配额GB" title="存储配额分配：留空=跟随全局默认（config game.merchant_quota_bytes）；填 -1=不限量；其他数值=专属配额（GB）">
+                        <input id="merchants-f-maxfiles" type="number" min="-1" step="1" class="admin-input gm-num-input" style="max-width:120px;" placeholder="文件数上限" title="单版本文件清单条数上限：留空=跟随全局默认 5000；填 -1=不限；其他正整数=专属条数">
                         <button id="merchants-save" class="admin-btn small primary" type="button">创建</button>
                         <button id="merchants-reset-form" class="admin-btn small hidden" type="button">取消编辑</button>
                     </div>
@@ -1759,11 +1764,11 @@
                 <table class="vec-table">
                     <thead>
                         <tr>
-                            <th>账号</th><th>显示名</th><th>分成比例</th><th>状态</th><th>游戏数</th><th>成功赞助总额</th><th>存储配额</th><th>创建时间</th><th>操作</th>
+                            <th>账号</th><th>显示名</th><th>分成比例</th><th>状态</th><th>游戏数</th><th>成功赞助总额</th><th>存储配额</th><th>文件数上限</th><th>创建时间</th><th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="merchants-tbody">
-                        <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                        <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
                     </tbody>
                 </table>
                 </div>
@@ -1850,7 +1855,318 @@
                     </table>
                 </div>
             </section>
+
+            <!-- ============================================================ -->
+            <!-- 阶段二百九十三：服务号管理视图（微信同款公众号）                -->
+            <!-- ============================================================ -->
+            <section id="admin-view-official" class="admin-view">
+                <div class="admin-page-title">
+                    <span>🏢 服务号管理</span>
+                    <span class="admin-page-sub">微信同款公众号服务 · 创建/编辑/菜单/模板/API 密钥/审核</span>
+                </div>
+                <div class="admin-tabs">
+                    <button class="admin-tab active" data-otab="list">服务号列表</button>
+                    <button class="admin-tab" data-otab="audit">
+                        审核队列
+                        <span class="admin-tab-badge hidden" id="off-audit-badge">0</span>
+                    </button>
+                </div>
+
+                <!-- === Tab 1: 服务号列表 === -->
+                <div class="admin-tab-pane" data-opane="list">
+                    <div class="admin-toolbar">
+                        <input id="off-kw" class="admin-input" placeholder="搜索名称 / AppID" style="width:200px">
+                        <select id="off-owner" class="admin-input" style="width:140px">
+                            <option value="">全部归属</option>
+                            <option value="system">系统级</option>
+                            <option value="merchant">商户自有</option>
+                        </select>
+                        <select id="off-status" class="admin-input" style="width:120px">
+                            <option value="">全部状态</option>
+                            <option value="0">正常</option>
+                            <option value="1">停用</option>
+                        </select>
+                        <button id="off-refresh" class="admin-btn">刷新</button>
+                        <button id="off-new" class="admin-btn primary">+ 创建服务号</button>
+                    </div>
+                    <div class="admin-list-wrap">
+                        <table class="vec-table" id="off-tbl">
+                            <thead>
+                                <tr>
+                                    <th style="width:60px">ID</th>
+                                    <th style="width:180px">服务号</th>
+                                    <th style="width:160px">AppID</th>
+                                    <th style="width:100px">归属</th>
+                                    <th style="width:80px">状态</th>
+                                    <th style="width:80px">需审核</th>
+                                    <th style="width:90px">订阅数</th>
+                                    <th style="width:150px">创建时间</th>
+                                    <th style="width:360px">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="off-tbody">
+                                <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- === Tab 2: 审核队列 === -->
+                <div class="admin-tab-pane hidden" data-opane="audit">
+                    <div class="admin-toolbar">
+                        <div class="admin-seg" id="off-audit-seg">
+                            <button class="admin-seg-btn active" data-seg="pending">待办</button>
+                            <button class="admin-seg-btn" data-seg="all">全部</button>
+                        </div>
+                        <input id="off-audit-kw" class="admin-input" placeholder="搜索服务号 / 消息标题" style="width:220px">
+                        <select id="off-audit-status" class="admin-input" style="width:120px">
+                            <option value="">全部状态</option>
+                            <option value="pending">审核中</option>
+                            <option value="approved">已通过</option>
+                            <option value="rejected">已驳回</option>
+                        </select>
+                        <button id="off-audit-refresh" class="admin-btn">刷新</button>
+                    </div>
+                    <div class="admin-list-wrap">
+                        <table class="vec-table" id="off-audit-tbl">
+                            <thead>
+                                <tr>
+                                    <th style="width:60px">ID</th>
+                                    <th style="width:170px">服务号</th>
+                                    <th style="width:220px">消息标题</th>
+                                    <th style="width:80px">类型</th>
+                                    <th style="width:100px">状态</th>
+                                    <th style="width:160px">创建时间</th>
+                                    <th style="width:300px">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="off-audit-tbody">
+                                <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
         </main>
+    </div>
+
+    <!-- 服务号编辑弹窗 -->
+    <div id="off-edit-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:680px">
+            <div class="modal-title" id="off-edit-title">创建服务号</div>
+            <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+                <div class="admin-field-row">
+                    <label class="admin-field-label">展示名</label>
+                    <input id="off-e-name" class="admin-input" placeholder="如：精选商城">
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">归属商户</label>
+                    <input id="off-e-owner" class="admin-input" placeholder="留空=系统级；填商户 username=商户自有" style="width:240px">
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">简介</label>
+                    <input id="off-e-desc" class="admin-input" placeholder="一句话介绍（显示在聊天顶部）">
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">头像 URL</label>
+                    <input id="off-e-avatar" class="admin-input" placeholder="/static/upload/xxx.jpg">
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">每日配额</label>
+                    <input id="off-e-max" class="admin-input" type="number" placeholder="0=不限" style="width:120px">
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">需审核</label>
+                    <input id="off-e-audit" type="checkbox" style="width:18px;height:18px">
+                    <span class="admin-field-hint">企业系统对接推送默认进入审核队列</span>
+                </div>
+                <div class="admin-field-row" id="off-e-status-row" style="display:none">
+                    <label class="admin-field-label">状态</label>
+                    <select id="off-e-status" class="admin-input" style="width:120px">
+                        <option value="0">正常</option>
+                        <option value="1">停用</option>
+                        <option value="2">审核中</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="off-edit-close" class="modal-btn">关 闭</button>
+                <button id="off-edit-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 菜单管理弹窗 -->
+    <div id="off-menu-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:720px">
+            <div class="modal-title">自定义菜单 · <span id="off-menu-title"></span></div>
+            <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+                <div class="admin-field-hint" style="margin-bottom:8px">
+                    最多 3 个一级菜单，每个一级菜单最多 5 个二级菜单。<br>
+                    action=click 时 value 为触发关键词；action=view 时 value 为跳转 URL。
+                </div>
+                <textarea id="off-menu-json" class="admin-input" style="width:100%;min-height:260px;font-family:Menlo,monospace" placeholder='[{"name":"首页","action":"click","value":"home","children":[{"name":"最新商品","action":"click","value":"new"}]}]'></textarea>
+            </div>
+            <div class="modal-btns">
+                <button id="off-menu-close" class="modal-btn">关 闭</button>
+                <button id="off-menu-ok" class="modal-btn primary">保存菜单</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模板管理弹窗 -->
+    <div id="off-tpl-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:780px">
+            <div class="modal-title">模板消息管理 · <span id="off-tpl-title"></span></div>
+            <div class="modal-body" style="max-height:70vh;overflow-y:auto">
+                <div style="margin-bottom:10px">
+                    <button id="off-tpl-add" class="admin-btn small primary">+ 新增模板</button>
+                </div>
+                <table class="vec-table" id="off-tpl-tbl">
+                    <thead>
+                        <tr>
+                            <th style="width:200px">模板 ID</th>
+                            <th style="width:150px">名称</th>
+                            <th>正文预览</th>
+                            <th style="width:160px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="off-tpl-tbody"><tr><td colspan="4" class="vec-empty">加载中…</td></tr></tbody>
+                </table>
+            </div>
+            <div class="modal-btns">
+                <button id="off-tpl-close" class="modal-btn">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模板编辑弹窗 -->
+    <div id="off-tpl-edit-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:680px">
+            <div class="modal-title" id="off-tpl-edit-title">新增模板</div>
+            <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+                <div class="admin-field-row">
+                    <label class="admin-field-label">模板 ID</label>
+                    <input id="off-te-id" class="admin-input" placeholder="留空自动生成 tpl_xxx" style="width:240px">
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">名称</label>
+                    <input id="off-te-name" class="admin-input" placeholder="如：订单发货通知">
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">正文</label>
+                    <textarea id="off-te-content" class="admin-input" style="width:100%;min-height:160px" placeholder="您好 {{name}}，您的订单 {{order_no}} 已发货，快递单号 {{tracking}}"></textarea>
+                </div>
+                <div class="admin-field-row">
+                    <label class="admin-field-label">示例</label>
+                    <textarea id="off-te-example" class="admin-input" style="width:100%;min-height:80px" placeholder="您好 张三，您的订单 SF123 已发货"></textarea>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="off-te-close" class="modal-btn">关 闭</button>
+                <button id="off-te-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 关键词自动回复弹窗（P7） -->
+    <div id="off-kw-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:760px">
+            <div class="modal-title">关键词自动回复</div>
+            <div class="modal-body" style="max-height:70vh;overflow-y:auto">
+                <div class="admin-field-hint">用户发送匹配关键词的消息 → 自动回复 reply_text。匹配模式：exact=精确匹配；fuzzy=包含匹配。</div>
+                <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+                    <select id="off-kw-new-match" class="admin-input" style="width:110px">
+                        <option value="fuzzy">包含匹配</option>
+                        <option value="exact">精确匹配</option>
+                    </select>
+                    <input id="off-kw-new-keyword" class="admin-input" placeholder="触发词（必填）" style="flex:1">
+                    <input id="off-kw-new-reply" class="admin-input" placeholder="回复内容（必填）" style="flex:2">
+                    <button id="off-kw-new-btn" class="admin-btn primary">+ 新增</button>
+                </div>
+                <div style="margin-top:12px">
+                    <table class="vec-table" id="off-kw-tbl">
+                        <thead>
+                            <tr>
+                                <th style="width:60px">ID</th>
+                                <th style="width:100px">匹配模式</th>
+                                <th style="width:140px">触发词</th>
+                                <th>回复内容</th>
+                                <th style="width:70px">启用</th>
+                                <th style="width:200px">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="off-kw-tbody">
+                            <tr><td colspan="6" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="off-kw-close" class="modal-btn">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 重置密钥弹窗 -->
+    <div id="off-secret-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:520px">
+            <div class="modal-title">重置 API 密钥</div>
+            <div class="modal-body">
+                <div class="admin-field-hint">重置后旧密钥立即失效，企业系统需要更新调用凭证。</div>
+                <div style="margin-top:12px">
+                    <strong>新密钥</strong>（仅显示一次，请立即复制）：
+                    <div style="margin-top:6px;padding:10px;background:var(--admin-bg-tertiary);border-radius:6px;font-family:Menlo,monospace;word-break:break-all" id="off-secret-val">—</div>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="off-secret-close" class="modal-btn">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 审核详情弹窗（通过/驳回） -->
+    <div id="off-audit-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:680px">
+            <div class="modal-title" id="off-audit-title">审核详情</div>
+            <div class="modal-body" style="max-height:65vh;overflow-y:auto">
+                <div class="admin-field-row"><label class="admin-field-label">审核 ID</label><div id="off-ad-id" class="admin-field-val">-</div></div>
+                <div class="admin-field-row"><label class="admin-field-label">服务号</label><div id="off-ad-acc" class="admin-field-val">-</div></div>
+                <div class="admin-field-row"><label class="admin-field-label">消息标题</label><div id="off-ad-title2" class="admin-field-val">-</div></div>
+                <div class="admin-field-row"><label class="admin-field-label">消息类型</label><div id="off-ad-ctype" class="admin-field-val">-</div></div>
+                <div class="admin-field-row"><label class="admin-field-label">触发来源</label><div id="off-ad-trigger" class="admin-field-val">-</div></div>
+                <div class="admin-field-row"><label class="admin-field-label">当前状态</label><div id="off-ad-status" class="admin-field-val">-</div></div>
+                <div class="admin-field-row" id="off-ad-remark-row" style="display:none">
+                    <label class="admin-field-label">驳回原因</label>
+                    <div id="off-ad-remark" class="admin-field-val" style="color:#fa5151">-</div>
+                </div>
+                <div style="margin-top:10px">
+                    <strong>消息内容预览</strong>
+                    <div id="off-ad-content" style="margin-top:6px;padding:12px;background:var(--bg-tertiary,#f4f4f4);border-radius:6px;white-space:pre-wrap;word-break:break-all;max-height:220px;overflow-y:auto;font-size:13px;color:var(--text-primary,#333)">-</div>
+                </div>
+            </div>
+            <div class="modal-btns" id="off-ad-btns">
+                <button id="off-ad-close" class="modal-btn">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 驳回弹窗（必须填原因） -->
+    <div id="off-audit-reject-mask" class="modal-mask hidden">
+        <div class="modal-box" style="width:520px">
+            <div class="modal-title">驳回审核</div>
+            <div class="modal-body">
+                <div class="admin-field-hint">驳回原因将记录到系统日志并推送给发起人。</div>
+                <div style="margin-top:12px">
+                    <label class="admin-field-label">驳回原因 <span style="color:var(--admin-color-error)">*</span></label>
+                    <textarea id="off-rj-reason" class="admin-input" style="width:100%;min-height:100px;margin-top:6px" placeholder="请输入驳回原因（必填）..."></textarea>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="off-rj-cancel" class="modal-btn">取 消</button>
+                <button id="off-rj-ok" class="modal-btn danger">确认驳回</button>
+            </div>
+        </div>
     </div>
 
     <!-- 新增/编辑弹窗（动态表单，自定义弹窗禁用系统默认弹窗） -->
@@ -2284,7 +2600,9 @@
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
     <script src="js/sha256.js?v=1.0"></script>
-    <script src="js/admin.js?v=1.82"></script>
+    <script src="js/official_admin.js?v=1.2"></script>
+    <script src="js/official_audit.js?v=1.2"></script>
+    <script src="js/admin.js?v=1.84"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

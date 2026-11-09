@@ -642,6 +642,8 @@ game:
   # 版本登记前预检 + 落位后实算复检双保险（超限整版回滚，报错带已用/配额）；官方游戏不受限。
   # 默认 50GB；-1 表示不限；修改后需重启服务端生效
   merchant_quota_bytes: 53687091200
+  # 单个版本的文件清单条数上限（版本登记时校验）：默认 5000；-1=不限；0 或非法值会被兜底回 5000
+  max_files_per_version: 5000
   # 商户直连（安全加固·商户直连 HTTP 分发，dm=3）：商户在商户后台填自己文件服务器根地址，
   # 文件本体不上传平台，玩家客户端直连下载并按清单 SHA256 逐文件校验。direct_http_only 强制
   # https（nil/true=强制；内网部署可显式 false 放开 http）。详见 docs/商户直连HTTP分发方案.md
@@ -719,3 +721,24 @@ clamav:
   sync: false
   # 存量回溯：管理后台「游戏管理→游戏审核→病毒扫描（存量回溯）」手动触发全量/单游戏重扫，无配置项
   # https://www.clamav.net/downloads   https://mirror.ghproxy.com/https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.5.4/clamav-1.5.4.win.x64.zip
+
+# ============================================================
+# 阶段二百九十三：服务号功能配置（微信同款公众号服务）
+# ============================================================
+official:
+  # 总开关（false 时所有服务号相关 API 拒绝服务，前端隐藏服务号入口）
+  enabled: true
+  # 全局 API 频率限制（每秒）
+  global_qps: 50
+  # 单 API 频率限制（次/分钟，HMAC 和 Token 两种认证共用）
+  api_per_minute: 60
+  # 单用户接收频率限制（条/小时，防骚扰）
+  user_per_hour: 5
+  # 新创建服务号默认审核开关（审核=管理员/商户确认后才发出）
+  default_need_audit: false
+  # 群发异步 worker 数（goroutine pool）
+  batch_workers: 10
+  # 单批次推送大小
+  batch_size: 500
+  # 用户发送未匹配菜单关键词时的默认回复（纯文本）
+  default_reply: "您好，请问有什么可以帮您？可发送「菜单」查看全部功能。"

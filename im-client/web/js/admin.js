@@ -40,7 +40,9 @@
             agentsettings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
             linksec: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 15l-4-4 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z',
             branding: 'M23 12l-2.44-2.79.34-3.69-3.61-.82-1.89-3.2L12 2.96 8.6 1.5 6.71 4.69 3.1 5.5l.34 3.7L1 12l2.44 2.79-.34 3.7 3.61.82L8.6 22.5l3.4-1.47 3.4 1.46 1.89-3.19 3.61-.82-.34-3.69L23 12zm-12.91 5.24l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z',
-            features: 'M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z'
+            features: 'M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z',
+            // 阶段二百九十三：服务号管理图标（Material campaign 喇叭——代表公众号推送/通知）
+            official: 'M18 11v-2c0-3.07-1.64-5.64-4.5-6.32V2c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 3.36 6 5.92 6 9v2H4v2h2v4c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-4h.91l4.09 3.6V17c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-1.76l4-3.6v-.64l-2-.56zm-5 7.83l-2.11-1.83H8V9h5V4.07c1.42.72 2.5 2.53 2.5 4.93v2.27l2 .56V11h2v-2h-2z'
         };
         var nav = document.querySelector('.admin-nav');
         if (!nav) return;
@@ -427,6 +429,8 @@
             else if (item.dataset.view === 'branding') { loadBranding(); }
             // 阶段二百九十五扩展：进入功能开关视图拉取当前开关状态
             else if (item.dataset.view === 'features') { loadFeatures(); }
+            // 阶段二百九十三：进入服务号管理视图拉取服务号列表（微信同款公众号 CRUD）
+            else if (item.dataset.view === 'official') { if (window.loadOfficial) loadOfficial(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -7469,8 +7473,8 @@
         for (var j = 0; j < gmFiles.length; j++) {
             if (gmFiles[j].rel_path === rel) return; // 同路径重复项跳过
         }
-        if (gmFiles.length >= GM_MAX_FILES) {
-            showToast('文件清单已达 5000 项上限，其余文件已跳过');
+        if (GM_MAX_FILES !== -1 && gmFiles.length >= GM_MAX_FILES) {
+            showToast('文件清单已达 ' + GM_MAX_FILES + ' 项上限，其余文件已跳过');
             return;
         }
         gmFiles.push({ rel_path: rel, size: file.size, file: file });
@@ -8134,6 +8138,12 @@
             gmCfg.featured = (d.featured_games || []).map(function (g) {
                 return { id: g.id, name: g.name || ('游戏 #' + g.id), cover: g.cover || '' };
             });
+            // 顺便更新上传相关全局限制（管理端前端预检用）
+            if (typeof d.max_files_per_version === 'number' && d.max_files_per_version > 0) {
+                GM_MAX_FILES = d.max_files_per_version;
+            } else if (d.max_files_per_version === -1) {
+                GM_MAX_FILES = -1; // 不限
+            }
             gmCfgLoaded = true;
             gmRenderConfig();
         });
@@ -8572,6 +8582,7 @@
         $('merchants-f-rate').value = 100;
         $('merchants-f-remark').value = '';
         $('merchants-f-quota').value = '';
+        $('merchants-f-maxfiles').value = '';
         $('merchants-form-title').textContent = '创建商户';
         $('merchants-save').textContent = '创建';
         $('merchants-reset-form').classList.add('hidden');
@@ -8583,7 +8594,7 @@
             var items = (result.data.list || []);
             $('merchants-status').textContent = '共 ' + (result.data.total || items.length) + ' 个商户';
             var tbody = $('merchants-tbody');
-            if (!items.length) { tbody.innerHTML = '<tr><td colspan="9" class="vec-empty">暂无商户，用上方表单创建</td></tr>'; return; }
+            if (!items.length) { tbody.innerHTML = '<tr><td colspan="10" class="vec-empty">暂无商户，用上方表单创建</td></tr>'; return; }
             tbody.innerHTML = '';
             items.forEach(function (m) {
                 var tr = document.createElement('tr');
@@ -8595,6 +8606,9 @@
                 var qTxt = q === -1 ? '不限量' : (q > 0
                     ? fmtGB(q) + '<div style="font-size:11px;color:var(--text-light);">已用 ' + fmtGB(Number(m.storage_used_bytes) || 0) + '</div>'
                     : '跟随全局<div style="font-size:11px;color:var(--text-light);">已用 ' + fmtGB(Number(m.storage_used_bytes) || 0) + '</div>');
+                // 文件清单条数上限：0 跟随全局默认 5000 / -1 不限 / >0 专属条数
+                var mf = Number(m.max_files_per_version) || 0;
+                var mfTxt = mf === -1 ? '不限' : (mf > 0 ? mf + ' 项' : '跟随全局(5000)');
                 tr.innerHTML =
                     '<td>' + esc(m.username) + '</td>' +
                     '<td>' + esc(m.name || '—') + '</td>' +
@@ -8603,6 +8617,7 @@
                     '<td>' + (m.game_count || 0) + '</td>' +
                     '<td>' + (Number(m.recharge_total) || 0) + '</td>' +
                     '<td>' + qTxt + '</td>' +
+                    '<td>' + mfTxt + '</td>' +
                     '<td>' + esc(String(m.create_time || '')) + '</td><td></td>';
                 var acts = document.createElement('div');
                 acts.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
@@ -8621,6 +8636,9 @@
                     // 配额回填：专属>0 转 GB，-1 原样，0（跟随全局）留空
                     var qb = Number(m.storage_quota_bytes) || 0;
                     $('merchants-f-quota').value = qb > 0 ? (qb / 1073741824) : (qb === -1 ? -1 : '');
+                    // 文件数上限回填：>0 原样，-1 原样，0 留空
+                    var mfb = Number(m.max_files_per_version) || 0;
+                    $('merchants-f-maxfiles').value = mfb > 0 ? mfb : (mfb === -1 ? -1 : '');
                     $('merchants-form-title').textContent = '编辑商户 — ' + m.username;
                     $('merchants-save').textContent = '保存';
                     $('merchants-reset-form').classList.remove('hidden');
@@ -8657,6 +8675,16 @@
         return b >= 1073741824 ? (b / 1073741824).toFixed(2) + 'GB'
             : b >= 1048576 ? (b / 1048576).toFixed(1) + 'MB' : b + 'B';
     }
+    // 文件清单条数上限解析：空/0=跟随全局(0)、-1=不限、其他正整数=专属条数
+    function parseMaxFiles() {
+        var v = $('merchants-f-maxfiles').value.trim();
+        if (v === '') return 0;
+        var n = Number(v);
+        if (isNaN(n) || !Number.isInteger(n)) return NaN;
+        if (n === -1) return -1;
+        if (n < 1) return NaN;
+        return n;
+    }
     $('merchants-save').addEventListener('click', function () {
         var user = $('merchants-f-user').value.trim();
         var pass = $('merchants-f-pass').value;
@@ -8665,8 +8693,10 @@
         var remark = $('merchants-f-remark').value.trim();
         var quota = parseQuotaGB();
         if (isNaN(quota)) { showToast('存储配额非法：留空=跟随全局，-1=不限，其他须为正数（GB）'); return; }
+        var maxFiles = parseMaxFiles();
+        if (isNaN(maxFiles)) { showToast('文件数上限非法：留空=跟随全局，-1=不限，其他须为正整数'); return; }
         if (merchantsEditing) {
-            var body = { name: name, commission_rate: rate, remark: remark, storage_quota_bytes: quota };
+            var body = { name: name, commission_rate: rate, remark: remark, storage_quota_bytes: quota, max_files_per_version: maxFiles };
             if (pass) body.password = pass;
             api('PUT', '/admin/api/merchants/' + encodeURIComponent(merchantsEditing), body).then(function (result) {
                 if (!result.ok) { showToast(result.msg || '保存失败'); return; }
@@ -8676,7 +8706,7 @@
             });
         } else {
             if (!user || !pass) { showToast('请填写账号与密码'); return; }
-            api('POST', '/admin/api/merchants', { username: user, password: pass, name: name, commission_rate: rate, storage_quota_bytes: quota, remark: remark }).then(function (result) {
+            api('POST', '/admin/api/merchants', { username: user, password: pass, name: name, commission_rate: rate, storage_quota_bytes: quota, max_files_per_version: maxFiles, remark: remark }).then(function (result) {
                 if (!result.ok) { showToast(result.msg || '创建失败'); return; }
                 showToast('商户已创建：' + user);
                 merchantsResetForm();

@@ -34,6 +34,8 @@
     --sidebar-bg: #1e1e1e;
     --chat-bg: #111111;
     --text: #e0e0e0;
+    --text-primary: #e0e0e0;
+    --text-secondary: #8a8a8a;
     --text-light: #8a8a8a;
     --bubble-self: #0a7a3d;
     --bubble-other: #2c2c2c;
@@ -44,6 +46,7 @@
     --hover: #2a2a2a;
     --active: #383838;
     --panel-bg: #1e1e1e;
+    --bg-tertiary: #2a2a2a;      /* admin 分段按钮/次要容器底色 —— 之前漏了导致白色 fallback */
     --search-bg: #2a2a2a;     /* 深色下略浅于侧栏，避免输入框与侧栏同色融为一体 */
     --header-bg: #1a1a1a;
     --placeholder-bg: #555555;
@@ -51,7 +54,6 @@
     --rail-icon: #8a8a8a;
     --rail-hover: rgba(255, 255, 255, 0.08);
     --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
-    --text-secondary: #8a8a8a;                     /* 深色下次级文字同 --text-light */
     --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.45);  /* 深色下阴影加重才可见 */
     --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
@@ -63,6 +65,8 @@
         --sidebar-bg: #1e1e1e;
         --chat-bg: #111111;
         --text: #e0e0e0;
+        --text-primary: #e0e0e0;
+        --text-secondary: #8a8a8a;
         --text-light: #8a8a8a;
         --bubble-self: #0a7a3d;
         --bubble-other: #2c2c2c;
@@ -73,6 +77,7 @@
         --hover: #2a2a2a;
         --active: #383838;
         --panel-bg: #1e1e1e;
+        --bg-tertiary: #2a2a2a;
         --search-bg: #2a2a2a; /* 跟随系统·深色：同 dark 主题 */
         --header-bg: #1a1a1a;
         --placeholder-bg: #555555;
@@ -80,7 +85,6 @@
         --rail-icon: #8a8a8a;
         --rail-hover: rgba(255, 255, 255, 0.08);
         --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
-        --text-secondary: #8a8a8a;                    /* 跟随系统·深色：同 dark 主题 */
         --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.45);
         --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.5);
     }
@@ -298,7 +302,9 @@ html, body {
     z-index: 1;
     display: flex;
     width: min(920px, 94vw);
-    min-height: 560px;
+    /* 固定高度保证账号登录 / 多账号选择 / 注册三个页面切换时高度完全一致，
+       不受各面板内容多少影响；内部账号列表 max-height + overflow-y 自适应滚动 */
+    height: 560px;
     border-radius: 18px;
     overflow: hidden;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
@@ -446,6 +452,287 @@ html, body {
     color: #fff;
     font-weight: 600;
     box-shadow: 0 2px 6px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+/* ===== 阶段三百零九：多账号选择面板（QQ同款） ===== */
+#login-accounts-pane {
+    display: flex;
+    flex-direction: column;
+    /* flex:1 填满卡片剩余空间；卡片固定 560px，面板内部账号列表 max-height+overflow 处理滚动 */
+    flex: 1;
+    min-height: 0;
+}
+
+.login-accounts-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px 22px;
+    padding: 20px 8px;
+    margin-bottom: 8px;
+    align-content: flex-start;
+    justify-content: flex-start;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.login-accounts-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 8px 6px;
+    border-radius: 12px;
+    transition: background 0.15s;
+    width: 80px;
+}
+
+.login-accounts-item:hover {
+    background: var(--search-bg);
+}
+
+.login-accounts-item.selected {
+    background: color-mix(in srgb, var(--primary) 10%, var(--search-bg));
+}
+
+/* 头像：共享尺寸/圆角/边框（img 和 div 都用） */
+.login-accounts-avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    flex-shrink: 0;
+}
+/* img 专属：只保留替换元素需要的属性，不要 flex/background */
+img.login-accounts-avatar-img {
+    object-fit: cover;
+    display: block;
+}
+/* div 占位专属：flex 居中 + 背景色 + 文字样式 */
+div.login-accounts-avatar-ph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--primary);
+    color: #fff;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.login-accounts-item.selected .login-accounts-avatar {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+.login-accounts-item.selected::after {
+    content: '';
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--primary);
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' width='12' height='12' fill='white' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/%3E%3C/svg%3E");
+    background-size: 10px 10px;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.login-accounts-name {
+    font-size: 12px;
+    color: var(--text);
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.login-accounts-add {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 8px 6px;
+    border-radius: 12px;
+    width: 80px;
+    transition: background 0.15s;
+}
+
+.login-accounts-add:hover {
+    background: var(--search-bg);
+}
+
+.login-accounts-add-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 2px dashed var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-light);
+    transition: border-color 0.2s, color 0.2s;
+}
+
+.login-accounts-add:hover .login-accounts-add-icon {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.login-accounts-add-label {
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.login-accounts-item-delete {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #ff4d4f;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.login-accounts-item:hover .login-accounts-item-delete,
+.login-accounts-item.manage-mode .login-accounts-item-delete {
+    opacity: 1;
+}
+
+.login-accounts-item-delete:hover {
+    background: #ff7875;
+}
+
+/* 空态 */
+.login-accounts-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 48px 0 24px;
+    color: var(--text-light);
+}
+
+.login-accounts-empty svg {
+    color: var(--text-light);
+    opacity: 0.4;
+}
+
+.login-accounts-empty p {
+    font-size: 14px;
+    margin: 0;
+}
+
+.login-accounts-add-btn {
+    height: 38px;
+    padding: 0 24px;
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.login-accounts-add-btn:hover {
+    background: var(--primary);
+    color: #fff;
+}
+
+/* 底部操作栏 */
+.login-accounts-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.login-auto-login-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+}
+
+.login-auto-login-label input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.login-accounts-footer-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.login-accounts-action {
+    height: 32px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 6px;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.login-accounts-action:hover {
+    background: var(--border);
+    color: var(--primary);
+}
+
+.login-accounts-btn {
+    width: 100%;
+    height: 46px;
+    margin-top: 14px;
+    background: var(--primary);
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    letter-spacing: 6px;
+    cursor: pointer;
+    transition: filter 0.15s;
+}
+
+.login-accounts-btn:hover {
+    filter: brightness(0.94);
+}
+
+.login-accounts-btn:active {
+    filter: brightness(0.88);
+}
+
+.login-accounts-btn:disabled {
+    filter: brightness(0.8);
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 
 /* 扫码登录面板：二维码容器 + 三级状态（待扫描/已扫描/已过期） */
@@ -638,6 +925,25 @@ html, body {
 #register-btn:disabled {
     filter: brightness(0.8);
     cursor: not-allowed;
+}
+
+/* 阶段二百九十三：登录按钮 loading 态 */
+#login-btn.logging-in {
+    filter: brightness(0.85);
+    cursor: not-allowed;
+    letter-spacing: 2px;
+}
+#login-btn.logging-in::before {
+    content: '';
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: netSpinner 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
 }
 
 .login-hint {
@@ -1126,6 +1432,54 @@ html, body {
 /* 折叠后箭头翻转向右（提示可展开） */
 #list-toggle-btn.collapsed svg {
     transform: rotate(180deg);
+}
+
+/* ===== 阶段二百九十三：网络连接状态横幅（QQ/微信同款顶部横幅） ===== */
+.net-banner {
+    height: 32px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #fa5151;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
+    flex-shrink: 0;
+    animation: netBannerIn 0.25s ease-out;
+}
+.net-banner.hidden {
+    display: none;
+}
+.net-banner-icon {
+    flex-shrink: 0;
+    opacity: 0.9;
+}
+.net-banner-text {
+    flex: 1;
+    line-height: 1;
+}
+.net-banner-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: netSpinner 0.8s linear infinite;
+    flex-shrink: 0;
+}
+/* 重连成功后的"恢复中"状态（黄色） */
+.net-banner.reconnecting {
+    background: #f5a623;
+}
+/* 横幅滑入动画 */
+@keyframes netBannerIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+/* 旋转 spinner */
+@keyframes netSpinner {
+    to { transform: rotate(360deg); }
 }
 
 .chat-header {
@@ -2330,6 +2684,96 @@ html.m .mobile-plus-panel:not(.hidden) {
     min-height: 0;
 }
 
+/* ===== 服务号搜索面板（微信同款 sidebar 内嵌） ===== */
+#official-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.official-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.official-back-btn {
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.official-back-btn:hover {
+    background: var(--bg-tertiary, #f4f4f4);
+    color: var(--primary);
+}
+.official-search-box {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--search-bg, #2a2a2a);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    min-width: 0;
+}
+.official-search-icon {
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+.official-search-box input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 13px;
+    min-width: 0;
+    padding: 0;
+}
+.official-search-box input::placeholder {
+    color: var(--text-light);
+}
+.off-search-clear {
+    background: none;
+    border: none;
+    color: var(--text-light);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 0 2px;
+    flex-shrink: 0;
+}
+.official-search-hint {
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 6px 14px;
+    flex-shrink: 0;
+}
+.official-search-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+/* 搜索结果列表项（复用 user-item 基础，覆盖头像为方形圆角） */
+.official-search-list .user-item {
+    padding: 8px 12px;
+}
+.official-search-list .user-item .conv-avatar.conv-official-avatar {
+    background: var(--bg-tertiary, #f4f4f4);
+    color: var(--text);
+    font-size: 20px;
+    border-radius: 8px;
+}
+
 .conv-list {
     flex: 1;
     overflow-y: auto;
@@ -2385,6 +2829,24 @@ html.m .mobile-plus-panel:not(.hidden) {
     object-fit: cover;
     border-radius: inherit;
     display: block;
+}
+
+/* ===== 阶段二百九十三：服务号会话头像（左侧列表 🏢 占位 / 自定义方形圆角） ===== */
+/* 服务号头像覆盖默认 conv-avatar 的主题绿背景——用浅灰底 + 深色 emoji/文字，深色模式用深灰底 */
+.conv-avatar.conv-official-avatar {
+    background: var(--bg-tertiary, #f4f4f4);
+    color: var(--text, #333);
+    font-size: 22px;
+    font-weight: 400;
+    border-radius: 8px;
+    transition: background .15s;
+}
+.conv-avatar.conv-official-avatar img {
+    border-radius: inherit;
+}
+[data-theme="dark"] .conv-avatar.conv-official-avatar {
+    background: var(--bg-tertiary-dark, #2d2d2d);
+    color: var(--text-dark, #fff);
 }
 
 /* ===== 阶段二百六十六：微信同款群头像（无群头像降级成员头像九宫格拼格） ===== */
@@ -20793,6 +21255,74 @@ html.m .loc-sheet-title { padding: 18px 0 12px; }
 /* 手机端名片气泡稍窄（微信同款窄屏比例） */
 html.m .message .message-bubble.bubble-contact-card { width: 196px; padding: 10px; }
 html.m .cc-avatar { width: 38px; height: 38px; }
+
+/* ===== 阶段二百九十三：服务号名片气泡 (120 OFFICIAL_CARD) ===== */
+/* 微信同款服务号卡片：宽 238px，左侧 44px 方形圆角头像 / 🏢 图标，右侧标题 + 灰色"服务号"标签 + desc 副标题 + 最右"查看→" */
+.message .message-bubble.bubble-official-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 238px;
+    padding: 12px;
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease, border-color .15s ease;
+    border: 1px solid var(--border, #e5e5e5);
+}
+.message .message-bubble.bubble-official-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+    border-color: var(--primary, #07c160);
+}
+.oc-avatar {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: linear-gradient(135deg, var(--primary-bg, rgba(7,193,96,.14)), var(--hover, #f2f2f2));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    line-height: 1;
+}
+.oc-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.oc-info { min-width: 0; flex: 1; }
+.oc-name {
+    font-size: 14px;
+    line-height: 1.4;
+    font-weight: 600;
+    color: var(--text, #333);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.oc-sub {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--primary, #07c160);
+    font-weight: 500;
+}
+.oc-desc {
+    margin-top: 3px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-secondary, #888);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+}
+.oc-action {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--primary, #07c160);
+    font-weight: 500;
+    padding-left: 4px;
+}
+/* 手机端服务号名片稍窄 */
+html.m .message .message-bubble.bubble-official-card { width: 212px; padding: 10px; }
+html.m .oc-avatar { width: 38px; height: 38px; font-size: 18px; }
 
 /* 选择联系人弹窗（微信同款居中卡片，自绘浮层；移动端全屏页） */
 .contactcard-mask {

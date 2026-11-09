@@ -523,6 +523,18 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段二百九十二：联机邀请卡片（落库转发，归口 gameinvite.go）
 	case protocol.MsgTypeGameInvite:
 		s.handleGameInviteSend(c, msg)
+	// ============= 阶段二百九十三：服务号功能（微信同款公众号） =============
+	// 归口 official.go（用户端信令）+ official_message.go（推送核心）+ official_api.go（HTTP 网关）
+	case protocol.MsgTypeOfficialSubAction:
+		s.handleOfficialSubAction(c, msg)
+	case protocol.MsgTypeOfficialMenu:
+		s.handleOfficialMenu(c, msg)
+	case protocol.MsgTypeOfficialMenuClick:
+		s.handleOfficialMenuClick(c, msg)
+	case protocol.MsgTypeOfficialSearch:
+		s.handleOfficialSearch(c, msg)
+	case protocol.MsgTypeOfficialCard:
+		s.handleOfficialCard(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -661,7 +673,7 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 	// 均为只读 + 经 sendCh 线程安全下发，互不依赖，WaitGroup 并行 + 末尾统一收口，
 	// 与原串行行为时序等价（handleLogin 返回前登录期帧已全部入队）
 	var wg sync.WaitGroup
-	wg.Add(10)
+	wg.Add(11)
 	go func() { defer wg.Done(); s.pushUserListSnapshot(c) }()
 	go func() { defer wg.Done(); s.pushOfflineMessages(c) }()
 	go func() { defer wg.Done(); s.pushFriendList(c) }()
@@ -672,6 +684,8 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 	go func() { defer wg.Done(); s.pushPinList(c) }()
 	go func() { defer wg.Done(); s.pushPendingPurges(c) }()
 	go func() { defer wg.Done(); s.pushReadWatermarks(c) }()
+	// 阶段二百九十三：服务号已关注列表（与 FRIEND_LIST 同层登录推送，前端渲染服务号会话）
+	go func() { defer wg.Done(); s.handleOfficialSubList(c) }()
 	s.pushConvList(c)
 	wg.Wait()
 	// 阶段一百四十七：登录重连取消其活跃通话的下线宽限收口（切网闪断回来，通话继续）
@@ -911,6 +925,16 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 	}
 	record.ID = s.persistMessage(&record)
 	msg.MsgID = record.ID
+
+	// 阶段二百九十三：私聊目标为服务号（o_ 前缀且数据库中真实存在该 app_id）时 → 异步关键词自动回复
+	// 与 isGroupTarget 同口径：前缀匹配 + DB 校验双保险，防止普通用户名 'o_xxx' 被误伤
+	if strings.HasPrefix(msg.ToUser, "o_") && len(msg.ToUser) > 2 {
+		appID := msg.ToUser[2:]
+		var acc model.OfficialAccount
+		if store.DB.Where("app_id = ? AND status = 0", appID).First(&acc).Error == nil {
+			s.handleOfficialUserChat(c, msg.ToUser, msg.Content)
+		}
+	}
 
 	data, _ := json.Marshal(msg)
 

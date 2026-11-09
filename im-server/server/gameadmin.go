@@ -1684,8 +1684,13 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		adminFail(w, http.StatusConflict, "该版本已存在")
 		return
 	}
-	if len(req.Files) == 0 || len(req.Files) > 5000 {
-		adminFail(w, http.StatusBadRequest, "文件清单为空或超出 5000 项上限")
+	fileLimit := s.merchantFileLimit(g.OwnerUsername)
+	if len(req.Files) == 0 {
+		adminFail(w, http.StatusBadRequest, "文件清单为空")
+		return
+	}
+	if fileLimit != -1 && len(req.Files) > fileLimit {
+		adminFail(w, http.StatusBadRequest, fmt.Sprintf("文件清单超出 %d 项上限（当前 %d 项）", fileLimit, len(req.Files)))
 		return
 	}
 	// 清单预处理：路径清洗 + 归并分片会话（同文件重复项拒绝）
@@ -1986,6 +1991,12 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 			sumUp += it.size
 		}
 		sort.Slice(finalItems, func(i, j int) bool { return finalItems[i].relPath < finalItems[j].relPath })
+		// 合成后条数上限复检：基底版本可能刚好在上限附近，补丁新增后需再校验
+		if fileLimit != -1 && len(finalItems) > fileLimit {
+			s.gameVersionRollback(verRoot, items, true)
+			adminFail(w, http.StatusBadRequest, fmt.Sprintf("补丁合成后清单超出 %d 项上限（当前 %d 项）", fileLimit, len(finalItems)))
+			return
+		}
 		if cap := s.cfg.Game.MaxUnpackSize; cap > 0 && sumUp > cap {
 			s.gameVersionRollback(verRoot, items, true)
 			adminFail(w, http.StatusBadRequest, "合成清单总大小超出上限（上限 "+strconv.FormatInt(cap>>20, 10)+"MB）")
@@ -2111,6 +2122,25 @@ func (s *Server) merchantQuotaLimit(owner string) int64 {
 		return mq
 	}
 	return s.cfg.Game.MerchantQuotaBytes
+}
+
+// merchantFileLimit 商户单版本文件清单条数上限解析归口（管理员后台分配支持）：
+// 商户行专属值优先——-1=不限 / >0=专属条数；0（未分配）或商户行缺失=跟随全局 game.max_files_per_version
+// 官方游戏（owner 为空）也跟随全局配置
+func (s *Server) merchantFileLimit(owner string) int {
+	if owner != "" {
+		var mf int
+		if err := store.DB.Model(&model.Merchant{}).Select("max_files_per_version").
+			Where("username = ?", owner).Scan(&mf).Error; err == nil && (mf == -1 || mf > 0) {
+			return mf
+		}
+	}
+	v := s.cfg.Game.MaxFilesPerVersion
+	// 防御：未走 Load() 的 cfg 或非法值（直接 new Server 的测试路径）回默认 5000，-1 保留不限
+	if v == 0 || (v < 0 && v != -1) {
+		v = 5000
+	}
+	return v
 }
 
 // gameMerchantQuotaCheck 商户存储总量配额校验（版本登记预检/落位复检共用）：
@@ -2872,6 +2902,7 @@ func (s *Server) handleAdminGameNoticeDelete(w http.ResponseWriter, r *http.Requ
 }
 
 // handleAdminGameConfigGet 商店布局配置读取（返回与公开接口同构：layout/sections/featured_games）
+// 顺带返回上传相关全局限制参数（管理端前端预检用）：max_files_per_version / max_file_size / chunk_size
 func (s *Server) handleAdminGameConfigGet(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
@@ -2879,6 +2910,9 @@ func (s *Server) handleAdminGameConfigGet(w http.ResponseWriter, r *http.Request
 	layout, sections, featured := gameStoreConfig("")
 	adminJSON(w, map[string]interface{}{
 		"layout": layout, "sections": sections, "featured_games": featured,
+		"max_files_per_version": s.cfg.Game.MaxFilesPerVersion,
+		"max_file_size":         s.cfg.Game.MaxFileSize,
+		"chunk_size":            s.cfg.Game.ChunkSize,
 	})
 }
 

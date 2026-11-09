@@ -41,6 +41,7 @@
 .m-quota-bar { height: 8px; border-radius: 4px; background: var(--border-color, rgba(255,255,255,.08)); overflow: hidden; }
 .m-quota-fill { height: 100%; border-radius: 4px; background: var(--primary); transition: width .3s ease; }
 .m-quota-fill.warn { background: var(--danger, #e5484d); }
+.m-files-hint { font-size: 11px; color: var(--text-light, #999); margin-top: 6px; }
 
 /* ===== 游戏卡片 ===== */
 .m-game-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }

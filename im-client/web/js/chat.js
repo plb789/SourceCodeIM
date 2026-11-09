@@ -30,12 +30,20 @@
     // 阶段十一：未读数服务端归口，统一使用服务端 CONV_LIST 推送的 unread 渲染，删除本地 unreadCount
     var readWatermark = {}; // 对方用户名 -> 已读水位（对方已读到的我方最大消息 ID），跨会话保留供历史渲染即时应用
     var convList = []; // 最近会话列表 [{target, last_msg, last_time, unread, pinned}]（服务端归口）
+    // 阶段二百九十三：服务号信息缓存（会话列表渲染 / SubList / 搜索结果共用）
+    var officialMap = {}; // {target: {app_id, target, display_name, avatar, description, subscribe_time, unread}}
 
     var loginView = document.getElementById('login-view');
     var chatView = document.getElementById('chat-view');
     var loginBtn = document.getElementById('login-btn');
     var loginUsername = document.getElementById('login-username');
     var loginPassword = document.getElementById('login-password');
+    // 阶段二百九十三：网络状态横幅元素引用
+    var netBannerEl = document.getElementById('net-banner');
+    var netBannerTextEl = document.getElementById('net-banner-text');
+    // 阶段二百九十三：PC 端判定——仅 Electron 壳内显示网络中断提示，WEB 端/手机端跳过
+    // 与 socket.js LOGIN_RESP 平台判定、扫码登录入口判定同口径
+    var isPCDesktop = !!(window.desktop && !window.__webCallBridge);
     var logoutBtn = document.getElementById('logout-btn');
     var themeBtn = document.getElementById('theme-btn');
     var addFriendBtn = document.getElementById('add-friend-btn');
@@ -51,6 +59,13 @@
     // 阶段七十八：标题栏 AI 积分（TRAE CN 同款，⚡ + 余额数字，服务端归口下发，前端不做任何积分计算）
     var titlebarPointsEl = document.getElementById('titlebar-points');
     var titlebarPointsNumEl = document.getElementById('titlebar-points-num');
+    // 阶段三百一十：退出登录锁——clearAuth 激活后，任何迟到的 WS 帧/定时器都不能再写 DOM/内存
+    // 典型场景：disconnect 异步关 WS，队列里已排队的 AI 结束帧带 points_balance → setPointsBalance 重写积分
+    var _loggedOut = false;
+    // 阶段二百九十三：最近一次 ERROR 帧到达时间——供 im_connect_failed 判断是否需要兜底 Toast
+    // 服务端拒绝（密码错误/封禁等）先发 ERROR 帧再关连接，chat.js ERROR handler 已 toast，
+    // 此时 im_connect_failed 不应再弹"服务器连接失败"兜底 Toast 造成重复提示
+    var _lastErrorAt = 0;
 
     // ===== 阶段一百三十八：标题栏 ⚡ 积分悬停提示按计费模式切换（socket.js 登录帧与 chat.js 扣费帧共同归口至此） =====
     // usage=按量（1000 tokens=1 积分）/ percall=按次（TRAE CN 同款固定扣费）；后台热更后随登录帧/扣费帧自动刷新
@@ -349,6 +364,11 @@
         // 阶段一百六十一：排队期间禁止重复提交——重复点击会新建第二条 WS 连接，
         // 与排队中的连接互踢错乱（服务端同端互踢会把排队位作废）
         if (isQueueMaskVisible()) return;
+        // 阶段二百九十三：登录按钮 loading 态——点击后立即禁用并显示 spinner，
+        // 连接成功/失败由 LOGIN_RESP/im_connect_failed 事件恢复
+        loginBtn.classList.add('logging-in');
+        loginBtn.disabled = true;
+        loginBtn.textContent = I18N.t('登录中');
         IMSocket.connect(username, password);
     }
 
@@ -377,24 +397,279 @@
         if (loginTabsBox) loginTabsBox.classList.add('hidden');
     }
 
-    function setLoginMode(mode) {
-        var qr = mode === 'qr';
-        loginTabPass.classList.toggle('active', !qr);
-        loginTabQr.classList.toggle('active', qr);
-        loginPassPane.classList.toggle('hidden', qr);
-        loginQrPane.classList.toggle('hidden', !qr);
-        loginFormTitle.textContent = I18N.t(qr ? '扫码登录' : '账号登录');
-        loginFormSub.textContent = I18N.t(qr ? '使用手机 APP 扫描二维码，手机确认后即可安全登录。' : '请输入账号和密码，完成当前工作台的安全准入。');
-        qrLoginActive = qr;
-        if (qr) {
-            startQRLogin();
-        } else {
-            stopQRLogin();
+    // 阶段三百零九：先跑旧凭据迁移——确保后面 initLoginMode / autoLogin 读 im_accounts 时数据已就位
+    // 旧格式: im_auth = btoa(JSON({u,p}))；新格式: im_accounts = btoa(JSON([...]))
+    // 注意：函数声明会提升，此处调用合法（源码 L775 有定义）
+    _migrateLegacyAuth();
+
+    // 阶段三百零九：账号选择面板相关元素（accounts pane 没有 tab 入口，由账号数量自动触发）
+    var loginAccountsPane = document.getElementById('login-accounts-pane');
+    var loginAccountsList = document.getElementById('login-accounts-list');
+    var loginAutoLogin = document.getElementById('login-auto-login');
+    var loginAccountsManage = document.getElementById('login-accounts-manage');
+    var loginAccountsSwitchPass = document.getElementById('login-accounts-switch-pass');
+    var loginAccountsBtn = document.getElementById('login-accounts-btn');
+    var loginSelectedAccount = null; // 当前选中的账号对象
+    var loginAccountsManageMode = false; // 账号管理模式（显示删除按钮）
+
+    // 阶段三百零九：渲染账号列表
+    function renderAccountsList() {
+        if (!loginAccountsList) return;
+        var accounts = loadAccounts();
+        loginAccountsBtn.disabled = false;
+
+        var html = '';
+        var selectedU = loginSelectedAccount ? loginSelectedAccount.u : null;
+        accounts.forEach(function (acc) {
+            var displayName = (acc.nickname || '').trim() || acc.u;
+            var manageCls = loginAccountsManageMode ? ' manage-mode' : '';
+            var selectedCls = acc.u === selectedU ? ' selected' : '';
+            html += '<div class="login-accounts-item' + selectedCls + manageCls + '" data-account="' + encodeURIComponent(acc.u) + '">';
+            if (acc.avatar) {
+                html += '<img class="login-accounts-avatar login-accounts-avatar-img" src="' + acc.avatar + '" alt="" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';">';
+                html += '<div class="login-accounts-avatar login-accounts-avatar-ph" style="display:none;">' + (displayName.charAt(0) || '?').toUpperCase() + '</div>';
+            } else {
+                html += '<div class="login-accounts-avatar login-accounts-avatar-ph">' + (displayName.charAt(0) || '?').toUpperCase() + '</div>';
+            }
+            html += '<div class="login-accounts-name">' + escapeHtml(displayName) + '</div>';
+            html += '<button type="button" class="login-accounts-item-delete" data-delete="' + encodeURIComponent(acc.u) + '" title="删除此账号">×</button>';
+            html += '</div>';
+        });
+
+        // + 添加按钮
+        html += '<div class="login-accounts-add" data-add="1">';
+        html += '<div class="login-accounts-add-icon"><svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></div>';
+        html += '<div class="login-accounts-add-label">添加账号</div>';
+        html += '</div>';
+
+        loginAccountsList.innerHTML = html;
+
+        // 更新自动登录复选框状态
+        if (loginAutoLogin) {
+            var selected = accounts.find(function (a) { return a.u === (selectedU || (accounts[0] && accounts[0].u)); });
+            if (selected) {
+                loginSelectedAccount = selected;
+                loginAutoLogin.checked = !!selected.autoLogin;
+            } else {
+                loginAutoLogin.checked = false;
+            }
         }
     }
+
+    // escapeHtml 工具函数（chat.js 可能已有，兜底）
+    if (typeof window._escapeHtml !== 'function') {
+        window._escapeHtml = function (s) {
+            return String(s || '').replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        };
+    }
+    var escapeHtml = window._escapeHtml;
+
+    // 阶段三百零九：显示/隐藏账号选择面板（QQ同款：≥2个历史账号才显示）
+    function showAccountsPane(show) {
+        if (!loginAccountsPane) return;
+        if (show) {
+            loginAccountsPane.classList.remove('hidden');
+            // 视觉 #4 修复：accounts pane 显示时给 pass tab 保留 active（不两个都失焦）
+            if (loginTabPass) loginTabPass.classList.add('active');
+            if (loginTabQr) loginTabQr.classList.remove('active');
+            loginPassPane.classList.add('hidden');
+            loginQrPane.classList.add('hidden');
+            loginFormTitle.textContent = I18N.t('选择账号登录');
+            loginFormSub.textContent = I18N.t('点击已保存的账号快速登录，或添加新账号');
+            stopQRLogin();
+            renderAccountsList();
+            loginAccountsManageMode = false;
+            if (loginAccountsManage) loginAccountsManage.textContent = I18N.t('账号管理');
+        } else {
+            loginAccountsPane.classList.add('hidden');
+        }
+    }
+
+    // 阶段三百零九：账号列表事件委托（点击选择 / 添加 / 删除）
+    if (loginAccountsList) {
+        loginAccountsList.addEventListener('click', function (e) {
+            var delBtn = e.target.closest('[data-delete]');
+            if (delBtn) {
+                e.stopPropagation();
+                var uToDelete = decodeURIComponent(delBtn.getAttribute('data-delete'));
+                showConfirmDialog(I18N.t('确认删除账号 ') + uToDelete + I18N.t(' ？此操作不会删除服务端账号'), function (ok) {
+                    if (ok) {
+                        removeAccount(uToDelete);
+                        if (loginSelectedAccount && loginSelectedAccount.u === uToDelete) loginSelectedAccount = null;
+                        renderAccountsList();
+                        // 删除后账号数变了，可能要自动切到密码面板
+                        var arr = loadAccounts();
+                        if (arr.length < 2) showAccountsPane(false);
+                    }
+                });
+                return;
+            }
+            var addBtn = e.target.closest('[data-add]');
+            if (addBtn) {
+                loginAccountsManageMode = false;
+                if (loginAccountsManage) loginAccountsManage.textContent = I18N.t('账号管理');
+                showAccountsPane(false);
+                setLoginMode('pass');
+                loginUsername.value = '';
+                loginPassword.value = '';
+                loginUsername.focus();
+                return;
+            }
+            var item = e.target.closest('.login-accounts-item');
+            if (item) {
+                var uSel = decodeURIComponent(item.getAttribute('data-account'));
+                var accounts = loadAccounts();
+                loginSelectedAccount = accounts.find(function (a) { return a.u === uSel; }) || null;
+                renderAccountsList();
+            }
+        });
+    }
+
+    // 阶段三百零九：账号管理模式切换
+    if (loginAccountsManage) {
+        loginAccountsManage.addEventListener('click', function () {
+            loginAccountsManageMode = !loginAccountsManageMode;
+            loginAccountsManage.textContent = loginAccountsManageMode ? I18N.t('完成管理') : I18N.t('账号管理');
+            renderAccountsList();
+        });
+    }
+
+    // 阶段三百零九：账号选择面板里切到账号密码登录
+    if (loginAccountsSwitchPass) {
+        loginAccountsSwitchPass.addEventListener('click', function () {
+            showAccountsPane(false);
+            setLoginMode('pass');
+            // 预填选中的账号（让用户直接输密码）
+            if (loginSelectedAccount) {
+                loginUsername.value = loginSelectedAccount.u;
+                loginPassword.value = '';
+                loginPassword.focus();
+            }
+        });
+    }
+
+    // 阶段三百零九：自动登录复选框
+    if (loginAutoLogin) {
+        loginAutoLogin.addEventListener('change', function () {
+            if (!loginSelectedAccount) return;
+            var arr = loadAccounts();
+            for (var i = 0; i < arr.length; i++) {
+                if (arr[i].u === loginSelectedAccount.u) arr[i].autoLogin = loginAutoLogin.checked;
+                else arr[i].autoLogin = false; // 全局只允许一个 autoLogin
+            }
+            saveAccounts(arr);
+        });
+    }
+
+    // 阶段三百零九：账号选择面板登录按钮
+    if (loginAccountsBtn) {
+        loginAccountsBtn.addEventListener('click', function () {
+            if (!loginSelectedAccount) { showToast(I18N.t('请先选择一个账号')); return; }
+            if (!loginSelectedAccount.p) {
+                loginUsername.value = loginSelectedAccount.u;
+                loginPassword.value = '';
+                showAccountsPane(false);
+                setLoginMode('pass');
+                loginPassword.focus();
+                showToast(I18N.t('该账号未保存密码，请输入密码'));
+                return;
+            }
+            if (isQueueMaskVisible()) return;
+            // 应用 autoLogin 设置
+            var arr = loadAccounts();
+            for (var i = 0; i < arr.length; i++) {
+                if (arr[i].u === loginSelectedAccount.u) arr[i].autoLogin = !!loginAutoLogin.checked;
+                else arr[i].autoLogin = false;
+            }
+            saveAccounts(arr);
+            IMSocket.connect(loginSelectedAccount.u, loginSelectedAccount.p);
+        });
+    }
+
+    // tab 切换：只管理 pass / qr（accounts pane 通过账号数量自动触发）
+    function setLoginMode(mode) {
+        var qr = mode === 'qr';
+        var pass = mode === 'pass';
+
+        // 切 tab 时自动关掉 accounts pane
+        showAccountsPane(false);
+
+        loginTabPass.classList.toggle('active', pass);
+        loginTabQr.classList.toggle('active', qr);
+        loginPassPane.classList.toggle('hidden', !pass);
+        loginQrPane.classList.toggle('hidden', !qr);
+
+        if (qr) {
+            loginFormTitle.textContent = I18N.t('扫码登录');
+            loginFormSub.textContent = I18N.t('使用手机 APP 扫描二维码，手机确认后即可安全登录。');
+        } else {
+            loginFormTitle.textContent = I18N.t('账号登录');
+            loginFormSub.textContent = I18N.t('请输入账号和密码，完成当前工作台的安全准入。');
+        }
+
+        qrLoginActive = qr;
+        if (qr) startQRLogin(); else stopQRLogin();
+    }
+
     if (loginTabPass) loginTabPass.addEventListener('click', function () { setLoginMode('pass'); });
     if (loginTabQr) loginTabQr.addEventListener('click', function () { setLoginMode('qr'); });
     if (loginQrRefresh) loginQrRefresh.addEventListener('click', function () { if (qrLoginActive) startQRLogin(); });
+
+    // showConfirmDialog 自绘确认弹窗（禁止系统 confirm）
+    function showConfirmDialog(msg, onResult) {
+        var mask = document.createElement('div');
+        mask.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,0.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;';
+        var card = document.createElement('div');
+        card.style.cssText = 'width:320px;padding:24px;border-radius:12px;background:var(--panel-bg);box-shadow:0 16px 48px rgba(0,0,0,0.3);';
+        var title = document.createElement('div');
+        title.style.cssText = 'font-size:15px;font-weight:600;color:var(--text);margin-bottom:16px;text-align:center;';
+        title.textContent = msg;
+        var btns = document.createElement('div');
+        btns.style.cssText = 'display:flex;gap:12px;';
+        var btnCancel = document.createElement('button');
+        btnCancel.style.cssText = 'flex:1;height:38px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);font-size:13px;cursor:pointer;';
+        btnCancel.textContent = I18N.t('取消');
+        var btnOk = document.createElement('button');
+        btnOk.style.cssText = 'flex:1;height:38px;border:none;border-radius:6px;background:var(--primary);color:#fff;font-size:13px;cursor:pointer;';
+        btnOk.textContent = I18N.t('确定');
+        btns.appendChild(btnCancel);
+        btns.appendChild(btnOk);
+        card.appendChild(title);
+        card.appendChild(btns);
+        mask.appendChild(card);
+        document.body.appendChild(mask);
+        btnCancel.onclick = function () { document.body.removeChild(mask); if (onResult) onResult(false); };
+        btnOk.onclick = function () { document.body.removeChild(mask); if (onResult) onResult(true); };
+        mask.onclick = function (e) { if (e.target === mask) { document.body.removeChild(mask); if (onResult) onResult(false); } };
+    }
+
+    // 阶段三百零九：QQ同款登录视图刷新——根据账号数量动态决定显示账号选择还是密码登录
+    // 可在页面加载时调用，也可在退出登录 / 登录失败后动态调用（不需要 reload）
+    function refreshLoginView() {
+        if (isNativeApp) { setLoginMode('pass'); return; }
+        var accounts = loadAccounts();
+        if (accounts.length >= 2) {
+            // 多账号 → 账号选择面板（记住上次选中的账号，没有就选第一个）
+            if (!loginSelectedAccount) loginSelectedAccount = accounts[0];
+            showAccountsPane(true);
+        } else {
+            // 0~1 个账号 → 密码登录面板
+            showAccountsPane(false);
+            setLoginMode('pass');
+            if (accounts.length === 1) {
+                // 只有一个账号，预填账号名让用户知道当前要登哪个
+                loginUsername.value = accounts[0].u;
+                loginPassword.value = '';
+            } else {
+                loginUsername.value = '';
+                loginPassword.value = '';
+            }
+        }
+    }
+    // 页面加载时跑一次（initLoginMode IIFE 等价物）
+    refreshLoginView();
 
     // stopQRLogin 停止轮询并复位三级状态遮罩（切回密码面板 / 凭码登录成功时调用）
     function stopQRLogin() {
@@ -526,40 +801,330 @@
     }
 
     // ===== 退出 =====
-    // 登录持久化：退出登录时清除已保存凭据，刷新后回到登录界面（否则自动登录会直接再次进入）
-    // 原实现：logoutBtn.addEventListener('click', function () { location.reload(); });
+    // 阶段三百零九：退出登录后不 reload，直接在当前页面动态切到登录视图（PC 客户端没有刷新入口）
+    // 如果有 ≥2 个历史账号 → 自动显示账号选择面板（QQ 风格）
     logoutBtn.addEventListener('click', function () {
         clearAuth();
-        location.reload();
+        loginView.classList.remove('hidden');
+        chatView.classList.add('hidden');
+        refreshLoginView();
     });
 
-    // ===== 登录持久化：刷新页面后保持登录状态 =====
-    // 原实现：登录状态仅存于 JS 内存变量，刷新后全部丢失，必须重新输入账号密码登录
-    // 方案：登录成功后将凭据存入 localStorage（base64 轻度混淆），页面加载时自动重连登录；
-    //       退出登录或登录失败（如密码已被修改）时清除凭据，回退到手动登录
-    function saveAuth(u, p) {
-        try { localStorage.setItem('im_auth', btoa(encodeURIComponent(JSON.stringify({ u: u, p: p })))); } catch (e) {}
+    // ===== 阶段三百零九：多账号管理（QQ同款登录页账号选择） =====
+    // 存储结构：im_accounts = [{ u, p, nickname, avatar, lastLogin, autoLogin }]
+    // 向后兼容：首次加载时从旧 im_auth 迁移到新 im_accounts 数组
+    function _migrateLegacyAuth() {
+        try {
+            var old = localStorage.getItem('im_auth');
+            if (old && !localStorage.getItem('im_accounts')) {
+                var cred = JSON.parse(decodeURIComponent(atob(old))) || null;
+                if (cred && cred.u) {
+                    var arr = [{ u: cred.u, p: cred.p || '', nickname: '', avatar: '', lastLogin: Date.now(), autoLogin: true }];
+                    // 阶段三百零九修复：迁移也要用 saveAccounts（btoa 混淆格式），与后续写入保持一致
+                    try { localStorage.setItem('im_accounts', btoa(encodeURIComponent(JSON.stringify(arr)))); } catch (e) {}
+                }
+            }
+        } catch (e) {}
+    }
+    // 注意：_migrateLegacyAuth() 的调用已提前到 L385（initLoginMode 之前），此处不再重复
+
+    // ===== 阶段三百一十：密码加密工具 =====
+    // PC 端：Electron safeStorage → Windows DPAPI（OS 级加密，硬件绑定）
+    // 浏览器端：降级明文（浏览器无系统级加密能力，这是 Web 平台固有限制）
+    // 密文前缀约定：p 以 'enc:' 开头 = safeStorage 密文；无前缀 = 明文
+    // （纯浏览器端存的密码就是明文，用户需要自行承担风险——可勾选"不记住密码"）
+    function _pwdEncrypt(plaintext) {
+        if (!plaintext) return plaintext;
+        try {
+            if (window.desktop && typeof window.desktop.credentialEncrypt === 'function') {
+                var r = window.desktop.credentialEncrypt(plaintext);
+                if (r && r.ok && r.data) return 'enc:' + r.data;
+            }
+        } catch (e) {}
+        return plaintext; // 降级：明文
+    }
+    function _pwdDecrypt(p) {
+        if (!p || p.charAt(0) !== 'e' || p.indexOf('enc:') !== 0) return p;
+        try {
+            if (window.desktop && typeof window.desktop.credentialDecrypt === 'function') {
+                var r = window.desktop.credentialDecrypt(p.substring(4));
+                if (r && r.ok && r.data !== undefined) return r.data;
+            }
+        } catch (e) {}
+        return ''; // 解密失败（换机器/OS 重装）→ 清空密码让用户重输
+    }
+    // 全局解密器：供 socket.js / 附属 JS 文件读 im_auth 时解密密码用
+    window._imDecryptPassword = _pwdDecrypt;
+
+    function loadAccounts() {
+        try {
+            var raw = localStorage.getItem('im_accounts');
+            if (!raw) return [];
+            // 兼容两种格式：btoa 混淆过的（新版）/ 纯 JSON 明文（过渡期 / 本地存储工具直接写入）
+            var arr;
+            try { arr = JSON.parse(decodeURIComponent(atob(raw))) || []; }
+            catch (e) { arr = JSON.parse(raw) || []; }
+            // 自动解密每个账号的密码
+            for (var i = 0; i < arr.length; i++) {
+                if (arr[i].p) arr[i].p = _pwdDecrypt(arr[i].p);
+            }
+            return arr;
+        } catch (e) { return []; }
+    }
+    function saveAccounts(arr) {
+        try {
+            // 深拷贝 + 加密密码（不能改原始对象的密码——上层还要用明文调 connect）
+            var store = arr.map(function(a) {
+                var c = {};
+                for (var k in a) c[k] = a[k];
+                if (c.p && c.p.charAt(0) !== 'e') c.p = _pwdEncrypt(c.p); // 只加密未加密的
+                return c;
+            });
+            localStorage.setItem('im_accounts', btoa(encodeURIComponent(JSON.stringify(store))));
+        } catch (e) {}
+    }
+    // 内部辅助：把当前"活跃账号"同步到旧 im_auth 存储（供 7 个附属 JS 文件兼容读取）
+    // 活跃账号 = 刚登录成功的那个（谁最后调 upsertAccount 谁就是 active）
+    function _syncImAuthForActive(arr, activeU) {
+        try {
+            if (!arr || arr.length === 0) {
+                localStorage.removeItem('im_auth');
+                return;
+            }
+            var active = null;
+            if (activeU) {
+                for (var i = 0; i < arr.length; i++) { if (arr[i].u === activeU) { active = arr[i]; break; } }
+            }
+            // activeU 不在数组中（已被 removeAccount 删掉），退到 autoLogin=true 的，再退到第一个
+            if (!active) {
+                for (var j = 0; j < arr.length; j++) { if (arr[j].autoLogin) { active = arr[j]; break; } }
+            }
+            if (!active) active = arr[0];
+            if (active) {
+                // 存 im_auth 时密码也要加密（PC safeStorage）
+                var encP = _pwdEncrypt(active.p || '');
+                localStorage.setItem('im_auth', btoa(encodeURIComponent(JSON.stringify({ u: active.u, p: encP }))));
+            }
+        } catch (e) {}
+    }
+    function upsertAccount(u, extra) {
+        var arr = loadAccounts();
+        var found = false;
+        for (var i = 0; i < arr.length; i++) {
+            if (arr[i].u === u) {
+                if (extra) { for (var k in extra) { if (extra[k] !== undefined) arr[i][k] = extra[k]; } }
+                arr[i].lastLogin = Date.now();
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            var entry = { u: u, p: (extra && extra.p) || '', nickname: '', avatar: '', lastLogin: Date.now(), autoLogin: false };
+            if (extra) { for (var kk in extra) { if (extra[kk] !== undefined) entry[kk] = extra[kk]; } }
+            arr.unshift(entry);
+        }
+        saveAccounts(arr);
+        // 同步活跃账号到 im_auth（BUG #2 修复：不再无脑写 arr[0]，而是谁刚登录谁是 active）
+        _syncImAuthForActive(arr, u);
+    }
+    function removeAccount(u) {
+        var arr = loadAccounts();
+        arr = arr.filter(function (a) { return a.u !== u; });
+        saveAccounts(arr);
+        // removeAccount 不主动写 im_auth，留给下一次 upsertAccount 或 clearAuth 处理
+        // 这里只负责 im_auth 可能被删掉的账号也要清掉
+        try {
+            var cur = localStorage.getItem('im_auth');
+            if (cur) {
+                try {
+                    var curCred = JSON.parse(decodeURIComponent(atob(cur)));
+                    if (curCred && curCred.u === u) localStorage.removeItem('im_auth');
+                } catch (e) {}
+            }
+        } catch (e) {}
     }
     function clearAuth() {
+        // 阶段三百一十：先激活退出锁——在 disconnect 之前！
+        // 这样 disconnect 队列里已排队的 WS 帧（AI 结束帧/红包回执带 points_balance）
+        // 即使被处理，setPointsBalance 也会被 _loggedOut 拦截，不会把积分写回来
+        _loggedOut = true;
+        // 阶段三百零九 P0 修复：先保存 currentUsername 再 disconnect
+        // （disconnect 会把 socket.js currentUsername 清成 ''，之后 getUsername() 拿不到值）
+        var currentU = (IMSocket && typeof IMSocket.getUsername === 'function') ? IMSocket.getUsername() : '';
+        // 主动关 WebSocket——原来靠 reload 销毁进程，现在动态切视图必须手动关
+        try { IMSocket.disconnect(); } catch (e) {}
+        // 阶段三百零九 QQ 语义修正：退出登录 = 关 WS + 清 autoLogin + 清凭据指针
+        // **密码是账号固有属性（用户勾了"记住密码"），退出登录不应清密码！**
+        // 这样账号选择面板里所有账号的密码都还在，用户点哪个直接登
+        // 只有密码被服务端拒绝（LOGIN_RESP 失败）才清密码——那条路径独立在失败分支里，不走 clearAuth
+        var arr = loadAccounts();
+        // 1. **只清 autoLogin，不清密码！**（防止退出后自动登回某个账号）
+        for (var j = 0; j < arr.length; j++) { arr[j].autoLogin = false; }
+        saveAccounts(arr);
+        // 2. 清 im_auth 凭据指针 + 网盘 token（绑定当前会话的）
         try { localStorage.removeItem('im_auth'); } catch (e) {}
-        try { localStorage.removeItem('drive_token'); } catch (e) {} // 阶段一百九十八：切号/登出同步清网盘 token
-        // 阶段二百二十五：退出/换号同步停止后台保活服务（凭据随之清除，后台不再收消息通知）
+        try { localStorage.removeItem('drive_token'); } catch (e) {}
+        // 阶段二百二十五：退出/换号同步停止后台保活服务
         try {
             var bg = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
                 && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
             if (bg) bg.stopKeepAlive();
-            // 阶段二百二十六：退出/换号同步解绑 EMAS 账号（防离线通知泄漏到已登出账号）
             if (bg && bg.emasBindAccount) bg.emasBindAccount({ account: '' });
         } catch (e) {}
+
+        // ============== 高优先级 BUG 修复 ==============
+        // BUG#3: aiStreams/aiThinking 旧定时器没停 → 退出后继续向新账号界面写
+        // 先遍历 clearInterval 再置空（参考 openConversation 的清理方式）
+        if (aiStreams) {
+            Object.keys(aiStreams).forEach(function(sid) {
+                try {
+                    var s = aiStreams[sid];
+                    if (s && s.timer) clearInterval(s.timer);
+                    if (s && s.thinkingTimer) clearInterval(s.thinkingTimer);
+                    if (s && s.thinkingEl && s.thinkingEl.parentNode) s.thinkingEl.remove();
+                } catch(e) {}
+            });
+        }
+        aiStreams = {}; aiThinking = {};
+
+        // ============== 清 JS 内存变量（账号私有的，退出后必须全部清零） ==============
+        friendList = []; convList = []; currentChatUser = '';
+        onlineUsers = {}; readWatermark = {}; nickCache = {};
+        userAvatars = {}; myAvatar = ''; officialMap = {};
+        myProfile = { nickname: '', gender: 0, region: '', signature: '' };
+        blockedList = []; groupMap = {};
+        aiAgents = []; agentAvatars = {};
+        webSearchAvailable = false; webSearchOn = false;
+        agentBoardMap = {};
+        agentModeByUser = {}; agentConsoleOpenByUser = {}; agentEchoPending = {};
+        historyPage = 1; historyHasMore = true; loadingMore = false; historyTarget = '';
+        lastTrayTotal = 0;
+        // AI 会话/模型缓存（按账号隔离）
+        aiSessions = {}; aiViewSession = {};
+        aiModelSelByUser = {}; aiModelsFetched = false;
+        // AI 模式开关（旧账号开了计划/全自动，退出后新账号不能继承）
+        planModeOn = false; soloModeOn = false;
+        // 置顶消息、服务号菜单缓存（BUG#2: _officialMenuBar 不置 null → 换号后菜单条永久失效）
+        pinInfo = {}; _officialMenuCache = {}; _officialMenuBar = null;
+        // 公告缓存（按账号）
+        annItems = []; annCurCat = ''; annUnreadByCat = {};
+        // 新好友/群邀请（按账号）
+        groupInvites = []; lastFriendReqData = null;
+        // 输入区暂存（附件/引用/截图）
+        pendingFiles = []; quoteTarget = null;
+        // 轮询定时器（看板 5s / 知识库 5s）——退出后必须停，否则继续请求旧账号数据
+        if (agentBoardTimer) { clearInterval(agentBoardTimer); agentBoardTimer = null; }
+        if (kbPollTimer) { clearInterval(kbPollTimer); kbPollTimer = null; }
+        // 头像失败缓存（防止新账号首帧被误判为失效）
+        navAvatarFailedUrl = '';
+
+        // ============== 清 DOM 元素 ==============
+        // 侧栏会话列表
+        if (convListEl) convListEl.innerHTML = '';
+        var userListEl = document.getElementById('user-list');
+        if (userListEl) userListEl.innerHTML = '<li class="user-item group-item active" data-user="">群聊</li>';
+        // 黑名单动态节点（独立插入 userList 的）
+        var blGroup = document.getElementById('blacklist-group');
+        if (blGroup) blGroup.remove();
+        // 标题栏/侧栏顶部用户区
+        if (titlebarUserEl) titlebarUserEl.classList.add('hidden');
+        if (titlebarUsernameEl) titlebarUsernameEl.textContent = ''; // BUG 补漏
+        if (currentUserEl) currentUserEl.textContent = '';
+        var settingsEntry = document.getElementById('titlebar-settings');
+        if (settingsEntry) settingsEntry.style.display = 'none';
+        // 头像 4 元素（侧栏 + 标题栏）
+        var cav = document.getElementById('current-avatar');
+        if (cav) { cav.src = ''; cav.style.display = 'none'; }
+        var cavph = document.getElementById('current-avatar-ph');
+        if (cavph) { cavph.textContent = ''; cavph.style.display = ''; }
+        var tav = document.getElementById('titlebar-avatar');
+        if (tav) { tav.src = ''; tav.style.display = 'none'; }
+        var tavph = document.getElementById('titlebar-avatar-ph');
+        if (tavph) { tavph.textContent = ''; tavph.style.display = ''; }
+        // AI 积分（服务端按账号下发）
+        if (titlebarPointsEl) titlebarPointsEl.style.display = 'none';
+        if (titlebarPointsNumEl) titlebarPointsNumEl.textContent = '0';
+        if (profilePointsEl) profilePointsEl.textContent = '0';
+        try { localStorage.removeItem('im_points_sync'); } catch (e) {}
+        // 聊天区 DOM（账号私有，旧消息绝对不能带到新账号）
+        var msgListEl = document.getElementById('message-list');
+        if (msgListEl) msgListEl.innerHTML = '';
+        var chatTitleEl = document.getElementById('chat-title');
+        if (chatTitleEl) chatTitleEl.textContent = '';
+        // BUG#1: chat-title-avatar 不能用 style.display（业务侧全用 classList），否则群头像永久消失
+        var chatTitleAvatar = document.getElementById('chat-title-avatar');
+        if (chatTitleAvatar) {
+            chatTitleAvatar.innerHTML = '';
+            chatTitleAvatar.removeAttribute('src');
+            chatTitleAvatar.removeAttribute('data-tip-text');
+            chatTitleAvatar.classList.remove('owner');
+            chatTitleAvatar.classList.add('hidden');
+        }
+        var chatStatusEl = document.getElementById('chat-status');
+        if (chatStatusEl) chatStatusEl.textContent = '';
+        // 会话角标（不仅清文本，还要加 hidden 类，否则残留空红点）
+        var navBadge = document.getElementById('nav-chat-badge');
+        if (navBadge) { navBadge.textContent = ''; navBadge.classList.add('hidden'); }
+        // 公告角标（4 个）
+        ['ann-badge-notice','ann-badge-news','ann-badge-red','nav-ann-badge'].forEach(function(id){
+            var el = document.getElementById(id); if (el) { el.textContent = ''; el.classList.add('hidden'); }
+        });
+        // 新好友/群邀请角标
+        if (newFriendsBadge) { newFriendsBadge.textContent = ''; newFriendsBadge.classList.add('hidden'); }
+        if (navFriendsBadge) { navFriendsBadge.textContent = ''; navFriendsBadge.classList.add('hidden'); }
+        // Agent 看板角标
+        var abBadge = document.getElementById('agent-board-badge');
+        if (abBadge) { abBadge.textContent = ''; abBadge.classList.add('hidden'); }
+        var abBtn = document.getElementById('agent-board-btn');
+        if (abBtn) abBtn.classList.add('hidden');
+        // 置顶消息条
+        var pinBar = document.getElementById('pin-bar');
+        if (pinBar) pinBar.classList.add('hidden');
+        // AI Agent 列表旧 DOM
+        var aiAgentListEl = document.getElementById('ai-agent-list');
+        if (aiAgentListEl) aiAgentListEl.innerHTML = '';
+        // Web 搜索按钮 active 类
+        var wsBtn = document.getElementById('web-search-btn');
+        if (wsBtn) wsBtn.classList.remove('active');
+        // 服务号动态菜单条（BUG#2: 这里 remove 了，但上面 _officialMenuBar=null → 下次 officialMenuEnsure 能重建）
+        var offMenu = document.getElementById('official-menu-bar');
+        if (offMenu) offMenu.remove();
+        // VIP 绑定配置（socket.js 侧按账号下发的持久化键）
+        ['vip_ip','vip_mac','vip_mask','vip_supernodes','real_ip'].forEach(function(k){
+            try { localStorage.removeItem(k); } catch(e){}
+        });
     }
     function getSavedAuth() {
-        try { return JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || null; } catch (e) { return null; }
+        try {
+            var arr = loadAccounts();
+            // 优先取 autoLogin=true 的账号
+            for (var i = 0; i < arr.length; i++) { if (arr[i].autoLogin && arr[i].p) return { u: arr[i].u, p: arr[i].p }; }
+            // 否则取最近登录的账号
+            if (arr.length > 0 && arr[0].p) return { u: arr[0].u, p: arr[0].p };
+            return null;
+        } catch (e) { return null; }
+    }
+    // saveAuth 保持原有调用签名（LOGIN_RESP 成功后调用），内部委托给 upsertAccount
+    function saveAuth(u, p) {
+        upsertAccount(u, { p: p, lastLogin: Date.now() });
     }
     // 页面加载时存在已保存凭据则自动登录（预填登录框便于用户感知当前账号）
     // 乐观显示：立即切换到聊天界面再后台连接，避免等待服务端登录响应期间闪现登录窗口；
     // 连接失败或登录失败时再回退到登录界面（见 LOGIN_RESP 失败分支与 im_connect_failed 监听）
+    // 阶段三百零九：多账号场景下的 autoLogin 策略（QQ 风格）
+    // 单账号 + autoLogin=true → 自动连接；多账号时禁用 autoLogin → 让 initLoginMode 显示账号选择面板
+    // 原因：QQ 有多个历史账号时默认显示账号选择界面，不会自动登录其中一个
     (function autoLogin() {
-        var saved = getSavedAuth();
+        var saved = null;
+        try {
+            var arr = loadAccounts();
+            // 多账号时禁用自动登录——让 initLoginMode 显示账号选择面板让用户选
+            if (arr.length >= 2) {
+                saved = null;
+            } else if (arr.length === 1 && arr[0].autoLogin && arr[0].p) {
+                saved = { u: arr[0].u, p: arr[0].p };
+            }
+        } catch (e) {}
         if (saved && saved.u && saved.p) {
             loginUsername.value = saved.u;
             loginPassword.value = saved.p;
@@ -576,8 +1141,48 @@
     window.addEventListener('im_connect_failed', function () {
         // 阶段一百六十一：排队中连接断开（超时拒绝后服务端关连接/网络闪断）同步收起排队遮罩
         hideQueueMask();
+        // 阶段二百九十三：恢复登录按钮 loading 态
+        loginBtn.classList.remove('logging-in');
+        loginBtn.disabled = false;
+        loginBtn.textContent = I18N.t('登录');
         loginView.classList.remove('hidden');
         chatView.classList.add('hidden');
+        refreshLoginView(); // 动态检测多账号
+        // 阶段二百九十三：连接失败 Toast 提示——仅 PC 端（Electron）显示，WEB/手机端跳过
+        // 服务端拒绝场景会先发 ERROR 帧再 close，chat.js ERROR handler 已 toast 具体错误，
+        // 此时 _lastErrorAt 在 2 秒内 → 跳过兜底 Toast 避免重复
+        // 网络连接失败（服务端未启动/WS 连接超时等无 ERROR 帧场景）→ 正常兜底提示
+        if (isPCDesktop && Date.now() - _lastErrorAt > 2000) {
+            showToast(I18N.t('服务器连接失败，请检查网络或稍后重试'));
+        }
+    });
+
+    // ===== 阶段二百九十三：主页面网络连接状态横幅（QQ/微信同款） =====
+    // 仅 PC 端（Electron）显示，WEB 端/手机端跳过
+    // 仅在已登录成功后才显示横幅，断线时显示、重连恢复自动隐藏
+    function showNetBanner(text) {
+        if (!isPCDesktop || !netBannerEl) return;
+        netBannerTextEl.textContent = text || I18N.t('网络连接失败，正在重连…');
+        netBannerEl.classList.remove('hidden');
+    }
+    function hideNetBanner() {
+        if (!isPCDesktop || !netBannerEl) return;
+        netBannerEl.classList.add('hidden');
+    }
+    // Socket 关闭事件——已登录态下断线显示横幅
+    window.addEventListener('im_socket_close', function () {
+        if (!isPCDesktop) return;
+        if (netBannerEl && loginView.classList.contains('hidden')) {
+            showNetBanner(I18N.t('网络连接失败，正在重连…'));
+        }
+    });
+    // 登录成功事件——隐藏横幅（重连登录成功也触发）
+    window.addEventListener('im_login_ok', function () {
+        hideNetBanner();
+        // 登录成功后恢复登录按钮 loading 态（自动登录/手动登录都可能触发）
+        loginBtn.classList.remove('logging-in');
+        loginBtn.disabled = false;
+        loginBtn.textContent = I18N.t('登录');
     });
 
     // ===== 阶段二百五十：在途自发消息气泡跨"交接重拉历史"保全 =====
@@ -1415,12 +2020,14 @@
         var tb = document.getElementById('taskhist-btn');
         if (tb) tb.click();
     });
-    // 退出登录：与导航栏退出按钮同归口（清凭据+刷新），加二次确认防误触
+    // 退出登录：与导航栏退出按钮同归口（清凭据+动态切登录视图），加二次确认防误触
     var settingsLogout = document.getElementById('settings-logout');
     if (settingsLogout) settingsLogout.addEventListener('click', function () {
         showConfirm(I18N.t('退出登录'), I18N.t('确定退出当前账号？'), function () {
             clearAuth();
-            location.reload();
+            loginView.classList.remove('hidden');
+            chatView.classList.add('hidden');
+            refreshLoginView();
         }, I18N.t('退出'));
     });
     // Esc 关闭设置页（捕获阶段优先处理：设置页在全屏最顶层，开启时不让 Esc 穿透到下层弹窗）
@@ -2264,6 +2871,8 @@
     // 服务端归口：余额仅来自登录响应/AI 结束帧下发，前端只做展示，不做任何扣减计算；
     // 双精度：服务端按 tokens/1000 保留 3 位小数扣除，前端展示格式化最多 2 位小数去尾零（94.506 → 94.51）
     function setPointsBalance(n) {
+        // 退出登录锁：clearAuth 激活后任何迟到的 WS 帧都不能再写积分
+        if (_loggedOut) return;
         var v = Math.round(Number(n) * 100) / 100;
         titlebarPointsNumEl.textContent = String(v);
         titlebarPointsEl.style.display = ''; // CSS 默认 display:none，清空内联后按样式表 flex 显示
@@ -8370,7 +8979,10 @@
         if (ok) {
             // 登录持久化：登录成功保存凭据，刷新页面时自动重登保持登录状态
             // window._lastPassword 为本次连接使用的密码（socket.js connect 时记录）
-            saveAuth(IMSocket.getUsername(), window._lastPassword || '');
+            // 阶段三百零九：QR码登录的密码是 qrc:xxx 临时令牌，不保存为凭据
+            var lastPwd = window._lastPassword || '';
+            var isQrLogin = lastPwd.indexOf('qrc:') === 0;
+            saveAuth(IMSocket.getUsername(), isQrLogin ? '' : lastPwd);
             // 先按账号显示（侧栏顶部+PC 标题栏），登录响应解析出昵称后由 syncMyDisplayName() 纠正为"昵称优先"
             syncMyDisplayName();
             titlebarUserEl.classList.remove('hidden');
@@ -8398,6 +9010,11 @@
                     };
                     // 有昵称时展示名从账号纠正为昵称（无昵称 syncMyDisplayName 内部降级仍显账号）
                     syncMyDisplayName();
+                    // 阶段三百零九：登录成功后同步昵称/头像到账号列表（多账号选择页显示用）
+                    upsertAccount(IMSocket.getUsername(), {
+                        nickname: myProfile.nickname || '',
+                        avatar: myAvatar || ''
+                    });
                 }
                 // 阶段三十一：同步服务端下发的分片大小（服务端归口，覆盖前端兜底默认值）
                 // 原实现：CHUNK_SIZE 恒为前端硬编码 4KB，与服务端 chunk_size 配置脱节
@@ -8409,6 +9026,7 @@
                     setPointsBalance(loginInfo.points);
                 }
             } catch (e) {}
+            _loggedOut = false; // 登录成功 → 解锁（迟到的帧现在是合法的了）
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
             dsConsumePendingShareLink(); // /s/<code> 站内分享链接：登录成功即弹分享详情（一次性）
@@ -8452,11 +9070,25 @@
                 schedulePcMcpReport(2500);
             }
         } else {
-            // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
-            // 并从乐观显示的聊天界面回退到登录界面
-            clearAuth();
+            // 阶段三百零九：登录失败（如密码已被修改）——只清除该账号的密码，保留账号条目（QQ风格：
+            // 用户还能在账号选择页看到此账号，下次点击时提示"该账号未保存密码"）
+            // 退出登录时才会完全删除账号（clearAuth 走 removeAccount）
+            var failU = IMSocket.getUsername();
+            if (failU) {
+                var arr = loadAccounts();
+                for (var fi = 0; fi < arr.length; fi++) {
+                    if (arr[fi].u === failU) {
+                        arr[fi].p = '';
+                        arr[fi].autoLogin = false;
+                        break;
+                    }
+                }
+                saveAccounts(arr);
+            }
+            try { localStorage.removeItem('drive_token'); } catch (e) {}
             loginView.classList.remove('hidden');
             chatView.classList.add('hidden');
+            refreshLoginView(); // 动态检测：如果已有多账号则切到账号选择面板
             showToast(I18N.t('登录失败：') + msg.content);
         }
     });
@@ -8538,6 +9170,8 @@
     });
 
     IMSocket.on(MSG.ERROR, function (msg) {
+        // 阶段二百九十三：记录 ERROR 到达时间——im_connect_failed 据此跳过兜底 Toast
+        _lastErrorAt = Date.now();
         // 阶段四十二：添加好友弹窗查询中收到"用户不存在"时定向显示在结果区（不弹全局 toast）
         // 修复记录：此分支曾因同文件并行编辑相互覆盖而丢失，导致查无此人时一直停在"搜索中..."且无提示
         if (addFriendQuery && !addFriendMask.classList.contains('hidden') && msg.content === '用户不存在') {
@@ -8567,12 +9201,250 @@
     IMSocket.on(MSG.FRIEND_LIST, function (msg) {
         try { friendList = JSON.parse(msg.content) || []; } catch (e) { friendList = []; }
         renderFriendList();
-        // 备注联动：好友列表（含备注）到达后同步刷新会话列表，保证通讯录改备注后会话列表名称即时同步
         renderConvList();
-        // 登录持久化联动：好友列表到达后刷新当前会话标题（刷新恢复会话时 FRIEND_LIST 晚于 LOGIN_RESP，
-        // 标题先显示账号名，备注名/在线状态就绪后在此同步刷新）
         updateChatTitle();
     });
+
+    // ===== 阶段二百九十三：服务号功能（微信同款公众号） =====
+
+    // 113 OFFICIAL_SUB_LIST：已关注服务号列表（登录推送 / 关注/取消关注后同步）
+    // 到达后重建 officialMap + 刷新会话列表（新增/删除服务号会话立即可见）
+    IMSocket.on(MSG.OFFICIAL_SUB_LIST, function (msg) {
+        var list = [];
+        try { list = JSON.parse(msg.content) || []; } catch (e) { list = []; }
+        var next = {};
+        list.forEach(function (off) {
+            var target = off.target || ('o_' + off.app_id);
+            next[target] = off;
+        });
+        officialMap = next;
+        renderConvList();
+    });
+
+    // 114 OFFICIAL_SUB_ACTION：关注/取消关注回执（关注成功后后端会同步推 113 刷新）
+    IMSocket.on(MSG.OFFICIAL_SUB_ACTION, function (msg) {
+        try {
+            var p = JSON.parse(msg.content);
+            if (!p.ok) {
+                showToast(p.err || '操作失败');
+            }
+        } catch (e) { }
+    });
+
+    // 118 OFFICIAL_MSG_ACK：服务号审核状态变更通知（审核人/商户 owner 都会收到）
+    // envelope: {message_id, audit_id, app_id, status: 'approved'|'rejected', remark, actor, account_name}
+    IMSocket.on(MSG.OFFICIAL_MSG_ACK, function (msg) {
+        try {
+            var p = JSON.parse(msg.content);
+            if (p.status === 'approved') {
+                showToast('✅ 服务号「' + (p.account_name || p.app_id || '') + '」消息审核已通过');
+            } else if (p.status === 'rejected') {
+                showToast('❌ 服务号「' + (p.account_name || p.app_id || '') + '」消息被驳回' + (p.remark ? '：' + p.remark : ''));
+            }
+        } catch (e) { }
+    });
+
+    // 119 OFFICIAL_SEARCH：服务号搜索结果（弹出结果面板渲染）
+    IMSocket.on(MSG.OFFICIAL_SEARCH, function (msg) {
+        var list = [];
+        try { list = JSON.parse(msg.content) || []; } catch (e) { list = []; }
+        renderOfficialSearchResults(list);
+    });
+
+    // 117 OFFICIAL_MSG：服务号消息推送（核心气泡渲染）
+    // 内容信封：{"official":{app_id,name,avatar,msg_type,title,content,url,template_id,link_btn}}
+    // 历史消息由 HISTORY / CONV_LIST 路径已落库带 msg_type=117，此处仅处理实时路径
+    IMSocket.on(MSG.OFFICIAL_MSG, function (msg) {
+        renderOfficialMsgBubble(msg);
+    });
+
+    // ===== 阶段二百九十三：服务号辅助函数集（sidebar 内嵌搜索面板 / 消息气泡 / 关注动作） =====
+
+    // HTML 转义防 XSS（后端返回的 display_name / description 商户可任意填）
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // 微信同款：侧边栏内嵌面板切换（不是 modal mask）
+    var officialPanelPrevFriendHidden = false;  // 记住进入前好友面板是否隐藏
+    function openOfficialSearch() {
+        // 记住进入前状态
+        officialPanelPrevFriendHidden = friendsPanel ? friendsPanel.classList.contains('hidden') : false;
+        // 隐藏所有 friends-panel / ai-panel / official-panel 自身
+        ['friends-panel', 'ai-panel', 'official-panel'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.classList.add('hidden');
+        });
+        var panel = document.getElementById('official-panel');
+        if (panel) panel.classList.remove('hidden');
+        // 重置搜索框 + 结果
+        var input = document.getElementById('off-search-input');
+        var listEl = document.getElementById('off-search-list');
+        var hint = document.getElementById('off-search-hint');
+        if (input) { input.value = ''; input.focus(); }
+        if (listEl) listEl.innerHTML = '';
+        if (hint) hint.textContent = '输入关键词后按回车搜索';
+    }
+    function closeOfficialSearch() {
+        var panel = document.getElementById('official-panel');
+        if (panel) panel.classList.add('hidden');
+        // 恢复进入前好友面板的状态（不强制切 Tab）
+        var friends = document.getElementById('friends-panel');
+        if (friends) {
+            if (officialPanelPrevFriendHidden) friends.classList.add('hidden');
+            else friends.classList.remove('hidden');
+        }
+    }
+    function sendOfficialSearch() {
+        var input = document.getElementById('off-search-input');
+        var kw = input ? input.value.trim() : '';
+        if (!kw) return;
+        var hint = document.getElementById('off-search-hint');
+        var listEl = document.getElementById('off-search-list');
+        if (hint) hint.textContent = '搜索中…';
+        if (listEl) listEl.innerHTML = '';
+        IMSocket.send({ msg_type: MSG.OFFICIAL_SEARCH, content: kw });
+    }
+    function renderOfficialSearchResults(list) {
+        var hint = document.getElementById('off-search-hint');
+        var listEl = document.getElementById('off-search-list');
+        if (!listEl) return;
+        if (!list || list.length === 0) {
+            if (hint) hint.textContent = '未找到匹配的服务号';
+            listEl.innerHTML = '';
+            return;
+        }
+        if (hint) hint.textContent = '共 ' + list.length + ' 个结果';
+        // 复用 user-item 结构（和会话列表同样式：方形圆角头像 + 名称 + 简介 + 关注按钮）
+        var html = '';
+        list.forEach(function (off) {
+            var appID = escapeHtml(off.app_id);
+            var target = 'o_' + appID;
+            var subscribed = !!off.subscribed;
+            var btnText = subscribed ? '取消关注' : '关注';
+            var safeName = escapeHtml(off.display_name);
+            var safeDesc = escapeHtml(off.description || '');
+            var safeAvatar = escapeHtml(off.avatar || '');
+            var avatarHtml = safeAvatar
+                ? '<img src="' + safeAvatar + '" style="width:100%;height:100%;border-radius:8px;object-fit:cover" onerror="this.parentNode.textContent=\'🏢\';this.remove()">'
+                : '🏢';
+            html += '<li class="user-item official-item" data-target="' + target + '">' +
+                '<div class="conv-avatar conv-official-avatar">' + avatarHtml + '</div>' +
+                '<div class="conv-info">' +
+                '<div class="conv-name">' + safeName + '</div>' +
+                '<div class="conv-desc">' + safeDesc + '</div>' +
+                '</div>' +
+                '<button class="admin-btn small' + (subscribed ? '' : ' primary') + '" data-off-action="' + (subscribed ? 'unsubscribe' : 'subscribe') + '" data-appid="' + appID + '">' + btnText + '</button>' +
+                '</li>';
+        });
+        listEl.innerHTML = html;
+        // 绑定关注/取消按钮
+        listEl.querySelectorAll('[data-off-action]').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();   // 防止冒泡到 user-item 打开会话
+                var action = btn.getAttribute('data-off-action');
+                var appID = btn.getAttribute('data-appid');
+                IMSocket.send({
+                    msg_type: MSG.OFFICIAL_SUB_ACTION,
+                    content: JSON.stringify({ action: action, app_id: appID })
+                });
+                // 乐观 UI：按钮立即切换，后端回执到达后再由 SubList 刷新
+                btn.setAttribute('data-off-action', action === 'subscribe' ? 'unsubscribe' : 'subscribe');
+                btn.textContent = action === 'subscribe' ? '取消关注' : '关注';
+                btn.classList.toggle('primary');
+            });
+        });
+        // 点击结果项 → 打开会话（和会话列表同交互）
+        listEl.querySelectorAll('.official-item').forEach(function (item) {
+            item.addEventListener('click', function () {
+                var tgt = item.getAttribute('data-target');
+                if (tgt) openConversation(tgt);
+            });
+        });
+    }
+
+    // renderOfficialMsgBubble 服务号消息气泡渲染（接收实时 MSG 117）
+    // 后端信封格式：{app_id, name, avatar, msg_type, title, content, url, template_id, link_btn}
+    function renderOfficialMsgBubble(msg) {
+        var envelope = null;
+        try {
+            var raw = JSON.parse(msg.content || '{}');
+            envelope = raw.official || raw;
+        } catch (e) { envelope = null; }
+        if (!envelope) {
+            // 降级：当普通文本气泡处理
+            appendMessageBubble(msg.from_user, msg.content, false, msg.msg_id);
+            return;
+        }
+        var target = 'o_' + envelope.app_id;
+        // 非服务号当前会话时更新会话摘要（conv-list 侧）
+        if (currentChatUser !== target) {
+            touchConvLocal(target, envelope.title || envelope.content);
+            return;
+        }
+        // 服务号当前会话 → 渲染气泡（左侧 🏢 标识 + 标题 + 正文 + 可选链接按钮）
+        var bubble = document.createElement('div');
+        bubble.className = 'msg-wrap left';
+        var body = document.createElement('div');
+        body.className = 'msg-bubble official-msg';
+        var avatarDiv = document.createElement('div');
+        avatarDiv.className = 'conv-avatar';
+        avatarDiv.textContent = '🏢';
+        if (envelope.avatar) {
+            var im = document.createElement('img');
+            im.src = envelope.avatar;
+            im.alt = '';
+            im.addEventListener('error', function () { im.remove(); avatarDiv.textContent = '🏢'; });
+            avatarDiv.appendChild(im);
+        }
+        var inner = document.createElement('div');
+        inner.style.maxWidth = '420px';
+        var titleEl = document.createElement('div');
+        titleEl.style.fontWeight = '600';
+        titleEl.style.marginBottom = '4px';
+        titleEl.textContent = envelope.title || envelope.name || '';
+        var contentEl = document.createElement('div');
+        contentEl.textContent = envelope.content || '';
+        inner.appendChild(titleEl);
+        inner.appendChild(contentEl);
+        if (envelope.url) {
+            var linkRow = document.createElement('div');
+            linkRow.style.marginTop = '6px';
+            var a = document.createElement('a');
+            a.href = envelope.url;
+            a.target = '_blank';
+            a.textContent = envelope.link_btn || '查看详情';
+            a.className = 'admin-btn small';
+            linkRow.appendChild(a);
+            inner.appendChild(linkRow);
+        }
+        body.appendChild(inner);
+        bubble.appendChild(avatarDiv);
+        bubble.appendChild(body);
+        var list = document.getElementById('chat-msg-list');
+        if (list) list.appendChild(bubble);
+        var scroll = document.getElementById('chat-msg-scroll');
+        if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    }
+
+    // touchConvLocal 前端会话摘要乐观更新（等后端 CONV_LIST 覆盖）
+    function touchConvLocal(target, summary) {
+        for (var i = 0; i < convList.length; i++) {
+            if (convList[i].target === target) {
+                convList[i].last_msg = summary;
+                convList[i].unread = (convList[i].unread || 0) + 1;
+                convList[i].last_time = Math.floor(Date.now() / 1000);
+                break;
+            }
+        }
+        renderConvList();
+    }
 
     // ===== 黑名单列表同步与渲染 =====
     var blockedList = [];      // 黑名单用户 [{username, avatar}]
@@ -19956,14 +20828,19 @@
             return;
         }
         convList.forEach(function (cv) {
-            // 全局群已废弃：存量 target='' 会话行不再渲染（服务端已停建新行，用户无法再进入全局群视图）
             if (cv.target === '') return;
             // 阶段一百四十二：多群泛化——多群会话（'gN'）同按群聊口径渲染
             var isGroup = isGroupTarget(cv.target);
-            // 原实现：var convName = isGroup ? '群聊' : cv.target; 会话列表只显示用户名，通讯录修改备注后不同步
-            // 修复：与通讯录/聊天标题同口径——好友备注优先显示，无备注回退用户名
-            var convName = isGroup ? groupNameOf(cv.target) : cv.target;
-            if (!isGroup) {
+            // 阶段二百九十三：服务号会话（'o_' 前缀）——从 officialMap 取展示信息
+            var isOfficial = !isGroup && cv.target && cv.target.charAt(0) === 'o_';
+            var convName;
+            if (isOfficial) {
+                var off = officialMap[cv.target];
+                convName = off ? off.display_name : (cv.target.replace(/^o_/, '') || '服务号');
+            } else if (isGroup) {
+                convName = groupNameOf(cv.target);
+            } else {
+                convName = cv.target;
                 var convFriend = friendList.find(function (x) { return x.username === cv.target; });
                 if (convFriend && convFriend.remark) convName = convFriend.remark;
             }
@@ -19972,22 +20849,36 @@
             if (currentChatUser === cv.target) li.classList.add('active');
             li.setAttribute('data-user', cv.target);
 
-            // 会话头像：好友/AI 走头像或占位；群聊走微信同款归口（阶段二百六十六：有群头像显示单图，
-            // 无群头像降级成员头像九宫格拼格，失效均 onError 防破图）
+            // 会话头像：服务号 🏢 占位/自定义头像；群聊走微信同款归口；好友/AI 走头像或占位
             var avatarUrl = isGroup ? '' : getAvatarUrl(cv.target);
             var avatar;
-            if (isGroup) {
+            if (isOfficial) {
+                avatar = document.createElement('div');
+                avatar.className = 'conv-avatar conv-official-avatar';
+                var offAvatar = officialMap[cv.target] && officialMap[cv.target].avatar;
+                var offFallback = '🏢';
+                if (offAvatar) {
+                    var offImg = document.createElement('img');
+                    offImg.src = offAvatar;
+                    offImg.alt = '';
+                    offImg.addEventListener('error', function () {
+                        offImg.remove();
+                        avatar.textContent = offFallback;
+                    });
+                    avatar.appendChild(offImg);
+                } else {
+                    avatar.textContent = offFallback;
+                }
+            } else if (isGroup) {
                 avatar = buildGroupAvatarEl(groupOfId(groupIdFromTarget(cv.target)), 'conv-avatar');
             } else {
                 avatar = document.createElement('div');
                 avatar.className = 'conv-avatar';
-                // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表口径一致，原实现降级首字母不一致）
                 var avatarFallback = isAIAgent(cv.target) ? '🤖' : convName.charAt(0).toUpperCase();
                 if (avatarUrl) {
                     var avatarImg = document.createElement('img');
                     avatarImg.src = avatarUrl;
                     avatarImg.alt = '';
-                    // 头像文件失效（文件被清理/路径变更）时降级占位，避免破图
                     avatarImg.addEventListener('error', function () {
                         avatarImg.remove();
                         avatar.textContent = avatarFallback;
@@ -21014,6 +21905,26 @@
     if (grpCreateEntry) grpCreateEntry.addEventListener('click', function () {
         openGroupPicker('create', 0);
     });
+    // 搜索服务号入口绑定
+    var officialSearchEntry = document.getElementById('official-search-entry');
+    if (officialSearchEntry) officialSearchEntry.addEventListener('click', function () {
+        openOfficialSearch();
+    });
+    // 服务号面板返回按钮
+    var officialPanelBack = document.getElementById('official-panel-back');
+    if (officialPanelBack) officialPanelBack.addEventListener('click', closeOfficialSearch);
+    // 服务号搜索框 Enter 键 + 清空按钮
+    var offSearchInput = document.getElementById('off-search-input');
+    if (offSearchInput) offSearchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') sendOfficialSearch();
+    });
+    var offSearchClear = document.getElementById('off-search-clear');
+    if (offSearchClear) offSearchClear.addEventListener('click', function () {
+        if (offSearchInput) offSearchInput.value = '';
+        if (document.getElementById('off-search-list')) document.getElementById('off-search-list').innerHTML = '';
+        if (document.getElementById('off-search-hint')) document.getElementById('off-search-hint').textContent = '输入关键词后按回车搜索';
+        if (offSearchInput) offSearchInput.focus();
+    });
     var grpInviteBtn = document.getElementById('grp-invite-btn');
     if (grpInviteBtn) grpInviteBtn.addEventListener('click', function () {
         if (!isGroupTarget(currentChatUser)) return;
@@ -21443,7 +22354,149 @@
         } else {
             loadHistory();
         }
+        // 阶段二百九十三：打开服务号会话 → 发 115 拉底部菜单（服务端按 target='o_<appid>' 识别）
+        if (user && user.charAt(0) === 'o_') {
+            IMSocket.send({ msg_type: MSG.OFFICIAL_MENU, to_user: user });
+        }
+        // 服务号底部 Tab Bar 容器（动态创建，切换会话时实时刷新）
+        officialMenuEnsure();
     }
+
+    // ===== 阶段二百九十三：服务号底部菜单（P6）=====
+    // 会话内底部 Tab Bar：微信服务号同款——最多 3 个一级菜单，一级可展开最多 5 个二级
+    // 数据源：打开会话时后端推 115，前端缓存在 _officialMenuCache[target]
+    var _officialMenuCache = {}; // target → {app_id, menus:[{name,action,value,children:[...]}]}
+    var _officialMenuBar = null;
+
+    function officialMenuEnsure() {
+        if (!_officialMenuBar) {
+            _officialMenuBar = document.createElement('div');
+            _officialMenuBar.id = 'official-menu-bar';
+            _officialMenuBar.style.cssText =
+                'position:relative;display:none;max-height:45vh;overflow-y:auto;' +
+                'border-top:1px solid var(--border,#e5e5e5);background:var(--bg,#fff);' +
+                'padding:6px 8px;font-size:14px;z-index:2;';
+            var container = document.querySelector('.chat-input-row') ||
+                document.getElementById('chat-input-wrap') ||
+                document.querySelector('#chat-view > .chat-body');
+            if (container && container.parentNode) {
+                container.parentNode.insertBefore(_officialMenuBar, container.nextSibling);
+            }
+        }
+        renderOfficialMenuBar();
+    }
+
+    function renderOfficialMenuBar() {
+        if (!_officialMenuBar) return;
+        var target = currentChatUser;
+        if (!target || target.charAt(0) !== 'o_') {
+            _officialMenuBar.style.display = 'none';
+            _officialMenuBar.innerHTML = '';
+            return;
+        }
+        var cached = _officialMenuCache[target];
+        if (!cached || !cached.menus || !cached.menus.length) {
+            _officialMenuBar.style.display = 'none';
+            _officialMenuBar.innerHTML = '';
+            return;
+        }
+        _officialMenuBar.style.display = 'block';
+        _officialMenuBar.innerHTML = '';
+        cached.menus.forEach(function (m) {
+            var hasChildren = m.children && m.children.length > 0;
+            var btn = document.createElement('button');
+            btn.style.cssText =
+                'display:inline-flex;align-items:center;justify-content:center;min-width:80px;' +
+                'padding:6px 12px;margin:2px;border:1px solid var(--border,#e5e5e5);' +
+                'border-radius:6px;background:var(--bg-tertiary,#f4f4f4);cursor:pointer;' +
+                'font-size:13px;color:var(--text-primary,#333);' +
+                'transition:background .15s,border-color .15s;';
+            btn.textContent = hasChildren ? ('▾ ' + m.name) : m.name;
+            btn.addEventListener('mouseenter', function () {
+                btn.style.background = 'var(--primary-bg,rgba(7,193,96,.12))';
+                btn.style.borderColor = 'var(--primary,#07c160)';
+            });
+            btn.addEventListener('mouseleave', function () {
+                btn.style.background = 'var(--bg-tertiary,#f4f4f4)';
+                btn.style.borderColor = 'var(--border,#e5e5e5)';
+            });
+            if (hasChildren) {
+                var subWrap = document.createElement('div');
+                subWrap.style.cssText =
+                    'position:relative;display:none;padding:4px 2px 2px;';
+                m.children.forEach(function (c) {
+                    var subBtn = document.createElement('button');
+                    subBtn.style.cssText =
+                        'display:block;width:100%;text-align:left;padding:4px 10px 4px 18px;' +
+                        'border:none;background:none;cursor:pointer;font-size:13px;color:var(--text-primary,#333);' +
+                        'border-radius:4px;';
+                    subBtn.textContent = c.name;
+                    subBtn.addEventListener('mouseenter', function () {
+                        subBtn.style.background = 'var(--bg-tertiary,#f4f4f4)';
+                    });
+                    subBtn.addEventListener('mouseleave', function () {
+                        subBtn.style.background = 'none';
+                    });
+                    subBtn.addEventListener('click', function () {
+                        sendOfficialMenuClick(cached.app_id, c.action || 'click', c.value || '');
+                        subWrap.style.display = 'none';
+                        btn.textContent = '▾ ' + m.name;
+                    });
+                    subWrap.appendChild(subBtn);
+                });
+                btn.addEventListener('click', function () {
+                    if (subWrap.style.display === 'none') {
+                        subWrap.style.display = 'block';
+                        btn.textContent = '▴ ' + m.name;
+                    } else {
+                        subWrap.style.display = 'none';
+                        btn.textContent = '▾ ' + m.name;
+                    }
+                });
+                _officialMenuBar.appendChild(btn);
+                _officialMenuBar.appendChild(subWrap);
+            } else {
+                btn.addEventListener('click', function () {
+                    sendOfficialMenuClick(cached.app_id, m.action || 'click', m.value || '');
+                });
+                _officialMenuBar.appendChild(btn);
+            }
+        });
+    }
+
+    function sendOfficialMenuClick(appID, action, value) {
+        IMSocket.send({
+            msg_type: MSG.OFFICIAL_MENU_CLICK,
+            to_user: 'o_' + appID,
+            content: JSON.stringify({ app_id: appID, action: action, value: value })
+        });
+    }
+
+    // 115 OFFICIAL_MENU：服务号底部自定义菜单（下行）
+    IMSocket.on(MSG.OFFICIAL_MENU, function (msg) {
+        if (!currentChatUser || currentChatUser.charAt(0) !== 'o_') return; // 非当前会话忽略
+        var env = {};
+        try { env = JSON.parse(msg.content) || {}; } catch (e) { env = {}; }
+        var target = currentChatUser;
+        _officialMenuCache[target] = {
+            app_id: env.app_id || target.replace(/^o_/, ''),
+            menus: env.menus || []
+        };
+        if (currentChatUser === target) renderOfficialMenuBar();
+    });
+
+    // 116 OFFICIAL_MENU_CLICK：菜单点击回执（下行）
+    IMSocket.on(MSG.OFFICIAL_MENU_CLICK, function (msg) {
+        // 后端 pushToConvTarget 用 MsgType=116 下行 click 回执（content 为 ack JSON）
+        // 同时可能有 MsgType=1 自动回复——后者会走正常消息气泡渲染
+        try {
+            var ack = JSON.parse(msg.content);
+            if (ack && ack.ok === true) {
+                // 点 click 已触发自动回复，这里只在前端做个轻提示
+                showToast('已发送');
+            }
+        } catch (e) { }
+    });
 
     function loadHistory() {
         historyTarget = currentChatUser;
@@ -21964,6 +23017,33 @@
                 messageList.insertBefore(giTip, beforeEl);
             } else {
                 messageList.appendChild(giTip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
+        // 阶段二百九十三：服务号名片消息(120)历史持久化渲染（content 为 JSON：{app_id,name,avatar,desc,account_id}，服务端富化快照）
+        if (r.msg_type === MSG.OFFICIAL_CARD) {
+            var ocEnv = null;
+            try { ocEnv = JSON.parse(r.content); } catch (e) { ocEnv = null; }
+            if (ocEnv && ocEnv.app_id) {
+                var ocDiv = ocBuildBubbleEl(r.from_user, ocEnv, isMine ? 'self' : 'other', isPrivate);
+                if (r.id) ocDiv.setAttribute('data-msg-id', r.id);
+                ocDiv.setAttribute('data-ts', ts);
+                if (beforeEl) {
+                    messageList.insertBefore(ocDiv, beforeEl);
+                } else {
+                    messageList.appendChild(ocDiv);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                return;
+            }
+            var ocTip = document.createElement('div');
+            ocTip.className = 'system-tip';
+            ocTip.textContent = I18N.t('[服务号名片]');
+            if (beforeEl) {
+                messageList.insertBefore(ocTip, beforeEl);
+            } else {
+                messageList.appendChild(ocTip);
                 messageList.scrollTop = messageList.scrollHeight;
             }
             return;
@@ -28397,6 +29477,107 @@
         if (!card.user) return;
         if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
         var el = ccAppendBubble(msg.from_user, card, isMine0 ? 'self' : 'other', !isGroupTarget(target));
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+        if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {
+            sendReadReceipt(target, msg.msg_id);
+        }
+    });
+
+    // ===== 阶段二百九十三：服务号名片 (120) =====
+    // 微信同款服务号名片卡：左侧 🏢/头像 + 右侧名称 + 灰字"服务号" + desc 副标题
+    // 点击 → 切换到 o_<appid> 会话（若未订阅会触发 Subscribe + 自动创建会话）
+    function ocBuildBubbleEl(fromUser, card, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        div.setAttribute('data-from', fromUser);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        if (!isPrivate) {
+            var nameEl = document.createElement('div');
+            nameEl.className = 'message-name';
+            nameEl.textContent = senderDisplayName(fromUser);
+            body.appendChild(nameEl);
+        }
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-official-card';
+        bubble.setAttribute('data-oc-appid', card.app_id || '');
+        bubble.setAttribute('data-oc-account', card.account_id || '');
+        // 左侧图标 / 头像
+        var av = document.createElement('div');
+        av.className = 'oc-avatar';
+        if (card.avatar) {
+            var img = document.createElement('img');
+            img.src = card.avatar;
+            img.alt = '';
+            img.addEventListener('error', function () {
+                if (img.parentNode) img.parentNode.removeChild(img);
+                av.textContent = '🏢';
+            });
+            av.appendChild(img);
+        } else {
+            av.textContent = '🏢';
+        }
+        var info = document.createElement('div');
+        info.className = 'oc-info';
+        var nm = document.createElement('div');
+        nm.className = 'oc-name';
+        nm.textContent = card.name || card.app_id || '';
+        var sub = document.createElement('div');
+        sub.className = 'oc-sub';
+        sub.textContent = '服务号';
+        info.appendChild(nm);
+        info.appendChild(sub);
+        if (card.desc) {
+            var descEl = document.createElement('div');
+            descEl.className = 'oc-desc';
+            descEl.textContent = card.desc.length > 40 ? card.desc.slice(0, 40) + '…' : card.desc;
+            info.appendChild(descEl);
+        }
+        var act = document.createElement('div');
+        act.className = 'oc-action';
+        act.textContent = '查看 →';
+        bubble.appendChild(av);
+        bubble.appendChild(info);
+        bubble.appendChild(act);
+        // 点击 → 切换到 o_<appid> 会话（复用 openConversation；若未订阅触发 114 Subscribe 自动创建会话）
+        bubble.addEventListener('click', function () {
+            var target = 'o_' + (card.app_id || '');
+            if (!card.app_id) return;
+            // 先走已有会话
+            var existing = conversationMap[target];
+            if (existing) {
+                openConversation(target);
+            } else {
+                // 主动发 Subscribe 114 让服务端 upsert 会话 + 推 113 SubList 回填
+                IMSocket.send({ msg_type: MSG.OFFICIAL_SUB_ACTION, app_id: card.app_id });
+                showToast('已打开服务号，请稍候…');
+            }
+        });
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        return div;
+    }
+    function ocAppendBubble(fromUser, card, type, isPrivate) {
+        var div = ocBuildBubbleEl(fromUser, card, type, isPrivate);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
+    }
+
+    // 120 实时接收
+    IMSocket.on(MSG.OFFICIAL_CARD, function (msg) {
+        var isMine0 = msg.from_user === IMSocket.getUsername();
+        var to0 = msg.to_user || '';
+        var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
+        if (target !== currentChatUser) return;
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var card = {};
+        try { card = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        if (!card.app_id) return;
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
+        var el = ocAppendBubble(msg.from_user, card, isMine0 ? 'self' : 'other', !isGroupTarget(target));
         if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
         if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
         if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {

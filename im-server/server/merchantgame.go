@@ -197,10 +197,12 @@ func (s *Server) handleMerchantProfile(w http.ResponseWriter, r *http.Request) {
 	if quota > 0 {
 		percent = math.Round(float64(used)/float64(quota)*1000) / 10
 	}
+	fileLimit := s.merchantFileLimit(me)
 	adminJSON(w, map[string]interface{}{
 		"username": me, "name": m.Name, "commission_rate": m.CommissionRate,
 		"game_count": gameCnt, "pending_count": pendingCnt,
 		"storage_used_bytes": used, "storage_quota_bytes": quota, "storage_used_percent": percent,
+		"max_files_per_version": fileLimit, // 实际生效的文件清单上限（-1=不限）
 	})
 }
 

@@ -5293,6 +5293,25 @@ ipcMain.handle('agent:token-set', function (event, req) {
     return { ok: true };
 });
 
+// ===== 阶段三百一十：IM 账号密码加密（Electron safeStorage，Windows DPAPI，OS 级加密）=====
+// 渲染层 chat.js 的 saveAccounts/loadAccounts 通过 preload bridge 同步调用；
+// 密文直接存 localStorage.im_accounts.p 字段，本机硬件绑定，换机器解不开。
+// 纯浏览器端没有 safeStorage，chat.js 会自动降级（见 chat.js saveAccounts 内 fallback）。
+ipcMain.on('im:credential-encrypt', function (event, plaintext) {
+    try {
+        if (!safeStorage.isEncryptionAvailable()) { event.returnValue = { ok: false }; return; }
+        const enc = safeStorage.encryptString(String(plaintext || ''));
+        event.returnValue = { ok: true, data: enc.toString('base64') };
+    } catch (e) { event.returnValue = { ok: false }; }
+});
+ipcMain.on('im:credential-decrypt', function (event, ciphertext) {
+    try {
+        if (!safeStorage.isEncryptionAvailable()) { event.returnValue = { ok: false }; return; }
+        const dec = safeStorage.decryptString(Buffer.from(String(ciphertext || ''), 'base64'));
+        event.returnValue = { ok: true, data: dec };
+    } catch (e) { event.returnValue = { ok: false }; }
+});
+
 // ===== 阶段八十一：SSH 快连簿（PC 本地 userData/agent_ssh.json）=====
 // 仅存 host/port/user/备注（无密码——密码/密钥认证由 ssh 自己的机制处理），按 host|port|user 去重置顶，上限 10 条
 const sshBookFile = path.join(app.getPath('userData'), 'agent_ssh.json');

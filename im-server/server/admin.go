@@ -215,6 +215,8 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("PUT /admin/api/vipip/unbind", s.adminGuard(s.handleAdminVipIPUnbind))
 	// 全局 supernode 候选热更（后台界面化管理，保存即热生效 + 落库持久化）
 	http.HandleFunc("PUT /admin/api/vipip/supernodes", s.adminGuard(s.handleAdminVipIPSupernodesSave))
+	// 服务号功能（微信同款公众号）：管理员后台 CRUD + 审核管理
+	registerOfficialAdminRoutes(s)
 }
 
 // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====

@@ -263,6 +263,17 @@ const (
 	//   下行 {action: users, users:[{username,name}]} 在场名单 / {action: msg, from, from_name, text, ts} 聊天广播
 	// 一律不落库、不进离线队列/历史/未读：新连接仅收在场名单与之后的即时消息（对齐"大厅不持久化"口径）
 	MsgTypeGameLobbySignal = 112
+
+	// ============= 阶段二百九十三：服务号功能（微信同款公众号） =============
+	// 服务号会话 target = 'o_' + app_id（与多群 'g<群ID>' 范式统一，前端 isOfficialTarget 前缀判定）
+	MsgTypeOfficialSubList   = 113 // 下行：已关注服务号列表 + 基本信息（登录推送 + 变更同步；content 为 JSON 数组）
+	MsgTypeOfficialSubAction = 114 // 双向：上行关注/取消关注；下行回执（content: {action:"subscribe"/"unsubscribe", app_id}）
+	MsgTypeOfficialMenu      = 115 // 下行：打开服务号会话时拉取底部自定义菜单树（content 为 JSON）
+	MsgTypeOfficialMenuClick = 116 // 上行：点击底部菜单事件（content: {app_id, action, value}）；服务端触发关键词自动回复
+	MsgTypeOfficialMsg       = 117 // 下行：服务号消息推送（核心！服务号→用户，落库 msg_type=117；气泡渲染为服务号卡片样式）
+	MsgTypeOfficialMsgAck    = 118 // 下行：审核状态变更通知（审核人/发起方收；content: {message_id, status, remark}）
+	MsgTypeOfficialSearch    = 119 // 双向：上行搜索服务号（content: keyword）；下行搜索结果 JSON
+	MsgTypeOfficialCard      = 120 // 双向：聊天内服务号名片（类似联系人名片 107；content: {app_id,name,avatar,desc}；落库 msg_type=120）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

@@ -69,7 +69,9 @@ func (s *Server) handleAdminMerchantList(w http.ResponseWriter, r *http.Request)
 			// 存储配额与占用（安全加固）：管理员分配视角——quota 0=跟随全局 / -1=不限 / >0=专属字节
 			"storage_quota_bytes": m.StorageQuotaBytes,
 			"storage_used_bytes":  merchantQuotaUsed(m.Username),
-			"create_time":         m.CreateTime.Format("2006-01-02 15:04"),
+			// 单版本文件清单条数上限：0=跟随全局 / -1=不限 / >0=专属条数
+			"max_files_per_version": m.MaxFilesPerVersion,
+			"create_time":           m.CreateTime.Format("2006-01-02 15:04"),
 		})
 	}
 	adminJSON(w, map[string]interface{}{"list": items, "total": total, "page": page, "size": size})
@@ -79,12 +81,13 @@ func (s *Server) handleAdminMerchantList(w http.ResponseWriter, r *http.Request)
 // storage_quota_bytes 可选：0=跟随全局默认（缺省），-1=不限，>0=专属配额（字节）
 func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username          string  `json:"username"`
-		Password          string  `json:"password"`
-		Name              string  `json:"name"`
-		CommissionRate    float64 `json:"commission_rate"`
-		StorageQuotaBytes int64   `json:"storage_quota_bytes"`
-		Remark            string  `json:"remark"`
+		Username            string  `json:"username"`
+		Password            string  `json:"password"`
+		Name                string  `json:"name"`
+		CommissionRate      float64 `json:"commission_rate"`
+		StorageQuotaBytes   int64   `json:"storage_quota_bytes"`
+		MaxFilesPerVersion  int     `json:"max_files_per_version"`
+		Remark              string  `json:"remark"`
 	}
 	if err := jsonDecodeLimit(w, r, &req, 4096); err != nil {
 		return
@@ -115,6 +118,10 @@ func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Reques
 		adminFail(w, http.StatusBadRequest, "存储配额须为 -1（不限）或不小于 1MB 的字节数（0=跟随全局）")
 		return
 	}
+	if req.MaxFilesPerVersion != 0 && req.MaxFilesPerVersion != -1 && req.MaxFilesPerVersion < 1 {
+		adminFail(w, http.StatusBadRequest, "文件数上限须为 -1（不限）或正整数（0=跟随全局默认 5000）")
+		return
+	}
 	var cnt int64
 	store.DB.Model(&model.User{}).Where("username = ?", req.Username).Count(&cnt)
 	if cnt > 0 {
@@ -130,7 +137,8 @@ func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Reques
 	}
 	store.DB.Model(&model.User{}).Where("username = ?", req.Username).Update("points", 0)
 	m := model.Merchant{Username: req.Username, Name: req.Name, CommissionRate: req.CommissionRate,
-		StorageQuotaBytes: req.StorageQuotaBytes, Status: 0, Remark: strings.TrimSpace(req.Remark)}
+		StorageQuotaBytes: req.StorageQuotaBytes, MaxFilesPerVersion: req.MaxFilesPerVersion,
+		Status: 0, Remark: strings.TrimSpace(req.Remark)}
 	if err := store.DB.Create(&m).Error; err != nil {
 		store.DB.Where("username = ?", req.Username).Delete(&model.User{}) // 回滚孤儿账号
 		adminFail(w, http.StatusInternalServerError, "商户资料创建失败")
@@ -149,12 +157,13 @@ func (s *Server) handleAdminMerchantUpdate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req struct {
-		Name           *string  `json:"name"`
-		CommissionRate *float64 `json:"commission_rate"` // 指针：未传=不改（0 也是合法比例值）
-		Status         *int8    `json:"status"`
-		StorageQuota   *int64   `json:"storage_quota_bytes"` // 指针：未传=不改；0=跟随全局，-1=不限，>0=专属（字节）
-		Password       string   `json:"password"`            // 非空=重置密码
-		Remark         *string  `json:"remark"`
+		Name               *string  `json:"name"`
+		CommissionRate     *float64 `json:"commission_rate"` // 指针：未传=不改（0 也是合法比例值）
+		Status             *int8    `json:"status"`
+		StorageQuota       *int64   `json:"storage_quota_bytes"`  // 指针：未传=不改；0=跟随全局，-1=不限，>0=专属（字节）
+		MaxFilesPerVersion *int     `json:"max_files_per_version"` // 指针：未传=不改；0=跟随全局，-1=不限，>0=专属条数
+		Password           string   `json:"password"`             // 非空=重置密码
+		Remark             *string  `json:"remark"`
 	}
 	if err := jsonDecodeLimit(w, r, &req, 4096); err != nil {
 		return
@@ -189,6 +198,14 @@ func (s *Server) handleAdminMerchantUpdate(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		updates["storage_quota_bytes"] = q
+	}
+	if req.MaxFilesPerVersion != nil {
+		v := *req.MaxFilesPerVersion
+		if v != 0 && v != -1 && v < 1 {
+			adminFail(w, http.StatusBadRequest, "文件数上限须为 -1（不限）或正整数（0=跟随全局）")
+			return
+		}
+		updates["max_files_per_version"] = v
 	}
 	if req.Remark != nil {
 		if utf8.RuneCountInString(*req.Remark) > 255 {

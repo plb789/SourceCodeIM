@@ -618,6 +618,9 @@ func RegisterGameRoutes(s *Server) {
 	registerGameAdminRoutes(s)
 	registerMerchantAdminRoutes(s)
 	registerMerchantRoutes(s)
+	// 服务号功能（微信同款公众号）：API 公共网关 + 商户后台扩展路由
+	registerOfficialAPIRoutes(s)
+	registerOfficialMerchantRoutes(s)
 	// 端口透传·网关写库内部接口（网关专用 HMAC 鉴权，与用户端/管理端隔离；见 gatewaydbwrite.go）
 	http.HandleFunc("GET /internal/gateway/dbwrite", s.handleInternalGatewayDbwrite)
 	http.HandleFunc("POST /internal/gateway/dbwrite/ack", s.handleInternalGatewayDbwriteAck)

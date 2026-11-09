@@ -341,6 +341,13 @@ contextBridge.exposeInMainWorld('desktop', {
     tokenSet: function (host, token) {
         return ipcRenderer.invoke('agent:token-set', { host: host, token: token });
     },
+    // ===== 阶段三百一十：IM 账号密码加密（safeStorage 同步桥接）=====
+    credentialEncrypt: function (plaintext) {
+        return ipcRenderer.sendSync('im:credential-encrypt', String(plaintext || ''));
+    },
+    credentialDecrypt: function (ciphertext) {
+        return ipcRenderer.sendSync('im:credential-decrypt', String(ciphertext || ''));
+    },
     // ===== 阶段八十一：SSH 快连簿（PC 本地存 host/port/user，无密码） =====
     sshList: function () {
         return ipcRenderer.invoke('agent:ssh-list');

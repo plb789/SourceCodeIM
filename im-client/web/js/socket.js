@@ -3,6 +3,9 @@
     var ws = null;
     var heartbeatTimer = null;
     var reconnectTimer = null;
+    // 阶段二百九十三：连接超时定时器——服务器未启动/WS 端口不可达时，浏览器原生超时可能长达 20 秒，
+    // 用户点击登录后长时间无反馈。我们自行设置 8 秒超时主动判定连接失败并派发事件
+    var connectTimeoutTimer = null;
     var currentUsername = '';
     var qrLoginConn = false; // 阶段二百四十：本次连接是否走扫码登录通道（凭码成功后校正账号并清空重连凭据）
     // 原实现：recallWindow 未声明（隐式全局）且未暴露 getRecallWindow，
@@ -309,7 +312,16 @@
         CARD_UPDATE: 106,        // 阶段二百七十四：网页卡片回填（微信同款链接分享卡片；下行 content 为卡片元数据 JSON {msg_id,url,title,desc,thumb,icon,domain}，前端按 msg_id 原位把纯 URL 气泡升级为卡片）
         CONTACT_CARD: 107,      // 阶段二百七十六：联系人名片（微信同款"个人名片"，上行 {user:"用户名"} 服务端查库富化；下行/历史 {user,name,avatar} 快照，点击打开资料卡可加好友）
         MOMENT_SYNC: 108,       // 阶段二百八十：朋友圈互动实时同步（下行 content 为 JSON {action,moment_id,actor}；红点 + 已打开页面原位刷新，不轮询）
-        GAME_INVITE: 111        // 阶段二百九十二：局域网游戏联机邀请卡片（上行 {invite:{room_id}}；下行/历史 {invite:{room_id,room_name,host,host_name,host_port,status,count}} 服务端读房间态富化，点击「加入房间」打开联机面板）
+        GAME_INVITE: 111,        // 阶段二百九十二：局域网游戏联机邀请卡片（上行 {invite:{room_id}}；下行/历史 {invite:{room_id,room_name,host,host_name,host_port,status,count}} 服务端读房间态富化，点击「加入房间」打开联机面板）
+        // 阶段二百九十三：服务号功能（微信同款公众号）
+        OFFICIAL_SUB_LIST: 113,  // 下行：已关注服务号列表（登录推送 + 变更同步，content 为 JSON 数组）
+        OFFICIAL_SUB_ACTION: 114,// 双向：上行关注/取消关注；下行回执
+        OFFICIAL_MENU: 115,      // 下行：服务号底部自定义菜单（打开会话时拉取）
+        OFFICIAL_MENU_CLICK: 116,// 上行：点击底部菜单事件
+        OFFICIAL_MSG: 117,       // 下行：服务号消息推送（核心，落库 msg_type=117）
+        OFFICIAL_MSG_ACK: 118,   // 下行：审核状态变更通知（审核人/发起方）
+        OFFICIAL_SEARCH: 119,    // 双向：上行关键词；下行搜索结果 JSON
+        OFFICIAL_CARD: 120       // 双向：聊天内服务号名片（类似联系人名片 107）
     };
 
     // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/
@@ -320,6 +332,31 @@
     // 阶段二百五十：锁屏话务豁免窗——用户在锁屏来电页主动点接听/挂断时（chat.js 置
     // window._ringBypassAt）开 10 秒豁免，页面临时抢线完成接听话务动作；其余锁屏场景
     // 仍不抢线（保原生铃声与连接归口）
+    // 阶段三百零九：主动断开连接（退出登录/切换账号时调用）——清定时器 + 关 ws + 置空状态
+    // 原来靠页面 reload 销毁进程断开 WebSocket，现在 PC 客户端不 reload，需手动关
+    function disconnect() {
+        // 清重连定时器
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        // 停心跳
+        stopHeartbeat();
+        // 关 ws（忽略 close 的 onclose 自动重连——手动 disconnect 时 ws=null，onclose 检查 ws !== sock 会 return）
+        if (ws) {
+            try { ws.close(); } catch (e) {}
+            ws = null;
+        }
+        connected = false;
+        loginOk = false;
+        currentUsername = '';
+        qrLoginConn = false;
+        // P0 修复：清原生 APP 后台保活/交接状态——否则下次登录 bgDoStart 因 bgStartDone=true 直接 return，
+        // 原生保活服务永远启动不了；bgHandover 残留会让交接流程跳过
+        bgResetStart(); // 清 bgStartDone + bgWaitTimer（自带 null 检查）
+        bgHandover = false;
+        bgHandoverAt = 0;
+        bgResyncPending = false;
+        bgMissedFrames = false;
+    }
+
     function connect(username, password) {
         var bgp = nativeBG ? bgPlugin() : null;
         var bypass = function () { return Date.now() - (window._ringBypassAt || 0) < 10000; };
@@ -361,13 +398,26 @@
         // 阶段二百三十五修复：固化本连接引用——回调触发时与外部 ws 变量比对，
         // 外部已被新连接覆盖（或已置空）即本次回调来自被遗弃的旧连接，一律忽略
         var sock = ws;
+        // 阶段二百九十三：连接超时定时器——服务器未启动/端口不可达时主动判定失败，
+        // 不等待浏览器网络层原生超时（可能长达 20 秒）
+        connectTimeoutTimer = setTimeout(function () {
+            connectTimeoutTimer = null;
+            if (ws === sock && ws.readyState === WebSocket.CONNECTING) {
+                // 主动关闭触发 onclose → 走正常失败派发链路
+                try { ws.close(); } catch (e) {}
+            }
+        }, 8000);
 
         ws.onopen = function () {
             // 阶段二百三十五修复：owner 检查——被覆盖/被踢旧连接的回调事件被 WebView 冻结
             // 延迟数秒补发（实测 close code=1006 迟到 1~7 秒+），若不核对归属，迟到的 open
             // 会重置 connected 并发出第二条登录帧触发互踢
             if (ws !== sock) return;
+            // 阶段二百九十三：清除连接超时定时器——已成功连上
+            if (connectTimeoutTimer) { clearTimeout(connectTimeoutTimer); connectTimeoutTimer = null; }
             connected = true;
+            // 阶段二百九十三：派发 Socket 打开事件——供主页面网络横幅检测连接恢复
+            try { window.dispatchEvent(new CustomEvent('im_socket_open')); } catch (e) {}
             // 发送登录消息（阶段六十：PC 端 Electron preload 暴露 window.desktop，据此上报设备类型，
             // 服务端 Agent 本地执行器按 platform=pc 判定文件/命令工具下发目标；Web/手机端为空走服务端执行）
             // 原代码：platform: window.desktop ? 'pc' : ''
@@ -415,7 +465,11 @@
             // scheduleReconnect 再建新连接，把当前在线的后继连接踢下线（本地实测
             // #30迟到close→3s后connect#32→#32踢掉在线的#31→用户回登录页）
             if (ws !== sock) return;
+            // 阶段二百九十三：清除连接超时定时器——无论成功失败都不再需要
+            if (connectTimeoutTimer) { clearTimeout(connectTimeoutTimer); connectTimeoutTimer = null; }
             connected = false;
+            // 阶段二百九十三：派发 Socket 关闭事件——供主页面网络横幅检测断线
+            try { window.dispatchEvent(new CustomEvent('im_socket_close', { detail: { code: ev.code || 0, reason: ev.reason || '' } })); } catch (e) {}
             stopHeartbeat();
             // 阶段一百三十五：服务端拒绝登录（账号封禁/注销/密码错误等）先下发 ERROR 帧再立即关连接，
             // 1 秒内收到过 ERROR 视为服务端拒绝而非网络断开，置 loginOk=false 阻断自动重连
@@ -798,6 +852,8 @@
                     bgResyncPending = false;
                     try { window.dispatchEvent(new CustomEvent('im_resync_history')); } catch (e) {}
                 }
+                // 阶段二百九十三：派发登录成功事件——供主页面网络横幅恢复隐藏
+                try { window.dispatchEvent(new CustomEvent('im_login_ok')); } catch (e) {}
             }
             window._lastPassword = window._lastPassword || '';
         }
@@ -933,6 +989,7 @@
     window.IMSocket = {
         MSG: MSG,
         connect: connect,
+        disconnect: disconnect, // 阶段三百零九：主动断开（退出登录/切账号用）
         register: register,
         send: send,
         on: on,
