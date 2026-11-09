@@ -180,6 +180,11 @@ func verifyToken(secret, token string) (username string, err error) {
 	if time.Now().Unix() > expire {
 		return "", errors.New("token 已过期")
 	}
+	// 上限防护：expire 距现在超过 24h 视为异常（正常签发不超过此窗口；密钥泄露后攻击者
+	// 签超长有效期 token 也无法绕过此检查，降低密钥泄露后的攻击窗口）
+	if expire-time.Now().Unix() > 24*3600 {
+		return "", errors.New("token 有效期超长")
+	}
 	mac2 := hmac.New(sha256.New, []byte(secret))
 	mac2.Write([]byte("im-gateway:" + user + ":" + parts[0]))
 	if !hmac.Equal(mac, mac2.Sum(nil)[:16]) {
@@ -521,6 +526,7 @@ func handleUDPData(grp *listenRuntime) {
 	sock := grp.sock
 	tbl := grp.tbl
 	buf := make([]byte, udpHeadLen+udpTagLen+udpMaxPayload)
+	head := make([]byte, udpHeadLen) // 固定 12B 复用，避免每包分配
 	for {
 		n, addr, err := sock.ReadFromUDP(buf)
 		if err != nil {
@@ -530,7 +536,6 @@ func handleUDPData(grp *listenRuntime) {
 		if n < udpHeadLen+udpTagLen || n > udpHeadLen+udpTagLen+udpMaxPayload {
 			continue
 		}
-		head := make([]byte, udpHeadLen)
 		copy(head, buf[:udpHeadLen])
 		id := binary.BigEndian.Uint32(head[0:4])
 		tbl.mu.RLock()
@@ -697,6 +702,7 @@ func main() {
 					grp.conns.Add(-1)
 					conn.Close()
 					log.Printf("[tcp][%s] 连接数超上限 %d，拒绝 %s", grp.name, grp.cfg.MaxTCPConns, conn.RemoteAddr())
+					time.Sleep(50 * time.Millisecond) // 短暂 sleep 降速：扫描器狂打时避免 Accept 循环空转耗尽 CPU/文件描述符
 					continue
 				}
 				go handleTLSConn(conn, grp)

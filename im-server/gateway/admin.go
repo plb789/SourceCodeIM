@@ -13,6 +13,8 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -155,22 +157,15 @@ func (a *adminServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
-// subtleFixedEqual 长度无关的常量时间比较（先哈希定长再比较，防长度/时序侧信道）
+// subtleFixedEqual 完整字符串的常量时间比较（SHA256 哈希后用 ConstantTimeCompare）
+// 旧实现用 copy 截断到 32 字节 + input==want 非常量时间比较，有密码截断绕过风险
 func subtleFixedEqual(input, want string) bool {
 	if want == "" {
 		return false
 	}
-	h := func(s string) [32]byte {
-		var out [32]byte
-		copy(out[:], []byte(s)) // 定长截断比较（本地回环登录页，够用且恒时）
-		return out
-	}
-	a, b := h(input), h(want)
-	var diff byte
-	for i := range a {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0 && input == want
+	hi := sha256.Sum256([]byte(input))
+	hw := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(hi[:], hw[:]) == 1
 }
 
 // ===== 总览页 =====
