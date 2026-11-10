@@ -11,9 +11,13 @@ package server
 //   4. 响应体强制 AES-256-GCM（X-GW-Enc），明文 2087 链路抓包不可见账号/启动密码。
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -154,16 +158,41 @@ func (s *Server) gwDbwriteAuth(w http.ResponseWriter, r *http.Request, body []by
 		return "", false
 	}
 	sec := shared
+	secSource := "共享密钥(gateway_token_secret)"
 	if gwName != "" {
 		if g, found := s.gwBookFindByName(gwName); found {
 			if t := strings.TrimSpace(g.Secret); t != "" {
 				sec = t
+				secSource = fmt.Sprintf("地址簿专属密钥(DB.im_gateway_book.name=%s)", gwName)
+			} else {
+				secSource = "地址簿条目存在但 secret 为空→回退共享密钥"
 			}
+		} else {
+			secSource = "地址簿无此名→回退共享密钥"
 		}
 	}
-	if err := gwproto.VerifyAuth(sec, r.Header.Get(gwproto.AuthHeader), r.Method, r.URL.RequestURI(), body, time.Now()); err != nil {
+	// === 调试日志：验签参数全量打印（密钥只打前后各8位，防日志泄漏 ===
+	authHeader := r.Header.Get(gwproto.AuthHeader)
+	bodyHash := ""
+	if body == nil {
+		bodyHash = "(nil→空串)"
+	} else {
+		sum := sha256.Sum256(body)
+		bodyHash = hex.EncodeToString(sum[:8])
+	}
+	secFmt := func(s string) string {
+		if len(s) >= 16 {
+			return s[:8] + "..." + s[len(s)-8:]
+		}
+		return "len=" + strconv.Itoa(len(s))
+	}
+	logger.Info("[DEBUG-鉴权] 方法=%s URI=%s 来源=%s gwName=%s 密钥来源=%s 密钥片段=%s authHeader=%s bodyHash=%s",
+		r.Method, r.URL.RequestURI(), r.RemoteAddr, gwName, secSource, secFmt(sec), authHeader, bodyHash)
+	// === 调试日志结束 ===
+	if err := gwproto.VerifyAuth(sec, authHeader, r.Method, r.URL.RequestURI(), body, time.Now()); err != nil {
 		// 原因仅落日志（含来源与自报网关名便于排查），响应统一 401 不回显细节
-		logger.Warn("网关写库接口鉴权失败（%s %s gw=%s 来源=%s）：%v", r.Method, r.URL.RequestURI(), gwName, r.RemoteAddr, err)
+		logger.Warn("网关写库接口鉴权失败（%s %s gw=%s 来源=%s 密钥来源=%s 密钥片段=%s）：%v",
+			r.Method, r.URL.RequestURI(), gwName, r.RemoteAddr, secSource, secFmt(sec), err)
 		adminFail(w, http.StatusUnauthorized, "unauthorized")
 		return "", false
 	}

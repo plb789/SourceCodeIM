@@ -624,11 +624,22 @@
                 var pkText = pk === 1 ? '单ZIP' : pk === 2 ? '分卷ZIP' : pk === 3 ? '补丁⇢v' + (v.base_version || '?') : '散文件';
                 var pkBadge = pk === 1 ? ' <span class="m-badge ok">ZIP</span>' : pk === 2 ? ' <span class="m-badge ok">分卷ZIP</span>'
                     : pk === 3 ? ' <span class="m-badge ok">补丁</span>' : '';
-                html += '<tr><td>' + esc(v.version) + (v.version === d.latest_version ? ' <span class="m-badge ok">最新</span>' : '') + pkBadge +
+                // 两阶段版本登记状态徽标（register_state: 0=就绪 1=登记中 2=失败）
+                var rs = Number(v.register_state) || 0;
+                var rsBadge = '';
+                if (rs === 1) {
+                    rsBadge = ' <span class="m-badge warn">登记中…</span>';
+                } else if (rs === 2) {
+                    var errTip = esc(v.register_error || '登记失败');
+                    rsBadge = ' <span class="m-badge bad" title="' + errTip + '">失败</span>';
+                }
+                // 登记中/失败版本禁用导出/删除按钮（导出清单要 GameFile 行，删除登记中版本需等 goroutine 结束）
+                var btnsDisabled = rs !== 0 ? ' disabled title="版本未就绪，不可操作"' : '';
+                html += '<tr><td>' + esc(v.version) + (v.version === d.latest_version ? ' <span class="m-badge ok">最新</span>' : '') + pkBadge + rsBadge +
                     '</td><td>' + pkText +
                     '</td><td>' + fmtSize(v.size_bytes) + '</td><td>' + v.file_count + '</td><td>' + esc(v.create_time) +
-                    '</td><td><button class="admin-btn small m-ver-fl" data-ver="' + esc(v.version) + '">导出清单</button>' +
-                    ' <button class="admin-btn small m-ver-del" data-vid="' + v.id + '" data-ver="' + esc(v.version) + '">删除</button></td></tr>';
+                    '</td><td><button class="admin-btn small m-ver-fl" data-ver="' + esc(v.version) + '"' + btnsDisabled + '>导出清单</button>' +
+                    ' <button class="admin-btn small m-ver-del" data-vid="' + v.id + '" data-ver="' + esc(v.version) + '"' + btnsDisabled + '>删除</button></td></tr>';
             });
             box.innerHTML = html + '</table>';
             var fls = box.querySelectorAll('.m-ver-fl');
@@ -1008,14 +1019,23 @@
         });
         $('m-ver-ok').textContent = isDirect ? '开始登记清单（文件不上传）' : '开始上传并登记版本';
         try {
-            unwrap(res);
-            verLogAdd('✓ 版本 v' + version + ' 登记成功，玩家端即时生效', 'ok');
-            toast('版本 v' + version + ' 登记成功，玩家端即时生效');
+            var data = unwrap(res);
+            var regState = data && data.register_state;
+            if (regState === 1) {
+                // Phase 1 快速返回：后台 goroutine 正在分片合并 + 清单写入，完成后 WS 通知
+                verLogAdd('✓ 版本 v' + version + ' 登记请求已接收，后台处理中（可关闭此窗口）', 'ok');
+                verLogAdd('  完成后会收到在线通知；若长时间未处理请检查后台日志', '');
+                toast('版本 v' + version + ' 已提交，后台处理中');
+            } else {
+                // 旧同步路径（兼容）
+                verLogAdd('✓ 版本 v' + version + ' 登记成功', 'ok');
+                toast('版本 v' + version + ' 登记成功');
+            }
             verFiles = [];
             renderVerList();
             $('m-ver-progress').classList.add('hidden');
             loadVersions();
-            loadQuota(); // 上架占用配额，进度条即时前进
+            loadQuota();
         } catch (e) {
             verLogAdd('✗ 版本登记失败：' + (e && e.message ? e.message : '服务端返回错误'), 'err');
         }

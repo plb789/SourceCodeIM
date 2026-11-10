@@ -599,6 +599,7 @@ func (s *Server) handleMerchantGameVersions(w http.ResponseWriter, r *http.Reque
 			"id": v.ID, "version": v.Version, "size_bytes": v.SizeBytes, "file_count": v.FileCount,
 			"changelog": v.Changelog, "create_time": v.CreateTime.Format("2006-01-02 15:04"),
 			"pack_type": v.PackType, "pack_size": v.PackSize, "base_version": v.BaseVersion,
+			"register_state": v.RegisterState, "register_error": v.RegisterError,
 		})
 	}
 	adminJSON(w, map[string]interface{}{"versions": verList, "latest_version": g.LatestVersion})
@@ -619,8 +620,9 @@ func (s *Server) handleMerchantVersionFilelist(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var v model.GameVersion
-	if err := store.DB.Where("game_id = ? AND version = ?", g.ID, strings.TrimSpace(r.PathValue("ver"))).First(&v).Error; err != nil {
-		adminFail(w, http.StatusNotFound, "版本不存在")
+	// register_state=0：登记中/失败版本 GameFile 行为空（或已删除），导出空清单会误导商户当补丁基准
+	if err := store.DB.Where("game_id = ? AND version = ? AND register_state = 0", g.ID, strings.TrimSpace(r.PathValue("ver"))).First(&v).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "版本不存在或未就绪")
 		return
 	}
 	s.gameVersionFilelistText(w, &v)
@@ -687,8 +689,10 @@ func (s *Server) handleMerchantVersionDelete(w http.ResponseWriter, r *http.Requ
 	me := merchantUserFromCtx(r)
 	vid, _ := strconv.ParseUint(r.PathValue("vid"), 10, 64)
 	var v model.GameVersion
-	if err := store.DB.First(&v, vid).Error; err != nil {
-		adminFail(w, http.StatusNotFound, "版本不存在")
+	// register_state != 1：登记中版本不让删——Phase 2 goroutine 持有版本锁，
+	// 此时删行 goroutine 会对不存在的行 Updates（0 行影响，但语义上"删成功"会误导）
+	if err := store.DB.Where("id = ? AND register_state <> 1", vid).First(&v).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "版本不存在或登记中无法删除")
 		return
 	}
 	g, ok := merchantOwnGame(me, uint64(v.GameID))

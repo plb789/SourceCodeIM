@@ -748,7 +748,7 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var versions []model.GameVersion
-	store.DB.Where("game_id = ?", g.ID).Order("id DESC").Find(&versions)
+	store.DB.Where("game_id = ? AND register_state = 0", g.ID).Order("id DESC").Find(&versions)
 	verList := make([]map[string]interface{}, 0, len(versions))
 	for _, v := range versions {
 		verList = append(verList, map[string]interface{}{
@@ -1123,7 +1123,7 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 			ver = g.LatestVersion
 		}
 		var v model.GameVersion
-		if err := store.DB.Where("game_id = ?", g.ID).Order("id DESC").First(&v).Error; err == nil && v.Version != "" {
+		if err := store.DB.Where("game_id = ? AND register_state = 0", g.ID).Order("id DESC").First(&v).Error; err == nil && v.Version != "" {
 			ver = v.Version
 		}
 		return map[string]interface{}{
@@ -1137,9 +1137,9 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 	var v model.GameVersion
 	var err error
 	if version == "" {
-		err = store.DB.Where("game_id = ?", g.ID).Order("id DESC").First(&v).Error
+		err = store.DB.Where("game_id = ? AND register_state = 0", g.ID).Order("id DESC").First(&v).Error
 	} else {
-		err = store.DB.Where("game_id = ? AND version = ?", g.ID, version).First(&v).Error
+		err = store.DB.Where("game_id = ? AND version = ? AND register_state = 0", g.ID, version).First(&v).Error
 	}
 	if err != nil {
 		return nil, errVersionNotFound
@@ -1237,7 +1237,7 @@ func (s *Server) HandleGameFileDownload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var v model.GameVersion
-	if err := store.DB.First(&v, f.VersionID).Error; err != nil {
+	if err := store.DB.Where("id = ? AND register_state = 0", f.VersionID).First(&v).Error; err != nil {
 		adminFail(w, http.StatusNotFound, "文件不存在")
 		return
 	}

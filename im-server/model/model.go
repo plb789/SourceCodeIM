@@ -1277,6 +1277,10 @@ type GameVersion struct {
 	Changelog  string    `gorm:"column:changelog;type:varchar(1024);default:''" json:"changelog"`
 	MinReq     string    `gorm:"column:min_req;type:varchar(512);default:''" json:"min_req"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	// RegisterState 版本登记状态（异步两阶段上架用，0=就绪/完成 1=登记中 2=登记失败）。
+	// 同步上架走旧路径时恒为 0，不受影响。0 值为现有版本保持不变的零迁移安全设计。
+	RegisterState int8   `gorm:"column:register_state;type:tinyint;default:0" json:"register_state"`
+	RegisterError string `gorm:"column:register_error;type:varchar(500);default:''" json:"register_error"`
 }
 
 // TableName 表名沿用 im_ 前缀约定

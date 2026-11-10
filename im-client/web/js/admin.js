@@ -7258,7 +7258,25 @@
         }
         versions.forEach(function (v) {
             var tr = document.createElement('tr');
-            var tdV = document.createElement('td'); tdV.textContent = v.version; tr.appendChild(tdV);
+            var tdV = document.createElement('td');
+            tdV.textContent = v.version;
+            // 两阶段版本登记状态徽标（register_state: 0=就绪 1=登记中 2=失败）
+            var rs = Number(v.register_state) || 0;
+            if (rs === 1) {
+                var sp = document.createElement('span');
+                sp.className = 'm-badge warn';
+                sp.style.marginLeft = '4px';
+                sp.textContent = '登记中…';
+                tdV.appendChild(sp);
+            } else if (rs === 2) {
+                var sp2 = document.createElement('span');
+                sp2.className = 'm-badge bad';
+                sp2.style.marginLeft = '4px';
+                sp2.textContent = '失败';
+                sp2.title = v.register_error || '登记失败';
+                tdV.appendChild(sp2);
+            }
+            tr.appendChild(tdV);
             // 方式列：打包方式徽标（补丁版带基底版本号），与商户端版本列表同口径
             var pk = Number(v.pack_type) || 0;
             var tdP = document.createElement('td');

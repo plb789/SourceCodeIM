@@ -74,7 +74,8 @@ func (s *Server) handleAdminClamavQuarantineList(w http.ResponseWriter, r *http.
 			}
 		}
 		var gvs []model.GameVersion
-		if err := store.DB.Where("game_id IN ?", gameIDs).Select("id, game_id, version").Find(&gvs).Error; err == nil {
+		// register_state=0：只关联就绪版本，失败/登记中版本不是有效基底
+		if err := store.DB.Where("game_id IN ? AND register_state = 0", gameIDs).Select("id, game_id, version").Find(&gvs).Error; err == nil {
 			for _, gv := range gvs {
 				if gv.ID > vmap[gv.GameID] {
 					vmap[gv.GameID] = gv.ID

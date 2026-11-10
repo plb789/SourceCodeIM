@@ -162,7 +162,7 @@ func (s *Server) clamRescanRun(gameID uint) {
 	db := store.DB.Table("im_game_version v").
 		Select("v.game_id AS game_id, g.name AS game_name, g.slug AS slug, v.version AS version, g.owner_username AS owner_username").
 		Joins("JOIN im_game g ON g.id = v.game_id").
-		Where("g.owner_username <> ''")
+		Where("g.owner_username <> '' AND v.register_state = 0")
 	if gameID > 0 {
 		db = db.Where("v.game_id = ?", gameID)
 	}
