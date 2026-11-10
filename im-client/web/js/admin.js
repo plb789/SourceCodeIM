@@ -8146,7 +8146,7 @@
         gmFiles = next;
         gmRenderFiles();
     }
-    // 补丁工具下载（服务端 /admin/api/game/gametool 托管 gametool.exe）与教程页
+    // 补丁工具下载（服务端 /admin/api/game/gametool 托管 gametool.zip，内含 gametool.exe）与教程页
     $('gm-tooldown').addEventListener('click', function () {
         fetch('/admin/api/game/gametool', { headers: { 'Authorization': 'Bearer ' + getToken() } }).then(function (r) {
             if (!r.ok) return r.json().then(function (j) { throw new Error(j.msg || ('HTTP ' + r.status)); });
@@ -8154,11 +8154,11 @@
         }).then(function (blob) {
             var a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = 'gametool.exe';
+            a.download = 'gametool.zip';
             document.body.appendChild(a);
             a.click();
             setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
-            showToast('补丁工具已开始下载：gametool.exe');
+            showToast('补丁工具已开始下载：gametool.zip（解压后使用 gametool.exe）');
         }).catch(function (e) {
             showToast('下载失败：' + (e && e.message ? e.message : '网络异常'));
         });

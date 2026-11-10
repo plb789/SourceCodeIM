@@ -8,8 +8,11 @@ package server
 //   3. 审核状态机：新增/编辑对外字段 → audit=1 待审核；通过(audit=2)后可自主上架；下架随时
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -641,29 +644,87 @@ func (s *Server) handleMerchantGameToolDownload(w http.ResponseWriter, r *http.R
 	gameToolDownloadServe(w, r)
 }
 
-// gameToolDownloadServe gametool.exe 下载公共核心（管理端/商户端共用）：
-// os.Executable 同目录定位（无用户输入参与路径，无穿越面），ServeContent 支持断点续传
+// gameToolDownloadServe 补丁工具下载（公共核心，管理端/商户端共用）：
+//  1. 优先返回预打包好的 gametool.zip（部署时一次性准备好，零运行时开销）
+//  2. 找不到 zip 则动态把 gametool/gametool.exe 流式打包成 zip 返回（兼容无 zip 部署）
+// 工具定位：os.Executable 同目录（无用户输入参与路径，无穿越面）
 func gameToolDownloadServe(w http.ResponseWriter, r *http.Request) {
 	exePath, err := os.Executable()
 	if err != nil {
-		adminFail(w, http.StatusInternalServerError, "服务端路径解析失败")
+		adminFail(w, http.StatusInternalServerError, "服务端路径解析失败："+err.Error())
 		return
 	}
-	toolPath := filepath.Join(filepath.Dir(exePath), "gametool.exe")
-	f, err := os.Open(toolPath)
+	binDir := filepath.Dir(exePath)
+
+	// ===== 路径 1：预打包 zip =====
+	zipPath := filepath.Join(binDir, "gametool.zip")
+	if info, err := os.Stat(zipPath); err == nil && !info.IsDir() {
+		logger.Info("[gametool] 预打包zip: path=%s size=%d", zipPath, info.Size())
+		f, err := os.Open(zipPath)
+		if err != nil {
+			adminFail(w, http.StatusInternalServerError, "zip打开失败："+err.Error())
+			return
+		}
+		defer f.Close()
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"gametool.zip\"")
+		http.ServeContent(w, r, "gametool.zip", info.ModTime(), f)
+		return
+	}
+
+	// ===== 路径 2：找工具二进制并动态打 zip =====
+	candidates := []string{"gametool", "gametool.exe"}
+	var toolPath string
+	for _, name := range candidates {
+		p := filepath.Join(binDir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			toolPath = p
+			break
+		}
+	}
+	if toolPath == "" {
+		// 列目录方便排查
+		dirFiles := ""
+		if entries, err := os.ReadDir(binDir); err == nil {
+			for _, e := range entries {
+				dirFiles += " " + e.Name()
+			}
+		}
+		logger.Error("[gametool] 未找到工具: exe=%s binDir=%s 尝试=[gametool.zip gametool gametool.exe] binDir文件=%s",
+			exePath, binDir, strings.TrimSpace(dirFiles))
+		adminFail(w, http.StatusNotFound, "补丁工具未找到：服务端 im-server 位于 "+exePath+"，binDir="+binDir+"（目录里文件："+strings.TrimSpace(dirFiles)+"），请联系管理员部署 gametool.zip 或 gametool/gametool.exe")
+		return
+	}
+
+	// 动态打 zip：把二进制文件名改成 gametool.exe（无论系统），下载后用户解压直接能用
+	srcFile, err := os.Open(toolPath)
 	if err != nil {
-		adminFail(w, http.StatusNotFound, "补丁工具未随服务端部署（gametool.exe 与 im-server.exe 不在同目录），请联系管理员")
+		adminFail(w, http.StatusInternalServerError, "工具文件打开失败："+err.Error())
 		return
 	}
-	defer f.Close()
-	st, err := f.Stat()
+	defer srcFile.Close()
+	st, _ := srcFile.Stat()
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	// ZIP 里统一叫 gametool.exe（Windows 用户解压后直接双击；Linux 用户解压后 chmod +x gametool.exe 也可执行）
+	zf, err := zw.Create("gametool.exe")
 	if err != nil {
-		adminFail(w, http.StatusInternalServerError, "工具文件读取失败")
+		adminFail(w, http.StatusInternalServerError, "zip打包失败："+err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"gametool.exe\"")
-	http.ServeContent(w, r, "gametool.exe", st.ModTime(), f)
+	if _, err := io.Copy(zf, srcFile); err != nil {
+		adminFail(w, http.StatusInternalServerError, "zip写入失败："+err.Error())
+		return
+	}
+	zw.Close()
+
+	logger.Info("[gametool] 动态打包zip: path=%s srcSize=%d zipSize=%d", toolPath, st.Size(), int64(buf.Len()))
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"gametool.zip\"")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.WriteHeader(http.StatusOK)
+	w.Write(buf.Bytes())
 }
 
 // handleMerchantVersionCreate 商户版本上架（共享核心 gameVersionCreateCore，前置归属校验）
