@@ -238,10 +238,13 @@ func (s *Server) handleAdminGameAuditList(w http.ResponseWriter, r *http.Request
 	}
 	st, _ := strconv.Atoi(r.URL.Query().Get("status"))
 	db := store.DB.Model(&model.Game{}).Where("owner_username <> ''")
-	if st >= 1 && st <= 3 {
+	if st >= 1 && st <= 4 {
 		db = db.Where("audit_status = ?", st)
 	} else {
-		db = db.Where("audit_status IN ?", []int8{model.GameAuditPending, model.GameAuditApproved, model.GameAuditRejected})
+		// 默认显示除官方免审外的全部商户游戏（含隔离态 4，管理员在列表中可见以决定是否介入）
+		db = db.Where("audit_status IN ?", []int8{
+			model.GameAuditPending, model.GameAuditApproved, model.GameAuditRejected, model.GameAuditQuarantined,
+		})
 	}
 	var games []model.Game
 	db.Order("audit_status ASC, id DESC").Limit(200).Find(&games)
@@ -273,6 +276,11 @@ func (s *Server) handleAdminGameAuditAct(w http.ResponseWriter, r *http.Request)
 	}
 	if g.OwnerUsername == "" {
 		adminFail(w, http.StatusBadRequest, "官方游戏无需审核")
+		return
+	}
+	// 隔离态（audit=4）游戏不能通过人工审核接口操作，必须走隔离库管理入口
+	if g.AuditStatus == model.GameAuditQuarantined {
+		adminFail(w, http.StatusBadRequest, "该游戏处于病毒隔离库（audit_status=4），请通过「隔离库管理」操作通过/驳回，不能在此处审核")
 		return
 	}
 	var req struct {

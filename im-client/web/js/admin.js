@@ -461,6 +461,10 @@
             else if (item.dataset.view === 'cards') { cardsPage = 1; cardsLoad(); }
             // 游戏审核（游戏管理二级页）：进入视图拉取商户提交的游戏队列 + 病毒回溯扫描任务态
             else if (item.dataset.view === 'gaudit') { gauditLoad(); clamavStatusLoad(true); }
+            // 病毒隔离库管理（游戏管理二级页）：进入视图拉取隔离记录列表
+            else if (item.dataset.view === 'quarantine') { stopKBPolling(); quarantineLoad(); }
+            // 病毒扫描白名单（游戏管理二级页）：进入视图拉取白名单规则列表
+            else if (item.dataset.view === 'whitelist') { stopKBPolling(); whitelistLoad(); }
             // 商户管理（游戏管理二级页）：进入视图拉取商户列表并复位表单为「创建」态
             else if (item.dataset.view === 'merchants') { merchantsResetForm(); merchantsLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
@@ -515,6 +519,47 @@
     $('admin-confirm-ok').addEventListener('click', function () {
         $('admin-confirm-mask').classList.add('hidden');
         if (confirmCb) { var cb = confirmCb; confirmCb = null; cb(); }
+    });
+
+    // ===== 输入弹窗（自定义带 textarea，禁用系统 prompt） =====
+    var promptCb = null;
+    var promptValidator = null; // optional: fn(val) → 返回错误文案或空串表示通过
+    function promptBox(text, opts, cb) {
+        // opts: { placeholder, max, default, validate }
+        opts = opts || {};
+        $('admin-prompt-text').textContent = text || '';
+        var input = $('admin-prompt-input');
+        input.placeholder = opts.placeholder || '请输入内容…';
+        input.maxLength = opts.max || 500;
+        input.value = opts.default || '';
+        $('admin-prompt-hint').textContent = '';
+        promptValidator = opts.validate || null;
+        promptCb = cb;
+        $('admin-prompt-mask').classList.remove('hidden');
+        setTimeout(function () { input.focus(); input.select(); }, 50);
+    }
+    function closePromptBox() {
+        $('admin-prompt-mask').classList.add('hidden');
+        promptCb = null;
+        promptValidator = null;
+    }
+    $('admin-prompt-cancel').addEventListener('click', closePromptBox);
+    $('admin-prompt-ok').addEventListener('click', function () {
+        if (!promptCb) return;
+        var val = $('admin-prompt-input').value.trim();
+        if (promptValidator) {
+            var err = promptValidator(val);
+            if (err) { $('admin-prompt-hint').style.color = '#e5484d'; $('admin-prompt-hint').textContent = err; return; }
+        }
+        var cb = promptCb; promptCb = null;
+        closePromptBox();
+        cb(val);
+    });
+    // 字数统计
+    $('admin-prompt-input').addEventListener('input', function () {
+        var max = this.maxLength || 500;
+        $('admin-prompt-hint').style.color = '';
+        $('admin-prompt-hint').textContent = this.value.length + ' / ' + max;
     });
 
     // ===== 编辑弹窗（动态表单） =====
@@ -647,6 +692,9 @@
         if (!$('admin-confirm-mask').classList.contains('hidden')) {
             $('admin-confirm-mask').classList.add('hidden');
             confirmCb = null;
+        }
+        if (!$('admin-prompt-mask').classList.contains('hidden')) {
+            closePromptBox();
         }
         // 阶段五十二：切片查看弹窗同步支持 Escape 关闭
         if (!$('admin-chunks-mask').classList.contains('hidden')) {
@@ -8846,6 +8894,338 @@
         });
     });
     $('clamav-status').addEventListener('click', function () { clamavStatusLoad(false); });
+
+    // ===== 病毒隔离库管理（阶段 XXX） =====
+    var quarItems = [];
+    function quarantineLoad() {
+        var st = $('q-f-status').value;
+        var owner = ($('q-f-owner').value || '').trim();
+        var qs = [];
+        if (st) qs.push('status=' + st);
+        if (owner) qs.push('owner=' + encodeURIComponent(owner));
+        $('quarantine-status').textContent = '加载中…';
+        api('GET', '/admin/api/security/quarantine/list' + (qs.length ? '?' + qs.join('&') : '')).then(function (result) {
+            if (!result.ok) { $('quarantine-status').textContent = result.msg || '加载失败'; return; }
+            quarItems = result.data.items || [];
+            var total = result.data.total || quarItems.length;
+            var pend = 0;
+            quarItems.forEach(function (q) { if (q.status === 0) pend++; });
+            $('quarantine-status').textContent = '共 ' + total + ' 条' + (st === '' || st === '0' ? '（待审核 ' + pend + '）' : '');
+            renderQuarantine();
+        });
+    }
+    function renderQuarantine() {
+        var tbody = $('quarantine-tbody');
+        if (!quarItems.length) { tbody.innerHTML = '<tr><td colspan="9" class="vec-empty">暂无隔离记录</td></tr>'; return; }
+        var ST = { 0: ['pending', '待审核'], 1: ['ok', '已通过'], 2: ['rej', '已驳回'] };
+        var GS = { 0: '', 1: '（待审核）', 2: '（已通过）', 3: '（已驳回）', 4: '（隔离中）' };
+        tbody.innerHTML = '';
+        quarItems.forEach(function (q) {
+            var def = ST[q.status] || ST[0];
+            var remark = q.game_audit_remark ? '<div style="font-size:11px;color:var(--text-light);">备注：' + esc(q.game_audit_remark) + '</div>' : '';
+            var sizeStr = q.first_file;
+            if (q.first_file.length > 40) sizeStr = q.first_file.slice(0, 38) + '…';
+            var tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td>' + esc(q.game_name) + remark + '</td>' +
+                '<td>' + esc(q.version) + '</td>' +
+                '<td>' + esc(q.owner) + '</td>' +
+                '<td>' + (q.hit_count || 0) + '</td>' +
+                '<td title="' + esc(q.first_file || '') + '">' + esc(sizeStr) + '</td>' +
+                '<td style="font-family:Consolas,monospace;font-size:12px;">' + esc(q.first_sig || '') + '</td>' +
+                '<td style="white-space:nowrap;">' + esc(q.quarantined_at || '') + '</td>' +
+                '<td><span class="m-badge ' + def[0] + '">' + def[1] + '</span></td>' +
+                '<td></td>';
+            var acts = document.createElement('div');
+            acts.style.cssText = 'display:flex;gap:6px;';
+            // 查看详情（通用）
+            var btnDetail = document.createElement('button');
+            btnDetail.className = 'admin-btn small';
+            btnDetail.textContent = '详情';
+            btnDetail.addEventListener('click', function () { quarantineDetail(q); });
+            acts.appendChild(btnDetail);
+            if (q.status === 0) {
+                var btnApprove = document.createElement('button');
+                btnApprove.className = 'admin-btn small';
+                btnApprove.style.cssText = 'color:var(--primary);border-color:var(--primary);';
+                btnApprove.textContent = '通过';
+                btnApprove.addEventListener('click', function () { quarantineApprove(q); });
+                acts.appendChild(btnApprove);
+
+                var btnReject = document.createElement('button');
+                btnReject.className = 'admin-btn small';
+                btnReject.style.cssText = 'color:#e5484d;border-color:#e5484d;';
+                btnReject.textContent = '驳回';
+                btnReject.addEventListener('click', function () { quarantineReject(q); });
+                acts.appendChild(btnReject);
+            }
+            tr.lastElementChild.appendChild(acts);
+            tbody.appendChild(tr);
+        });
+    }
+    function quarantineDetail(q) {
+        api('GET', '/admin/api/security/quarantine/' + q.id).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '查询失败'); return; }
+            var d = result.data || {};
+            var records = d.records || [];
+            var rowsHtml = records.map(function (r) {
+                var sizeStr = r.file_size > 0 ? formatFileSize(r.file_size) : '—';
+                var shaStr = r.file_sha256 || '';
+                if (shaStr.length > 20) shaStr = shaStr.slice(0, 10) + '…' + shaStr.slice(-8);
+                return '<tr><td>' + esc(r.file_path) + '</td><td>' + sizeStr + '</td><td style="font-family:Consolas,monospace;font-size:12px;">' + esc(r.virus_sig) + '</td><td style="font-family:Consolas,monospace;font-size:11px;">' + esc(shaStr) + '</td></tr>';
+            }).join('');
+            var overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+            overlay.innerHTML = '<div style="background:var(--panel-bg);border:1px solid var(--border);border-radius:12px;width:min(900px,100%);max-height:85vh;overflow:hidden;display:flex;flex-direction:column;">' +
+                '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-weight:600;font-size:15px;color:var(--text);display:flex;justify-content:space-between;align-items:center;">' +
+                    '<span>隔离记录详情 — ' + esc(d.game_name) + ' v' + esc(d.version) + '</span>' +
+                    '<span class="admin-btn small" style="cursor:pointer;" data-close>✕</span>' +
+                '</div>' +
+                '<div style="padding:10px 18px;font-size:12px;color:var(--text-light);border-bottom:1px solid var(--border);">' +
+                    '商户：' + esc(d.owner) + ' &nbsp;|&nbsp; 检出 ' + (d.hit_count || 0) + ' 项 &nbsp;|&nbsp; 隔离时间：' + esc(d.quarantined_at || '') +
+                '</div>' +
+                '<div style="flex:1;overflow:auto;padding:0;">' +
+                    '<table class="vec-table" style="min-width:0;margin:0;"><thead><tr>' +
+                        '<th>文件路径</th><th style="width:100px;">大小</th><th style="width:180px;">病毒签名</th><th style="width:140px;">SHA256</th>' +
+                    '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
+                '</div>' +
+                '<div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;">' +
+                    '<button class="admin-btn small" data-close>关闭</button>' +
+                '</div>' +
+            '</div>';
+            document.body.appendChild(overlay);
+            overlay.addEventListener('click', function (e) {
+                if (e.target === overlay || e.target.closest('[data-close]')) overlay.remove();
+            });
+        });
+    }
+    function quarantineApprove(q) {
+        confirmBox('确认通过「' + q.game_name + '」v' + q.version + ' 的病毒隔离审核？\n通过后游戏回到待审核状态，隔离记录标记为已通过。', function () {
+            api('POST', '/admin/api/security/quarantine/' + q.id + '/approve', {}).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+                showToast('已通过隔离审核，游戏回到待审核');
+                quarantineLoad();
+            });
+        });
+    }
+    function quarantineReject(q) {
+        promptBox('请输入驳回理由（必填，≤500字）。系统将以此理由通知商户整改：', {
+            placeholder: '描述病毒签名、影响范围、整改建议…',
+            max: 500,
+            validate: function (val) {
+                if (!val || !val.trim()) return '驳回理由不能为空';
+                if (val.length > 500) return '理由超过 500 字';
+                return '';
+            }
+        }, function (note) {
+            api('POST', '/admin/api/security/quarantine/' + q.id + '/reject', { admin_note: note }).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+                showToast('已确认病毒驳回');
+                quarantineLoad();
+            });
+        });
+    }
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+        return (bytes / 1073741824).toFixed(2) + ' GB';
+    }
+    $('q-refresh').addEventListener('click', quarantineLoad);
+    $('q-f-owner').addEventListener('keydown', function (e) { if (e.key === 'Enter') quarantineLoad(); });
+    $('q-cleanup').addEventListener('click', function () {
+        confirmBox('清理已处置（通过/驳回）且超过 30 天的隔离记录？', function () {
+            api('DELETE', '/admin/api/security/quarantine/cleanup').then(function (result) {
+                if (!result.ok) { showToast(result.msg || '清理失败'); return; }
+                showToast('已清理 ' + (result.data && result.data.cleaned || 0) + ' 条过期记录');
+                quarantineLoad();
+            });
+        });
+    });
+
+    // ===== 病毒扫描白名单管理（阶段 XXX） =====
+    var wlItems = [];
+    var wlGames = null;
+    function wlFetchGames() {
+        if (wlGames) return Promise.resolve(wlGames);
+        return api('GET', '/admin/api/game?page=1&size=500').then(function (result) {
+            if (result.ok) wlGames = (result.data && result.data.list) || [];
+            else wlGames = [];
+            return wlGames;
+        });
+    }
+    function whitelistLoad() {
+        api('GET', '/admin/api/security/whitelist/list').then(function (result) {
+            if (!result.ok) { $('wl-status').textContent = result.msg || '加载失败'; return; }
+            wlItems = result.data.items || [];
+            $('wl-status').textContent = '共 ' + wlItems.length + ' 条规则';
+            renderWhitelist();
+        });
+    }
+    function renderWhitelist() {
+        var tbody = $('whitelist-tbody');
+        if (!wlItems.length) { tbody.innerHTML = '<tr><td colspan="8" class="vec-empty">暂无白名单规则，点击「+ 新增规则」开始</td></tr>'; return; }
+        tbody.innerHTML = '';
+        wlItems.forEach(function (w) {
+            var scopeText = w.scope === 1 ? '指定游戏' : '全局';
+            var scopeCls = w.scope === 1 ? 'm-badge off' : 'm-badge on';
+            var gameText = w.game_name || (w.scope === 1 ? ('#' + w.target_id) : '—');
+            var enBadge = w.enabled ? '<span class="m-badge on">启用</span>' : '<span class="m-badge off">禁用</span>';
+            var tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td><span class="' + scopeCls + '">' + scopeText + '</span></td>' +
+                '<td>' + esc(gameText) + '</td>' +
+                '<td style="font-family:Consolas,monospace;font-size:12px;color:var(--text);">' + esc(w.file_pattern) + '</td>' +
+                '<td>' + esc(w.reason || '') + '</td>' +
+                '<td>' + enBadge + '</td>' +
+                '<td>' + esc(w.created_by || '') + '</td>' +
+                '<td style="white-space:nowrap;">' + esc(w.created_at || '') + '</td>' +
+                '<td></td>';
+            var acts = document.createElement('div');
+            acts.style.cssText = 'display:flex;gap:6px;';
+            // 匹配测试按钮
+            var btnTest = document.createElement('button');
+            btnTest.className = 'admin-btn small';
+            btnTest.textContent = '测试';
+            btnTest.addEventListener('click', function () { whitelistTestDialog(w); });
+            acts.appendChild(btnTest);
+            // 编辑按钮
+            var btnEdit = document.createElement('button');
+            btnEdit.className = 'admin-btn small';
+            btnEdit.textContent = '编辑';
+            btnEdit.addEventListener('click', function () { whitelistFormDialog(w); });
+            acts.appendChild(btnEdit);
+            // 删除按钮
+            var btnDel = document.createElement('button');
+            btnDel.className = 'admin-btn small';
+            btnDel.style.cssText = 'color:#e5484d;border-color:#e5484d;';
+            btnDel.textContent = '删除';
+            btnDel.addEventListener('click', function () {
+                confirmBox('删除匹配模式「' + w.file_pattern + '」？删除后立即热更新生效。', function () {
+                    api('DELETE', '/admin/api/security/whitelist/' + w.id).then(function (r2) {
+                        if (!r2.ok) { showToast(r2.msg || '删除失败'); return; }
+                        showToast('已删除');
+                        whitelistLoad();
+                    });
+                });
+            });
+            acts.appendChild(btnDel);
+            tr.lastElementChild.appendChild(acts);
+            tbody.appendChild(tr);
+        });
+    }
+    $('wl-add').addEventListener('click', function () { whitelistFormDialog(null); });
+
+    function whitelistTestDialog(w) {
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+        overlay.innerHTML = '<div style="background:var(--panel-bg);border:1px solid var(--border);border-radius:12px;width:min(520px,100%);overflow:hidden;">' +
+            '<div style="padding:12px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:14px;color:var(--text);display:flex;justify-content:space-between;align-items:center;">' +
+                '<span>匹配测试</span><span class="admin-btn small" style="cursor:pointer;" data-close>✕</span>' +
+            '</div>' +
+            '<div style="padding:16px;">' +
+                '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">输入一个文件路径，测试是否会命中当前规则「<code>' + esc(w.file_pattern) + '</code>」</p>' +
+                '<input id="wl-test-path" class="admin-input" placeholder="如 bin/launcher.exe 或 patch_v1.dat" style="width:100%;margin-bottom:10px;">' +
+                '<div id="wl-test-result" style="font-size:13px;color:var(--text);min-height:20px;"></div>' +
+            '</div>' +
+            '<div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;">' +
+                '<button class="admin-btn small" data-close>关闭</button>' +
+                '<button class="admin-btn small primary" data-test>测试</button>' +
+            '</div>' +
+        '</div>';
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay || e.target.closest('[data-close]')) overlay.remove();
+        });
+        overlay.querySelector('[data-test]').addEventListener('click', function () {
+            var path = overlay.querySelector('#wl-test-path').value.trim();
+            if (!path) { showToast('请输入文件路径'); return; }
+            api('POST', '/admin/api/security/whitelist/test', { file_path: path, game_id: (w.scope === 1 ? w.target_id : 0) }).then(function (result) {
+                var el = overlay.querySelector('#wl-test-result');
+                if (!result.ok) { el.innerHTML = '<span style="color:#e5484d;">' + esc(result.msg || '测试失败') + '</span>'; return; }
+                if (result.data && result.data.matched) {
+                    el.innerHTML = '<span style="color:#4caf50;">✓ 命中！scope=' + result.data.scope + ', pattern=' + esc(result.data.file_pattern) + '</span>';
+                } else {
+                    el.innerHTML = '<span style="color:#e5484d;">✗ 未命中，该文件会被 ClamAV 扫描</span>';
+                }
+            });
+        });
+    }
+
+    function whitelistFormDialog(existing) {
+        var isEdit = !!existing;
+        var d = existing || { scope: 0, target_id: 0, file_pattern: '', reason: '', enabled: 1 };
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+        overlay.innerHTML = '<div style="background:var(--panel-bg);border:1px solid var(--border);border-radius:12px;width:min(480px,100%);overflow:hidden;">' +
+            '<div style="padding:12px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:14px;color:var(--text);display:flex;justify-content:space-between;align-items:center;">' +
+                '<span>' + (isEdit ? '编辑白名单规则' : '新增白名单规则') + '</span><span class="admin-btn small" style="cursor:pointer;" data-close>✕</span>' +
+            '</div>' +
+            '<div style="padding:16px;display:flex;flex-direction:column;gap:12px;">' +
+                '<div><label style="font-size:12px;color:var(--text-light);margin-bottom:4px;display:block;">作用范围</label>' +
+                    '<select id="wl-f-scope" class="admin-input" style="width:100%;">' +
+                        '<option value="0"' + (d.scope === 0 ? ' selected' : '') + '>全局生效</option>' +
+                        '<option value="1"' + (d.scope === 1 ? ' selected' : '') + '>指定游戏</option>' +
+                    '</select></div>' +
+                '<div id="wl-f-game-wrap" style="display:' + (d.scope === 1 ? '' : 'none') + ';"><label style="font-size:12px;color:var(--text-light);margin-bottom:4px;display:block;">指定游戏</label>' +
+                    '<select id="wl-f-game" class="admin-input" style="width:100%;"></select></div>' +
+                '<div><label style="font-size:12px;color:var(--text-light);margin-bottom:4px;display:block;">匹配模式（Glob 风格）</label>' +
+                    '<input id="wl-f-pattern" class="admin-input" style="width:100%;font-family:Consolas,monospace;" placeholder="*.dll / bin/launcher.exe / patch_*" value="' + esc(d.file_pattern) + '"></div>' +
+                '<div><label style="font-size:12px;color:var(--text-light);margin-bottom:4px;display:block;">添加原因</label>' +
+                    '<input id="wl-f-reason" class="admin-input" style="width:100%;" placeholder="如：官方签名的启动器" value="' + esc(d.reason || '') + '"></div>' +
+                '<div><label style="font-size:12px;color:var(--text-light);margin-bottom:4px;display:block;">状态</label>' +
+                    '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text);cursor:pointer;">' +
+                        '<input type="checkbox" id="wl-f-enabled" ' + (d.enabled ? 'checked' : '') + ' style="width:18px;height:18px;"> 启用' +
+                    '</label></div>' +
+            '</div>' +
+            '<div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;">' +
+                '<button class="admin-btn small" data-close>取消</button>' +
+                '<button class="admin-btn small primary" data-save>保存</button>' +
+            '</div>' +
+        '</div>';
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay || e.target.closest('[data-close]')) overlay.remove();
+        });
+        // scope 切换控制游戏选择显隐
+        overlay.querySelector('#wl-f-scope').addEventListener('change', function () {
+            overlay.querySelector('#wl-f-game-wrap').style.display = this.value === '1' ? '' : 'none';
+        });
+        // 加载游戏列表到下拉
+        wlFetchGames().then(function (games) {
+            var sel = overlay.querySelector('#wl-f-game');
+            if (!sel) return;
+            if (!games.length) {
+                sel.innerHTML = '<option value="">暂无可选游戏（请先创建）</option>';
+                return;
+            }
+            var opts = '<option value="">请选择游戏…</option>';
+            games.forEach(function (g) {
+                opts += '<option value="' + g.id + '"' + (d.target_id === g.id ? ' selected' : '') + '>' + esc(g.name) + '（' + esc(g.slug) + '）</option>';
+            });
+            sel.innerHTML = opts;
+        });
+        // 保存按钮
+        overlay.querySelector('[data-save]').addEventListener('click', function () {
+            var scope = Number(overlay.querySelector('#wl-f-scope').value) || 0;
+            var gameSel = overlay.querySelector('#wl-f-game');
+            var targetID = scope === 1 && gameSel ? (Number(gameSel.value) || 0) : 0;
+            var pattern = overlay.querySelector('#wl-f-pattern').value.trim();
+            var reason = overlay.querySelector('#wl-f-reason').value.trim();
+            var enabled = overlay.querySelector('#wl-f-enabled').checked ? 1 : 0;
+            if (!pattern) { showToast('匹配模式必填'); return; }
+            if (scope === 1 && !targetID) { showToast('请选择指定的游戏'); return; }
+            var payload = { scope: scope, target_id: targetID, file_pattern: pattern, reason: reason, enabled: enabled };
+            var url = isEdit ? ('/admin/api/security/whitelist/' + existing.id) : '/admin/api/security/whitelist';
+            var method = isEdit ? 'PUT' : 'POST';
+            api(method, url, payload).then(function (result) {
+                if (!result.ok) { showToast(result.msg || (isEdit ? '保存失败' : '创建失败')); return; }
+                showToast(isEdit ? '已更新并热生效' : '已创建并热生效');
+                overlay.remove();
+                whitelistLoad();
+            });
+        });
+    }
 
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
     // 归位说明：启动必须放在 IIFE 末尾——此前位于积分管理区块之前（L2975），带 #gn/#games 等

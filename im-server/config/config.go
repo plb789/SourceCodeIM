@@ -190,6 +190,19 @@ type ClamAVConfig struct {
 	// 整版回滚拒绝、病毒文件不落库存（大包扫描分钟级会阻塞商户上架响应）；false 时登记后异步
 	// 扫描、检出自动驳回游戏（上架不阻塞，存在分钟级下发窗口）。两种模式 clamd 异常均 fail-open
 	Sync bool `yaml:"sync"`
+	// QuarantineOnDetect 检出病毒时是否进入隔离库（true=隔离态 audit=4，等待管理员审核；
+	// false=直接驳回 audit=3 旧行为）。默认 true（推荐：文件保留不丢失，减少商户重复上传）
+	QuarantineOnDetect *bool `yaml:"quarantine_on_detect"`
+	// MaxQuarantineAgeDays 已处置隔离记录最长保留天数（0=默认 30；过期自动清理，不影响待审核记录）
+	MaxQuarantineAgeDays int `yaml:"max_quarantine_age_days"`
+}
+
+// IsQuarantineOnDetect 返回隔离开关的有效布尔值（nil/缺省按 true 处理——推荐隔离库模式）
+func (c ClamAVConfig) IsQuarantineOnDetect() bool {
+	if c.QuarantineOnDetect == nil {
+		return true
+	}
+	return *c.QuarantineOnDetect
 }
 
 // IPRegionConfig IP 属地显示配置节（ip2region 离线解析，微信同款资料卡「IP属地」标签）

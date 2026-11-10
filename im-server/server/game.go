@@ -732,7 +732,13 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	// 下架游戏仅对已入库用户可见（商店下架语义；未入库访问按不存在处理防枚举）；
 	// 商户游戏审核态（1 待审核/3 驳回）同样仅对已入库玩家保留详情（商户编辑回审期间，
-	// 已入库玩家仍可玩旧内容——新玩家发现面已在列表/区块/置顶过滤墙拦截）
+	// 已入库玩家仍可玩旧内容——新玩家发现面已在列表/区块/置顶过滤墙拦截）。
+	// 隔离态（4）特殊：病毒扫描检出期间全拦截，无论是否已入库玩家——避免检出病毒文件在
+	// 隔离审核期间仍被玩家访问/下载。文件保留在磁盘不动，但详情/下载链路统一阻断。
+	if g.AuditStatus == model.GameAuditQuarantined {
+		adminFail(w, http.StatusNotFound, "游戏不存在")
+		return
+	}
 	if g.Status != 0 || (g.AuditStatus != model.GameAuditOfficial && g.AuditStatus != model.GameAuditApproved) {
 		var cnt int64
 		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", username, g.ID).Count(&cnt)

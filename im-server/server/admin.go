@@ -78,9 +78,21 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段一百四十七：管理端通话话单查询（含链路类型筛选，通话统计视图数据源）
 	http.HandleFunc("GET /admin/api/calllogs", s.adminGuard(s.HandleAdminCallLogs))
 	// 病毒扫描（安全加固）：存量商户版本 ClamAV 回溯重扫（管理端游戏审核页入口；
-	// 检出自动驳回，任务态单飞）。clamav.enabled=false 时启动接口明确拒绝
+	// 检出进入隔离库等待管理员审核，任务态单飞）。clamav.enabled=false 时启动接口明确拒绝
 	http.HandleFunc("POST /admin/api/security/clamav/rescan", s.adminGuard(s.handleClamAVRescan))
 	http.HandleFunc("GET /admin/api/security/clamav/rescan/status", s.adminGuard(s.handleClamAVRescanStatus))
+	// 阶段 XXX：病毒隔离库管理（检出病毒进入隔离库而非直接驳回，文件保留不动）
+	http.HandleFunc("GET /admin/api/security/quarantine/list", s.adminGuard(s.handleAdminClamavQuarantineList))
+	http.HandleFunc("GET /admin/api/security/quarantine/{id}", s.adminGuard(s.handleAdminClamavQuarantineDetail))
+	http.HandleFunc("POST /admin/api/security/quarantine/{id}/approve", s.adminGuard(s.handleAdminClamavQuarantineApprove))
+	http.HandleFunc("POST /admin/api/security/quarantine/{id}/reject", s.adminGuard(s.handleAdminClamavQuarantineReject))
+	http.HandleFunc("DELETE /admin/api/security/quarantine/cleanup", s.adminGuard(s.handleAdminClamavQuarantineCleanup))
+	// 阶段 XXX：病毒扫描白名单（命中规则的文件跳过 ClamAV 扫描，Glob 风格匹配）
+	http.HandleFunc("GET /admin/api/security/whitelist/list", s.adminGuard(s.handleAdminClamavWhitelistList))
+	http.HandleFunc("POST /admin/api/security/whitelist", s.adminGuard(s.handleAdminClamavWhitelistCreate))
+	http.HandleFunc("PUT /admin/api/security/whitelist/{id}", s.adminGuard(s.handleAdminClamavWhitelistUpdate))
+	http.HandleFunc("DELETE /admin/api/security/whitelist/{id}", s.adminGuard(s.handleAdminClamavWhitelistDelete))
+	http.HandleFunc("POST /admin/api/security/whitelist/test", s.adminGuard(s.handleAdminClamavWhitelistTest))
 	// AI 模型服务管理
 	http.HandleFunc("GET /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderList))
 	http.HandleFunc("POST /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderCreate))

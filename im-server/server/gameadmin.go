@@ -2025,16 +2025,35 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	mh := sha256.Sum256([]byte(strings.Join(hashLines, "\n")))
 	manifestHash := hex.EncodeToString(mh[:])
 
-	// 病毒扫描·同步模式（安全加固，clamav.sync=true）：登记前扫描本版本落位文件——检出即
-	// 整版回滚拒绝（病毒文件不落库存，商户拿明确报错）；clamd 异常 fail-open 放行记日志
-	// （扫描服务故障不阻断正常上架，人工审核兜底）。异步模式（默认）在登记成功后后台扫描。
+	// 病毒扫描·同步模式（安全加固，clamav.sync=true）：登记前扫描本版本落位文件。
+	// quarantine_on_detect=true（默认）时检出进入隔离库（audit_status=4，文件保留不动，商户无需重传）；
+	// false 时整版回滚拒绝（旧行为）。clamd 异常 fail-open 放行记日志（扫描服务故障不阻断正常上架）。
 	// 直连模式（dm=3）文件不在服务端，扫描不可达——跳过（审核强提示 + 客户端哈希校验兜底）
 	if g.OwnerUsername != "" && !direct && s.cfg.ClamAV.Enabled && s.cfg.ClamAV.Sync {
-		_, hits, serr := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second, nil)
+		// 白名单匹配器：同步扫描也应用白名单（与异步/存量回溯一致）
+		wlMatcher := ClamavWhitelistMatcherFactory(g.ID)
+		_, hits, serr := clamScanDir(s.cfg.ClamAV.Addr, verRoot, time.Duration(s.cfg.ClamAV.TimeoutSec)*time.Second, nil, wlMatcher)
 		switch {
 		case serr != nil:
 			logger.Warn("病毒扫描服务异常（fail-open 放行）: 游戏=%s(%s) v%s, %v", g.Name, g.Slug, version, serr)
 		case len(hits) > 0:
+			if s.cfg.ClamAV.IsQuarantineOnDetect() {
+				// 隔离库模式：写入隔离记录 + 游戏置隔离态，不回滚文件
+				var versionID uint
+				// 版本尚未登记，先登记后隔离
+				v := model.GameVersion{GameID: g.ID, Version: version}
+				if err := store.DB.Create(&v).Error; err != nil {
+					s.gameVersionRollback(verRoot, items, false)
+					adminFail(w, http.StatusInternalServerError, "版本登记失败")
+					return
+				}
+				versionID = v.ID
+				handleClamavDetectedQuarantine(g.ID, versionID, g.Name, g.Slug, version, g.OwnerUsername, verRoot, hits)
+				adminFail(w, http.StatusBadRequest, "病毒扫描检出 "+strconv.Itoa(len(hits))+" 项，已进入隔离库等待管理员审核，请耐心等待")
+				logger.Error("病毒扫描进入隔离库（同步模式）: 游戏=%s(%s) v%s, 商户=%s, 检出 %d 处", g.Name, g.Slug, version, operator, len(hits))
+				return
+			}
+			// 旧行为：整版回滚拒绝
 			s.gameVersionRollback(verRoot, items, true)
 			adminFail(w, http.StatusBadRequest, "病毒扫描不通过：检出 "+hits[0].Sig+"（"+filepath.Base(hits[0].Path)+
 				"），版本已回滚未上架（共检出 "+strconv.Itoa(len(hits))+" 处）")

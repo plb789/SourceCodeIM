@@ -327,6 +327,9 @@ func main() {
 	server.InitMCP(cfg)
 	// 阶段四十九：后台管理路由（管理员登录 + AI 模型服务/智能体管理热更新）
 	server.RegisterAdminRoutes(srv)
+	// 病毒扫描白名单加载（DB 热更缓存，避免每次扫描查 DB；隔离记录定时清理协程启动）
+	server.ClamavWhitelistLoad()
+	server.StartClamavQuarantineCleanup(srv)
 	// 阶段一百四十四：公司公告与动态路由（后台发布管理 + 用户端阅读/已读归口）
 	server.RegisterAnnouncementRoutes(srv)
 	// 阶段一百四十五：工作台路由（后台维护办公网站清单 + 客户端宫格导航只读归口）

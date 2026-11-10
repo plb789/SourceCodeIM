@@ -1095,10 +1095,11 @@ type Game struct {
 
 // 商户游戏审核状态常量（服务端与商户/管理端同口径）
 const (
-	GameAuditOfficial = 0 // 官方免审（存量游戏与管理员创建的默认态）
-	GameAuditPending  = 1 // 待审核（商户新增/编辑对外字段后）
-	GameAuditApproved = 2 // 已通过（玩家侧可见的唯一商户态）
-	GameAuditRejected = 3 // 已驳回（附理由，商户改后可重新提交）
+	GameAuditOfficial     = 0 // 官方免审（存量游戏与管理员创建的默认态）
+	GameAuditPending      = 1 // 待审核（商户新增/编辑对外字段后）
+	GameAuditApproved     = 2 // 已通过（玩家侧可见的唯一商户态）
+	GameAuditRejected     = 3 // 已驳回（附理由，商户改后可重新提交）
+	GameAuditQuarantined  = 4 // 已隔离（病毒扫描检出，等待管理员人工确认；玩家侧不可见，文件保留不丢失）
 )
 
 // Merchant 商户资料/配置表 im_merchant（商户独立后台）：
@@ -1639,3 +1640,44 @@ type OfficialAudit struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (OfficialAudit) TableName() string { return "im_official_audit" }
+
+// ClamavQuarantine ClamAV 病毒隔离库记录 im_clamav_quarantine
+// 病毒扫描检出后，不直接驳回游戏，而是将检出文件记录写入隔离库 + 游戏置 audit_status=4（隔离态），
+// 等待管理员人工审核确认。文件本体保留在磁盘不动，通过后立即可用，商户无需重新上传。
+type ClamavQuarantine struct {
+	ID            uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	GameID        uint       `gorm:"column:game_id;index:idx_q_game_ver" json:"game_id"`
+	VersionID     uint       `gorm:"column:version_id;index:idx_q_game_ver" json:"version_id"`
+	GameName      string     `gorm:"column:game_name;type:varchar(64);default:''" json:"game_name"`
+	Slug          string     `gorm:"column:slug;type:varchar(64);default:''" json:"slug"`
+	Version       string     `gorm:"column:version;type:varchar(32);default:''" json:"version"`
+	Owner         string     `gorm:"column:owner;type:varchar(32);index" json:"owner"`
+	FilePath      string     `gorm:"column:file_path;type:varchar(512)" json:"file_path"`
+	FileSize      int64      `gorm:"column:file_size;default:0" json:"file_size"`
+	FileSHA256    string     `gorm:"column:file_sha256;type:varchar(64);default:''" json:"file_sha256"`
+	VirusSig      string     `gorm:"column:virus_sig;type:varchar(255)" json:"virus_sig"`
+	QuarantinedAt *time.Time `gorm:"column:quarantined_at;index:idx_q_status_time" json:"quarantined_at"`
+	// Status: 0=待审核 / 1=已通过 / 2=已驳回
+	Status    int8       `gorm:"column:status;type:tinyint;default:0;index:idx_q_status_time" json:"status"`
+	AdminNote string     `gorm:"column:admin_note;type:varchar(500);default:''" json:"admin_note"`
+	DecidedBy string     `gorm:"column:decided_by;type:varchar(32);default:''" json:"decided_by"`
+	DecidedAt *time.Time `gorm:"column:decided_at" json:"decided_at"`
+}
+
+func (ClamavQuarantine) TableName() string { return "im_clamav_quarantine" }
+
+// ClamavWhitelist ClamAV 病毒扫描白名单 im_clamav_whitelist
+// 命中白名单的文件跳过 ClamAV 扫描（已知安全的文件，如签名启动器、官方 DLL 等）。
+// scope=0 全局生效 / scope=1 指定游戏生效。file_pattern 使用 Glob 风格匹配 filepath.Match。
+type ClamavWhitelist struct {
+	ID         uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Scope      int8       `gorm:"column:scope;type:tinyint;default:0;index" json:"scope"` // 0=全局 / 1=指定游戏
+	TargetID   uint       `gorm:"column:target_id;default:0;index" json:"target_id"`       // scope=1 时为 game_id
+	FilePattern string    `gorm:"column:file_pattern;type:varchar(255)" json:"file_pattern"`
+	Reason     string     `gorm:"column:reason;type:varchar(255);default:''" json:"reason"`
+	Enabled    int8       `gorm:"column:enabled;type:tinyint;default:1" json:"enabled"`
+	CreatedBy  string     `gorm:"column:created_by;type:varchar(32);default:''" json:"created_by"`
+	CreatedAt  *time.Time `gorm:"column:created_at" json:"created_at"`
+}
+
+func (ClamavWhitelist) TableName() string { return "im_clamav_whitelist" }

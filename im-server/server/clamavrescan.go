@@ -220,7 +220,9 @@ func (s *Server) clamRescanRun(gameID uint) {
 			clamRescan.LastFileAt = time.Now()
 			clamRescan.Mu.Unlock()
 		}
-		_, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, timeout, onFile)
+		// 白名单匹配器：存量回溯也应用白名单（与新增版本扫描一致）
+		wlMatcher := ClamavWhitelistMatcherFactory(row.GameID)
+		_, hits, err := clamScanDir(s.cfg.ClamAV.Addr, verRoot, timeout, onFile, wlMatcher)
 		if err == nil {
 			clamRescan.Mu.Lock()
 			clamRescan.VersionsScanned++
@@ -243,22 +245,35 @@ func (s *Server) clamRescanRun(gameID uint) {
 			clamRescan.Mu.Unlock()
 			logger.Error("存量回溯检出: %s(%s) v%s ← %s（%s）", row.GameName, row.Slug, row.Version, filepath.ToSlash(rel), h.Sig)
 		}
-		// 检出自动驳回（同游戏去重；与人工驳回同一状态机语义）
+		// 检出：根据 quarantine_on_detect 配置进入隔离库或直接驳回（同游戏去重；与人工驳回/异步扫描同一状态机语义）
 		if len(hits) > 0 && !rejected[row.GameID] {
-			first := hits[0]
-			remark := fmt.Sprintf("存量病毒回溯扫描不通过（自动驳回）：检出 %s（%s）；请清理文件后重新提交审核",
-				first.Sig, filepath.Base(first.Path))
-			res := store.DB.Model(&model.Game{}).Where("id = ?", row.GameID).Updates(map[string]interface{}{
-				"audit_status": model.GameAuditRejected, "audit_remark": remark,
-			})
-			if res.Error != nil {
-				logger.Error("存量回溯检出但自动驳回失败（请人工处理）: 游戏=%d, %v", row.GameID, res.Error)
-			} else if res.RowsAffected > 0 {
+			isQuarantine := s.cfg.ClamAV.IsQuarantineOnDetect()
+			if isQuarantine {
+				// 进入隔离库：复用隔离逻辑（隔离态 audit=4，文件保留不动）
+				var versionID uint
+				var gv model.GameVersion
+				if err := store.DB.Where("game_id = ? AND version = ?", row.GameID, row.Version).First(&gv).Error; err == nil {
+					versionID = gv.ID
+				}
+				handleClamavDetectedQuarantine(row.GameID, versionID, row.GameName, row.Slug, row.Version, row.OwnerUsername, verRoot, hits)
 				rejected[row.GameID] = true
-				logger.Error("存量回溯自动驳回: 游戏=%s(%s), 检出 %d 处, 首个=%s（%s）", row.GameName, row.Slug, len(hits), filepath.Base(first.Path), first.Sig)
-				// 推 WS 通知商户实时刷新
-				if row.OwnerUsername != "" {
-					emitGameAuditChanged(s, row.OwnerUsername, row.GameID, model.GameAuditRejected, remark, row.GameName)
+			} else {
+				// 直接驳回（旧行为）
+				first := hits[0]
+				remark := fmt.Sprintf("存量病毒回溯扫描不通过（自动驳回）：检出 %s（%s）；请清理文件后重新提交审核",
+					first.Sig, filepath.Base(first.Path))
+				res := store.DB.Model(&model.Game{}).Where("id = ?", row.GameID).Updates(map[string]interface{}{
+					"audit_status": model.GameAuditRejected, "audit_remark": remark,
+				})
+				if res.Error != nil {
+					logger.Error("存量回溯检出但自动驳回失败（请人工处理）: 游戏=%d, %v", row.GameID, res.Error)
+				} else if res.RowsAffected > 0 {
+					rejected[row.GameID] = true
+					logger.Error("存量回溯自动驳回: 游戏=%s(%s), 检出 %d 处, 首个=%s（%s）", row.GameName, row.Slug, len(hits), filepath.Base(first.Path), first.Sig)
+					// 推 WS 通知商户实时刷新
+					if row.OwnerUsername != "" {
+						emitGameAuditChanged(s, row.OwnerUsername, row.GameID, model.GameAuditRejected, remark, row.GameName)
+					}
 				}
 			}
 		}

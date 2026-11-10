@@ -64,6 +64,8 @@
                 <button class="admin-nav-item sub" data-view="groders">充值订单</button>
                 <button class="admin-nav-item sub" data-view="cards">充值卡</button>
                 <button class="admin-nav-item sub" data-view="gaudit">游戏审核</button>
+                <button class="admin-nav-item sub" data-view="quarantine">隔离库管理</button>
+                <button class="admin-nav-item sub" data-view="whitelist">扫描白名单</button>
                 <button class="admin-nav-item sub" data-view="merchants">商户管理</button>
                 <button class="admin-nav-item" data-view="official">
                     <svg viewBox="0 0 24 24" width="15" height="15" style="flex:none"><path fill="currentColor" d="M18 11v-2c0-3.07-1.64-5.64-4.5-6.32V2c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 3.36 6 5.92 6 9v2H4v2h2v4c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-4h.91l4.09 3.6V17c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-1.76l4-3.6v-.64l-2-.56zm-5 7.83l-2.11-1.83H8V9h5V4.07c1.42.72 2.5 2.53 2.5 4.93v2.27l2 .56V11h2v-2h-2z"/></svg>
@@ -1738,6 +1740,61 @@
                 </table>
                 </div>
             </section>
+            <!-- 病毒隔离库管理（游戏管理二级页：病毒扫描检出的隔离记录，管理员审核通过/驳回） -->
+            <section id="admin-view-quarantine" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>隔离库管理</h2>
+                    <span id="quarantine-status" class="admin-view-tip">-</span>
+                </header>
+                <p class="admin-view-tip">ClamAV 病毒扫描检出的隔离记录。文件保留在磁盘不动，等待管理员人工审核确认。通过后游戏回到待审核，驳回后游戏进入已驳回。请根据检出签名、文件路径和 SHA256 判断是误报还是真实病毒。</p>
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">
+                    <select id="q-f-status" class="admin-input gm-num-input">
+                        <option value="">全部状态</option>
+                        <option value="0" selected>待审核</option>
+                        <option value="1">已通过</option>
+                        <option value="2">已驳回</option>
+                    </select>
+                    <input id="q-f-owner" class="admin-input" style="max-width:220px;" placeholder="商户账号筛选">
+                    <button id="q-refresh" class="admin-btn small primary" type="button">刷新</button>
+                    <button id="q-cleanup" class="admin-btn small" type="button">清理过期已处置记录</button>
+                </div>
+                <div class="vec-table-wrap">
+                <table class="vec-table" style="min-width:0;">
+                    <thead>
+                        <tr>
+                            <th>游戏</th><th>版本</th><th>商户</th><th>检出数</th><th>首个文件</th><th>病毒签名</th><th>隔离时间</th><th>状态</th><th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="quarantine-tbody">
+                        <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </section>
+            <!-- 病毒扫描白名单（游戏管理二级页：命中规则的文件跳过 ClamAV 扫描，Glob 风格匹配） -->
+            <section id="admin-view-whitelist" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>扫描白名单</h2>
+                    <span id="wl-status" class="admin-view-tip">-</span>
+                </header>
+                <p class="admin-view-tip">命中白名单规则的文件跳过 ClamAV 病毒扫描。支持 Glob 风格匹配（<code>*.dll</code>、<code>bin/launcher.exe</code>、<code>patch_*</code>）。scope=0 全局生效 / scope=1 指定游戏生效。修改后热更新立即生效，无需重启。</p>
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">
+                    <button id="wl-add" class="admin-btn small primary" type="button">+ 新增规则</button>
+                    <span class="admin-field-hint">提示：所有修改自动热更新，保存后立即生效</span>
+                </div>
+                <div class="vec-table-wrap">
+                <table class="vec-table" style="min-width:0;">
+                    <thead>
+                        <tr>
+                            <th style="width:70px;">范围</th><th style="width:120px;">游戏</th><th>匹配模式</th><th>原因</th><th style="width:80px;">状态</th><th style="width:120px;">创建人</th><th style="width:160px;">创建时间</th><th style="width:140px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="whitelist-tbody">
+                        <tr><td colspan="8" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </section>
             <!-- 商户管理（游戏管理二级页：建号/启停/分成比例/重置密码） -->
             <section id="admin-view-merchants" class="admin-view">
                 <header class="admin-view-head">
@@ -2188,6 +2245,19 @@
             <div class="modal-btns">
                 <button id="admin-confirm-cancel" class="modal-btn">取消</button>
                 <button id="admin-confirm-ok" class="modal-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 输入弹窗（带 textarea，禁止系统 prompt） -->
+    <div id="admin-prompt-mask" class="modal-mask hidden">
+        <div class="modal-box" style="min-width:440px;">
+            <div id="admin-prompt-text" class="modal-text"></div>
+            <textarea id="admin-prompt-input" class="admin-input" style="width:100%;min-height:90px;margin:10px 0;resize:vertical;font-family:inherit;" placeholder="请输入内容…" maxlength="500"></textarea>
+            <div id="admin-prompt-hint" style="font-size:11px;color:var(--text-light);text-align:right;margin:-6px 0 8px;"></div>
+            <div class="modal-btns">
+                <button id="admin-prompt-cancel" class="modal-btn">取消</button>
+                <button id="admin-prompt-ok" class="modal-btn primary">确定</button>
             </div>
         </div>
     </div>

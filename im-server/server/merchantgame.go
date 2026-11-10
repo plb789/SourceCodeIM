@@ -298,6 +298,11 @@ func (s *Server) handleMerchantGameUpdate(w http.ResponseWriter, r *http.Request
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
+	// 隔离态游戏禁止编辑（避免商户绕过隔离审核直接回到待审核）
+	if g.AuditStatus == model.GameAuditQuarantined {
+		adminFail(w, http.StatusBadRequest, "该游戏处于病毒隔离库，需管理员通过后才能编辑；请耐心等待审核结果")
+		return
+	}
 	var req merchantGameReq
 	if err := jsonDecodeLimit(w, r, &req, 65536); err != nil {
 		return

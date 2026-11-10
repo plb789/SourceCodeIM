@@ -205,7 +205,7 @@
 
     // ==================== 我的游戏 ====================
     var games = [];
-    var AUDIT_TEXT = { 0: ['off', '官方'], 1: ['pending', '待审核'], 2: ['ok', '已通过'], 3: ['rej', '已驳回'] };
+    var AUDIT_TEXT = { 0: ['off', '官方'], 1: ['pending', '待审核'], 2: ['ok', '已通过'], 3: ['rej', '已驳回'], 4: ['rej', '隔离中（病毒扫描检出）'] };
     var STATUS_BADGE = { 0: ['on', '上架中'], 1: ['offshelf', '已下架'] };
 
     var _gamesLoading = false;
