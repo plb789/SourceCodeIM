@@ -2763,7 +2763,9 @@ ipcMain.handle('game:launch', async function (event, data) {
             var pfRet = await gameForward.start(pfTag, pfRules, data && data.gateway);
             if (!pfRet.ok) return { ok: false, error: '端口转发开启失败：' + (pfRet.err || '未知错误') };
         }
-        var cwd = r.installDir || path.dirname(r.exe);
+        // 工作目录必须用 exe 所在目录（dirname），与 SSE 路径 StartIn 口径一致、与 Windows 直接双击行为对齐——
+        // installDir 可能是安装根，而游戏资源相对路径（如 ../System/Resource/*.bin）以 exe 所在目录为基准
+        var cwd = path.dirname(r.exe);
         var spawned;
         if (data && data.steamEmu === 1) {
             // SmartSteamEmu 分流：单实例限制（ini 单份全局配置，并发启动互相覆盖）→ 写 ini →
