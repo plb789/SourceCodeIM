@@ -649,13 +649,16 @@
                     var errTip = esc(v.register_error || '登记失败');
                     rsBadge = ' <span class="m-badge bad" title="' + errTip + '">失败</span>';
                 }
-                // 登记中/失败版本禁用导出/删除按钮（导出清单要 GameFile 行，删除登记中版本需等 goroutine 结束）
-                var btnsDisabled = rs !== 0 ? ' disabled title="版本未就绪，不可操作"' : '';
+                // 登记中(rs=1)：禁用全部（goroutine 还在跑，删会竞态；导出也没戏）
+                // 失败(rs=2)：禁用导出清单（GameFile 行可能为空），但允许删除（清理脏数据是刚需）
+                // 成功(rs=0)：全部允许
+                var flDisabled = rs === 0 ? '' : ' disabled title="版本未就绪，不可导出清单"';
+                var delDisabled = rs === 1 ? ' disabled title="版本登记中，请稍候再删除"' : '';
                 html += '<tr><td>' + esc(v.version) + (v.version === d.latest_version ? ' <span class="m-badge ok">最新</span>' : '') + pkBadge + rsBadge +
                     '</td><td>' + pkText +
                     '</td><td>' + fmtSize(v.size_bytes) + '</td><td>' + v.file_count + '</td><td>' + esc(v.create_time) +
-                    '</td><td><button class="admin-btn small m-ver-fl" data-ver="' + esc(v.version) + '"' + btnsDisabled + '>导出清单</button>' +
-                    ' <button class="admin-btn small m-ver-del" data-vid="' + v.id + '" data-ver="' + esc(v.version) + '"' + btnsDisabled + '>删除</button></td></tr>';
+                    '</td><td><button class="admin-btn small m-ver-fl" data-ver="' + esc(v.version) + '"' + flDisabled + '>导出清单</button>' +
+                    ' <button class="admin-btn small m-ver-del" data-vid="' + v.id + '" data-ver="' + esc(v.version) + '"' + delDisabled + '>删除</button></td></tr>';
             });
             box.innerHTML = html + '</table>';
             var fls = box.querySelectorAll('.m-ver-fl');

@@ -1970,16 +1970,64 @@ func (s *Server) gameVersionAsyncProcess(
 			fail("基底版本清单缺失")
 			return
 		}
-		baseMap := make(map[string]gameUploadItem, len(baseFiles))
-		for _, f := range baseFiles {
-			baseMap[f.RelPath] = gameUploadItem{relPath: f.RelPath, size: f.SizeBytes, sha: f.SHA256}
+		// ===== 路径归一 & 智能前缀对齐 =====
+		// 问题：数据库 baseFiles.RelPath 可能带游戏 slug 前缀（如 luna/xxx）、大小写混合；
+		//       补丁包 changeMap 路径可能不带前缀、全小写。两边对不上 → 全部 change 被判为新增而非变更。
+		// 解决：先统一归一化（小写 + 正斜杠），再检测公共前缀并对齐。
+
+		// 归一化函数
+		norm := func(p string) string {
+			return strings.ToLower(strings.ReplaceAll(p, "\\", "/"))
 		}
+		// 检测一组路径的公共第一段前缀（如 "luna/" 或 ""）
+		detectPrefix := func(keys []string) string {
+			if len(keys) == 0 {
+				return ""
+			}
+			sort.Strings(keys)
+			first := keys[0]
+			if idx := strings.IndexByte(first, '/'); idx < 0 {
+				return ""
+			} else {
+				pfx := first[:idx+1]
+				for _, k := range keys {
+					if !strings.HasPrefix(k, pfx) {
+						return ""
+					}
+				}
+				return pfx
+			}
+		}
+
+		// baseMap：DB 原始路径为 value，归一化路径为 key；同时保留归一化 rel 供 finalMap 用
+		type baseEntry struct {
+			origRel string // DB 原始 rel_path（写入 finalMap 保留）
+			size    int64
+			sha     string
+			storage string // 继承的物理存储路径
+		}
+		baseMapNorm := make(map[string]baseEntry, len(baseFiles))
+		for _, f := range baseFiles {
+			k := norm(f.RelPath)
+			baseMapNorm[k] = baseEntry{origRel: f.RelPath, size: f.SizeBytes, sha: f.SHA256, storage: f.StoragePath}
+		}
+
 		zipPath := filepath.Join(verRoot, filepath.FromSlash(items[0].relPath))
-		changeMap, pjBytes, err := gamePatchUnpack(zipPath, verRoot, s.cfg.Game.MaxUnpackSize)
+		changeMapRaw, pjBytes, err := gamePatchUnpack(zipPath, verRoot, s.cfg.Game.MaxUnpackSize)
 		if err != nil {
 			fail("补丁包解包失败（" + err.Error() + "）")
 			return
 		}
+
+		// changeMap：归一化 key
+		changeMapNorm := make(map[string]gameUploadItem, len(changeMapRaw))
+		for k, v := range changeMapRaw {
+			nk := norm(k)
+			v.relPath = nk // 让落盘路径也用归一化后的（小写），服务端 unpack 落盘路径本身不敏感
+			changeMapNorm[nk] = v
+		}
+
+		// patch.json：归一化 change/delete 路径
 		var pj struct {
 			Format      int      `json:"format"`
 			BaseVersion string   `json:"base_version"`
@@ -2003,45 +2051,111 @@ func (s *Server) gameVersionAsyncProcess(
 			fail("patch.json 版本号与登记版本号不一致")
 			return
 		}
-		if len(pj.Change) != len(changeMap) {
+		// 归一化 pj.Change 后再校验一致性
+		pjChangeNorm := make([]string, 0, len(pj.Change))
+		for _, c := range pj.Change {
+			pjChangeNorm = append(pjChangeNorm, norm(c))
+		}
+		if len(pjChangeNorm) != len(changeMapNorm) {
 			fail("patch.json change 数量与 zip 条目不一致")
 			return
 		}
-		for _, c := range pj.Change {
-			if _, ok := changeMap[c]; !ok {
+		for _, c := range pjChangeNorm {
+			if _, ok := changeMapNorm[c]; !ok {
 				fail("patch.json change 与 zip 条目不一致: " + c)
 				return
 			}
 		}
+
+		// 智能前缀对齐：如果 baseMapNorm 有公共前缀（如 luna/），而 changeMapNorm 没有，
+		// 且剥离前缀后匹配率显著提升 → 剥离 baseMapNorm 的前缀
+		baseKeys := make([]string, 0, len(baseMapNorm))
+		for k := range baseMapNorm {
+			baseKeys = append(baseKeys, k)
+		}
+		changeKeys := make([]string, 0, len(changeMapNorm))
+		for k := range changeMapNorm {
+			changeKeys = append(changeKeys, k)
+		}
+		basePfx := detectPrefix(baseKeys)
+		changePfx := detectPrefix(changeKeys)
+		if basePfx != "" && basePfx != changePfx {
+			origMatch := 0
+			for k := range baseMapNorm {
+				if _, ok := changeMapNorm[k]; ok {
+					origMatch++
+				}
+			}
+			// 尝试剥离 baseMapNorm 前缀
+			baseStripped := make(map[string]baseEntry, len(baseMapNorm))
+			for k, v := range baseMapNorm {
+				if strings.HasPrefix(k, basePfx) {
+					nk := strings.TrimPrefix(k, basePfx)
+					// 保留原始 rel 不变，只改 key 用于匹配
+					baseStripped[nk] = v
+				} else {
+					baseStripped[k] = v
+				}
+			}
+			strippedMatch := 0
+			for k := range baseStripped {
+				if _, ok := changeMapNorm[k]; ok {
+					strippedMatch++
+				}
+			}
+			if strippedMatch > origMatch && (strippedMatch >= 10 || strippedMatch > origMatch*2) {
+				logger.Info("[补丁合成] 基底清单路径公共前缀 %q 与补丁不对齐，自动剥离: 原始匹配 %d → 剥离后 %d",
+					basePfx, origMatch, strippedMatch)
+				baseMapNorm = baseStripped
+				// basePfx 也要更新，供后续 delete 检查时剥离
+			}
+		}
+
+		// delete 检查（路径归一化 + 可能的前缀剥离）
 		delSet := make(map[string]bool, len(pj.Delete))
-		for _, d := range pj.Delete {
+		for _, dRaw := range pj.Delete {
+			d := norm(dRaw)
+			// 如果之前剥离了 base 前缀，delete 路径也做同样尝试
+			if basePfx != "" && !strings.HasPrefix(d, basePfx) {
+				if _, ok := baseMapNorm[d]; !ok {
+					// 尝试加回前缀
+					if _, ok2 := baseMapNorm[basePfx+d]; ok2 {
+						d = basePfx + d
+					}
+				}
+			}
 			if zipEntryUnsafe(d) {
 				fail("补丁删除清单含非法路径: " + d)
 				return
 			}
-			if _, ok := changeMap[d]; ok {
+			if _, ok := changeMapNorm[d]; ok {
 				fail("delete 与 change 冲突: " + d)
 				return
 			}
-			if _, ok := baseMap[d]; !ok {
+			if _, ok := baseMapNorm[d]; !ok {
 				fail("delete 路径不在基底版本清单中: " + d)
 				return
 			}
 			delSet[d] = true
 		}
-		finalMap := make(map[string]gameUploadItem, len(baseFiles)+len(changeMap))
-		for _, f := range baseFiles {
-			if delSet[f.RelPath] {
+
+		// finalMap 合成（归一化 key 对齐匹配，value 保留 DB 原始 rel_path）
+		finalMap := make(map[string]gameUploadItem, len(baseFiles)+len(changeMapNorm))
+		for nk, be := range baseMapNorm {
+			if delSet[nk] {
 				continue
 			}
-			if _, changed := changeMap[f.RelPath]; changed {
+			if _, changed := changeMapNorm[nk]; changed {
 				continue
 			}
-			finalMap[f.RelPath] = gameUploadItem{relPath: f.RelPath, size: f.SizeBytes, sha: f.SHA256}
-			storageOverride[f.RelPath] = f.StoragePath
+			// 用归一化后的路径作为 finalMap 的 key（changeMap 也是归一化的，对齐匹配）
+			// 但 relPath 保留 DB 原始值（写入 GameFile 行时用）
+			finalMap[be.origRel] = gameUploadItem{relPath: be.origRel, size: be.size, sha: be.sha}
+			storageOverride[be.origRel] = be.storage
 		}
-		for rel, it := range changeMap {
-			finalMap[rel] = it
+		for rel, it := range changeMapNorm {
+			// change 的 rel 就是归一化后的（小写无额外前缀），直接写入
+			finalMap[rel] = gameUploadItem{relPath: rel, size: it.size, sha: it.sha}
 			storageOverride[rel] = "games/" + g.Slug + "/" + v.Version + "/" + rel
 		}
 		if len(finalMap) == 0 {

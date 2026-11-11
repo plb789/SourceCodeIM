@@ -21,6 +21,10 @@ const MAX_PARALLEL = 2;    // 跨任务并行下载上限，超出排队
 const EMIT_INTERVAL = 500; // 进度节流窗口（ms），同时作为速度计算窗口
 const MAX_FILE_RETRY = 2;  // 单文件校验失败重试上限（仍失败任务置 error）
 const STAGING_DIRNAME = 'downloading'; // 同盘暂存目录名（正式目录 <root>/<slug>，暂存 <root>/downloading/<slug>）
+// —— 多线程分块下载常量 ——
+const MAX_CHUNKS = 8;          // 单文件最大并发分块数（对标 BT 引擎 SetMaxSessionPerHttp=8）
+const MIN_TOTAL_FOR_CHUNK = 16 * 1024 * 1024; // 文件小于此阈值时不启用分块（多连接开销 > 收益）
+const CHUNK_RESUME_INTERVAL = 2000;           // 分块状态文件 flush 间隔（ms，防崩溃丢失进度过多）
 
 class GameDownloadManager extends EventEmitter {
     constructor() {
@@ -173,7 +177,7 @@ class GameDownloadManager extends EventEmitter {
                 fileIndex: 0,
                 startedAt: 0,
                 retries: 0,
-                _req: null,        // 进行中的 http 请求（暂停/取消中断用）
+                _reqs: null,       // 当前文件活跃 http 请求集合（Set，暂停/取消遍历 destroy）
                 _speed: 0,         // 500ms 窗口速度（B/s）
                 _diskBytes: 0,     // 磁盘写入字节累计（落盘吞吐采集）
                 _diskSpeed: 0,     // 500ms 窗口磁盘写入速度（B/s）
@@ -202,7 +206,11 @@ class GameDownloadManager extends EventEmitter {
             task.state = 'paused';
             task._speed = 0;
             task._diskSpeed = 0;
-            if (task._req) { try { task._req.destroy(); } catch (e) { } }
+            // 销毁所有活跃请求（单连接/多分块统一归口）
+            if (task._reqs) {
+                task._reqs.forEach(function (r) { try { r.destroy(); } catch (e) { } });
+                task._reqs.clear();
+            }
             this._emit(task, task._currentRel, null, true); // 暂停终态必发一条
         }
         return { ok: true, task: this._summary(task) };
@@ -228,11 +236,17 @@ class GameDownloadManager extends EventEmitter {
         if (!task) return { ok: false, error: '任务不存在' };
         const wasActive = task.state === 'downloading';
         task.state = 'cancelled'; // 中断标记：进行中的下载 Promise 按外部中断处理
-        if (task._req) { try { task._req.destroy(); } catch (e) { } }
+        if (task._reqs) {
+            task._reqs.forEach(function (r) { try { r.destroy(); } catch (e) { } });
+            task._reqs.clear();
+        }
         if (task._extractProc) { try { task._extractProc.kill(); } catch (e) { } } // 解压阶段：杀 7z（压缩包保留，重试免重下）
         const self = this;
-        const pend = task.files.map(function (f) {
-            return self._safeUnlink(path.resolve(task.stagingDir, f.rel_path) + '.part');
+        const pend = [];
+        task.files.forEach(function (f) {
+            const base = path.resolve(task.stagingDir, f.rel_path);
+            pend.push(self._safeUnlink(base + '.part'));
+            pend.push(self._safeUnlink(base + '.part-chunks')); // 分块断点状态文件一并清理
         });
         const fin = function () {
             self._emit(task, '', null, true, 'cancel'); // 取消终态必发一条（页面清理 UI），随后任务从表移除
@@ -306,7 +320,8 @@ class GameDownloadManager extends EventEmitter {
         next();
     }
 
-    // 下载单个文件：.part 断点续传（Range）→ rename 正式名 → 大小/SHA256 流式校验。
+    // 下载单个文件：多线程分块（Range 并发 + 偏移写入 + 块级断点续传）/ 单连接断点续传（.part + Range）
+    // 自动降级：文件太小/不支持 Range → 回退单连接。rename 正式名 → 大小/SHA256 流式校验。
     // reject 载荷：{paused:true} 暂停中断 / {verify:true} 校验类失败（可重试）/ {message} 其它错误
     _downloadFile(task, file) {
         const self = this;
@@ -316,6 +331,7 @@ class GameDownloadManager extends EventEmitter {
         return new Promise(function (resolve, reject) {
             const abs = path.resolve(task.stagingDir, file.rel_path);
             const partAbs = abs + '.part';
+            const chunksAbs = abs + '.part-chunks'; // 分块断点状态文件（块级续传用）
             // 上次会话已完整落盘且校验过的文件（rename 前提即校验通过）直接跳过，秒级恢复。
             // 重启恢复时 netReceived 已归零，需补计已落盘字节，避免进度条与 "X MB / total" 文本脱节。
             try {
@@ -363,38 +379,342 @@ class GameDownloadManager extends EventEmitter {
                 }
             } catch (e) { /* 本地不存在或异常，走下载 */ }
             if (!dedupTried) go();
+
             function go() {
-            fs.mkdir(path.dirname(abs), { recursive: true }, function (mkErr) {
-                if (mkErr) { reject({ message: '创建目录失败：' + mkErr.message }); return; }
-                let base = 0;
-                try {
-                    const st = fs.statSync(partAbs);
-                    if (st.isFile()) base = st.size;
-                } catch (e) { /* 无断点文件，从头下载 */ }
-                const url = self._buildUrl(task, file);
-                if (!url) { reject({ message: task.direct ? '清单缺少直连地址（rel_path: ' + file.rel_path + '）' : '文件下载地址缺失' }); return; }
-                // 直连模式（商户自带文件服务器）：强制 https（防中间人篡改；清单 SHA256 是第二道校验）
-                if (task.direct && url.indexOf('https:') !== 0) {
-                    reject({ message: '直连下载已中止：文件服务器地址必须为 https（来源：' + url.split('/').slice(0, 3).join('/') + '）' });
-                    return;
+                fs.mkdir(path.dirname(abs), { recursive: true }, function (mkErr) {
+                    if (mkErr) { reject({ message: '创建目录失败：' + mkErr.message }); return; }
+                    const url = self._buildUrl(task, file);
+                    if (!url) { reject({ message: task.direct ? '清单缺少直连地址（rel_path: ' + file.rel_path + '）' : '文件下载地址缺失' }); return; }
+                    // 直连模式（商户自带文件服务器）：强制 https（防中间人篡改；清单 SHA256 是第二道校验）
+                    if (task.direct && url.indexOf('https:') !== 0) {
+                        reject({ message: '直连下载已中止：文件服务器地址必须为 https（来源：' + url.split('/').slice(0, 3).join('/') + '）' });
+                        return;
+                    }
+                    const hasChunksState = fs.existsSync(chunksAbs);
+                    // 多线程分块启用条件：有断点状态文件（续传）或 文件足够大（头探测 Range 支持）
+                    if (hasChunksState) { goChunked(url, true); }
+                    else if (file.size >= MIN_TOTAL_FOR_CHUNK) { probeRange(url); }
+                    else { goSingle(url, 0); }
+                });
+            }
+
+            // HEAD 探测服务端 Range 支持 → 支持则分块下载，否则回退单连接
+            function probeRange(url) {
+                if (task.state !== 'downloading') { reject({ paused: true }); return; }
+                const mod = url.indexOf('https:') === 0 ? https : http;
+                const req = mod.request({ method: 'HEAD', url: url, headers: {} }, function (res) {
+                    res.resume();
+                    const acceptRanges = String(res.headers['accept-ranges'] || '').toLowerCase();
+                    // 302 跟随（预签名 URL 常见）
+                    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                        try { probeRange(new URL(res.headers.location, url).toString()); }
+                        catch (e) { goSingle(url, 0); }
+                        return;
+                    }
+                    if (res.statusCode === 200 && acceptRanges.indexOf('bytes') >= 0) {
+                        goChunked(url, false);
+                    } else {
+                        goSingle(url, 0);
+                    }
+                });
+                req.on('error', function () { goSingle(url, 0); }); // HEAD 失败不阻塞，回退单连接
+                req.end();
+            }
+
+            // —— 多线程分块下载核心 ——
+            // 架构：按 MAX_CHUNKS 均分文件为 N 段，每段独立 Range 请求 + fs.write(fd, buf, 0, len, position) 偏移写入。
+            // 断点续传：.part-chunks 记录每段已下载字节；恢复时从 start+downloaded 续拉该段 Range。
+            // 限速：每段各自挂全局令牌桶（与单连接同 limiter）。进度/速度由全局 tick 统一推送。
+            function goChunked(finalUrl, isResume) {
+                if (task.state !== 'downloading') { reject({ paused: true }); return; }
+                task._reqs = new Set();
+                // 构造块列表
+                let chunks;
+                if (isResume) {
+                    try {
+                        const raw = fs.readFileSync(chunksAbs, 'utf8');
+                        const saved = JSON.parse(raw);
+                        if (saved && saved.totalSize === file.size && Array.isArray(saved.chunks)) {
+                            chunks = saved.chunks.map(function (c) {
+                                return { start: c.start, end: c.end, downloaded: c.downloaded || 0 };
+                            });
+                        }
+                    } catch (e) { /* 状态文件损坏 → 全量重来 */ }
                 }
-                // 直连错误文案归口：失败指向"游戏来源服务器"（商户自备），避免用户误判平台故障
+                if (!chunks) {
+                    // 均分：每块 ≈ file.size / MAX_CHUNKS，最后一块含余量
+                    const n = Math.min(MAX_CHUNKS, Math.max(1, Math.floor(file.size / (4 * 1024 * 1024)))); // 至少 4MB/块
+                    chunks = [];
+                    const chunkSize = Math.floor(file.size / n);
+                    for (let i = 0; i < n; i++) {
+                        const start = i * chunkSize;
+                        const end = (i === n - 1) ? (file.size - 1) : (start + chunkSize - 1);
+                        chunks.push({ start: start, end: end, downloaded: 0 });
+                    }
+                }
+                // 打开 .part 文件：续传用 'r+'（保留已有内容），全新用 'w+'（创建/截断）
+                const flags = isResume ? 'r+' : 'w+';
+                fs.open(partAbs, flags, function (fdErr, fd) {
+                    if (fdErr) { reject({ message: '打开下载文件失败：' + fdErr.message }); return; }
+                    let settled = false;
+                    let chunksDone = 0;
+                    let chunksFailed = false;
+                    let resumeFlushTimer = null;
+                    let lastResumeFlush = Date.now();
+                    // 定期 flush 分块状态文件（防崩溃丢失过多进度）
+                    const scheduleFlush = function () {
+                        if (resumeFlushTimer) return;
+                        const now = Date.now();
+                        if (now - lastResumeFlush < CHUNK_RESUME_INTERVAL) {
+                            resumeFlushTimer = setTimeout(function () {
+                                resumeFlushTimer = null;
+                                flushChunks();
+                            }, CHUNK_RESUME_INTERVAL - (now - lastResumeFlush));
+                        } else {
+                            flushChunks();
+                        }
+                    };
+                    const flushChunks = function () {
+                        lastResumeFlush = Date.now();
+                        const state = { totalSize: file.size, chunks: chunks.map(function (c) {
+                            return { start: c.start, end: c.end, downloaded: c.downloaded };
+                        })};
+                        try { fs.writeFileSync(chunksAbs, JSON.stringify(state)); } catch (e) { }
+                    };
+                    const failAll = function (err) {
+                        if (settled) return;
+                        settled = true;
+                        if (resumeFlushTimer) { clearTimeout(resumeFlushTimer); resumeFlushTimer = null; }
+                        try { fs.closeSync(fd); } catch (e) { }
+                        task._reqs = null;
+                        if (myGen !== task._reqGen) { reject({ paused: true }); return; }
+                        if (task.state === 'paused') reject({ paused: true });
+                        else reject(err);
+                    };
+                    const chunkDone = function () {
+                        chunksDone++;
+                        if (chunksDone >= chunks.length && !chunksFailed) {
+                            flushChunks(); // 完成前最后一次状态落盘（其实用不到了，但保持一致）
+                            try { fs.closeSync(fd); } catch (e) { }
+                            task._reqs = null;
+                            // 大小校验
+                            let totalWritten = 0;
+                            for (let i = 0; i < chunks.length; i++) totalWritten += chunks[i].downloaded;
+                            if (file.size > 0 && totalWritten !== file.size) {
+                                self._safeUnlink(partAbs);
+                                self._safeUnlink(chunksAbs);
+                                reject({ verify: true, message: '文件大小不符' });
+                                return;
+                            }
+                            // 删除分块状态文件，rename 正式名，SHA256 校验
+                            self._safeUnlink(chunksAbs).then(function () {
+                                fs.rename(partAbs, abs, function (rnErr) {
+                                    if (rnErr) { reject({ message: '写入失败：' + rnErr.message }); return; }
+                                    self._emit(task, file.rel_path, null, true, 'verifying');
+                                    const h = crypto.createHash('sha256');
+                                    const rs = fs.createReadStream(abs);
+                                    rs.on('data', function (c) { h.update(c); });
+                                    rs.on('error', function () {
+                                        self._safeUnlink(abs);
+                                        reject({ verify: true, message: '校验读取失败' });
+                                    });
+                                    rs.on('end', function () {
+                                        if (file.sha256 && h.digest('hex') !== file.sha256) {
+                                            self._safeUnlink(abs);
+                                            reject({ verify: true, message: 'SHA256 校验不符' });
+                                        } else {
+                                            resolve();
+                                        }
+                                    });
+                                });
+                            });
+                        }
+                    };
+                    // 逐块启动下载（全部并发）
+                    for (let i = 0; i < chunks.length; i++) {
+                        const chunk = chunks[i];
+                        if (chunk.downloaded > 0 && chunk.downloaded >= (chunk.end - chunk.start + 1)) {
+                            chunksDone++; // 续传时该块已完成
+                            continue;
+                        }
+                        startChunk(chunk, fd);
+                    }
+                    if (chunksDone >= chunks.length) {
+                        // 续传时所有块已完成
+                        try { fs.closeSync(fd); } catch (e) { }
+                        task._reqs = null;
+                        self._safeUnlink(chunksAbs).then(function () {
+                            fs.rename(partAbs, abs, function (rnErr) {
+                                if (rnErr) { reject({ message: '写入失败：' + rnErr.message }); return; }
+                                self._emit(task, file.rel_path, null, true, 'verifying');
+                                const h = crypto.createHash('sha256');
+                                const rs = fs.createReadStream(abs);
+                                rs.on('data', function (c) { h.update(c); });
+                                rs.on('error', function () {
+                                    self._safeUnlink(abs);
+                                    reject({ verify: true, message: '校验读取失败' });
+                                });
+                                rs.on('end', function () {
+                                    if (file.sha256 && h.digest('hex') !== file.sha256) {
+                                        self._safeUnlink(abs);
+                                        reject({ verify: true, message: 'SHA256 校验不符' });
+                                    } else {
+                                        resolve();
+                                    }
+                                });
+                            });
+                        });
+                    }
+                    function startChunk(chunk, fd) {
+                        // 内部 helper：处理重定向（最多 3 跳），最终进入实际下载逻辑
+                        const doRequest = function (url, redirects) {
+                            if (task.state !== 'downloading') return;
+                            if (myGen !== task._reqGen) return;
+                            const mod = url.indexOf('https:') === 0 ? https : http;
+                            const startByte = chunk.start + chunk.downloaded;
+                            const range = 'bytes=' + startByte + '-' + chunk.end;
+                            const req = mod.get(url, { headers: { Range: range } }, function (res) {
+                                if (task.state !== 'downloading') { try { res.resume(); } catch (e) { } return; }
+                                if (myGen !== task._reqGen) { try { res.resume(); } catch (e) { } return; }
+                                // 重定向跟随（预签名 URL 跨主机可能 302，最多 3 跳）
+                                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 3) {
+                                    res.resume();
+                                    try {
+                                        const newUrl = new URL(res.headers.location, url).toString();
+                                        task._reqs.delete(req);
+                                        doRequest(newUrl, redirects + 1);
+                                    } catch (e) { failAll({ message: '重定向地址非法' }); }
+                                    return;
+                                }
+                                if (res.statusCode !== 206) {
+                                    res.resume();
+                                    if (res.statusCode === 416) {
+                                        chunk.downloaded = chunk.end - chunk.start + 1;
+                                        scheduleFlush();
+                                        chunksDone++;
+                                        chunkDone();
+                                    } else if (res.statusCode === 200 && startByte === chunk.start) {
+                                        // 服务端忽略了 Range → 放弃分块，回退单连接
+                                        settled = true;
+                                        chunksFailed = true;
+                                        if (resumeFlushTimer) { clearTimeout(resumeFlushTimer); resumeFlushTimer = null; }
+                                        task._reqs.forEach(function (r) { try { r.destroy(); } catch (e) { } });
+                                        task._reqs.clear();
+                                        try { fs.closeSync(fd); } catch (e) { }
+                                        self._safeUnlink(partAbs);
+                                        self._safeUnlink(chunksAbs);
+                                        goSingle(finalUrl, 0);
+                                    } else {
+                                        failAll({ message: '服务端返回 ' + res.statusCode });
+                                    }
+                                    return;
+                                }
+                                // —— 块级下载循环 ——
+                                let position = startByte;
+                                let pendingWrites = 0;
+                                let httpEnded = false;
+                                let chunkPaused = false;
+                                const maxPending = 16;
+                                const L = self._lim;
+                                const gate = {
+                                    tryResume: function () {
+                                        if (chunkPaused && pendingWrites < maxPending && (!L.down || L.tokens >= 0)) {
+                                            chunkPaused = false;
+                                            try { res.resume(); } catch (e) { }
+                                        }
+                                    },
+                                    check: function () {
+                                        if (L.down > 0 && L.tokens < 0) {
+                                            L.waiters.add(this);
+                                            if (!chunkPaused) { chunkPaused = true; try { res.pause(); } catch (e) { } }
+                                            self._armRefill();
+                                        } else if (pendingWrites >= maxPending) {
+                                            if (!chunkPaused) { chunkPaused = true; try { res.pause(); } catch (e) { } }
+                                        } else {
+                                            gate.tryResume();
+                                        }
+                                    },
+                                    flush: function () { this.tryResume(); }
+                                };
+                                L.waiters.add(gate);
+                                res.on('data', function (buf) {
+                                    if (task.state !== 'downloading') { try { res.destroy(); } catch (e) { } return; }
+                                    if (L.down > 0) L.tokens -= buf.length;
+                                    pendingWrites++;
+                                    task.received += buf.length;
+                                    task.netReceived += buf.length;
+                                    chunk.downloaded += buf.length;
+                                    self._tick(task);
+                                    fs.write(fd, buf, 0, buf.length, position, function (err) {
+                                        pendingWrites--;
+                                        if (err) {
+                                            if (!settled) failAll({ message: '写入失败：' + err.message });
+                                            return;
+                                        }
+                                        task._diskBytes += buf.length;
+                                        position += buf.length;
+                                        if (pendingWrites < maxPending / 2 && chunkPaused) gate.tryResume();
+                                        if (httpEnded && pendingWrites === 0) {
+                                            L.waiters.delete(gate);
+                                            chunksDone++;
+                                            scheduleFlush();
+                                            chunkDone();
+                                        }
+                                    });
+                                    gate.check();
+                                });
+                                res.on('end', function () {
+                                    httpEnded = true;
+                                    if (pendingWrites === 0 && !settled) {
+                                        L.waiters.delete(gate);
+                                        chunksDone++;
+                                        scheduleFlush();
+                                        chunkDone();
+                                    }
+                                });
+                                res.on('error', function (err) {
+                                    if (!settled) failAll({ message: '网络错误：' + ((err && err.message) || '连接失败') });
+                                });
+                                res.on('aborted', function () {
+                                    if (!settled) failAll({ message: '连接中断' });
+                                });
+                                res.resume();
+                            });
+                            task._reqs.add(req);
+                            req.on('error', function (err) {
+                                if (!settled) failAll({ message: '网络错误：' + ((err && err.message) || '连接失败') });
+                            });
+                        };
+                        // 启动该块的首次请求
+                        doRequest(finalUrl, 0);
+                    }
+                });
+            }
+
+            // —— 单连接断点续传（原有逻辑，被 goChunked 回退/文件太小/无 Range 支持 时调用）——
+            function goSingle(finalUrl, base) {
+                task._reqs = new Set();
+                // base 由 go 内读取 .part 文件大小得出（原逻辑保留）
+                if (!base) {
+                    try {
+                        const st = fs.statSync(partAbs);
+                        if (st.isFile()) base = st.size;
+                    } catch (e) { /* 无断点文件，从头下载 */ }
+                }
                 const em = function (m) { return task.direct ? '来源服务器：' + m : m; };
                 const attempt = function (u, redirects) {
                     if (task.state !== 'downloading') { reject({ paused: true }); return; }
-                    // 按协议选模块（服务端可能 http/https 任一）
+                    if (myGen !== task._reqGen) { reject({ paused: true }); return; }
                     const mod = u.indexOf('https:') === 0 ? https : http;
                     const opts = { headers: {} };
                     if (base > 0) opts.headers.Range = 'bytes=' + base + '-';
                     const req = mod.get(u, opts, function (res) {
-                        // 重定向跟随（服务端/对象存储预签名地址可能 302，最多 3 跳）
                         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 3) {
                             res.resume();
                             try { attempt(new URL(res.headers.location, u).toString(), redirects + 1); }
                             catch (e) { reject({ message: '重定向地址非法' }); }
                             return;
                         }
-                        // 416 断点越界（.part 异常大于服务端文件等）：删 .part 走校验重试链路
                         if (res.statusCode === 416) {
                             res.resume();
                             self._safeUnlink(partAbs);
@@ -402,42 +722,36 @@ class GameDownloadManager extends EventEmitter {
                             reject({ verify: true, message: '断点越界' });
                             return;
                         }
-                        const append = res.statusCode === 206 && base > 0; // 206：断点续传追加
+                        const append = res.statusCode === 206 && base > 0;
                         if (res.statusCode !== 200 && !append) {
                             res.resume();
                             reject({ message: em('服务端返回 ' + res.statusCode) });
                             return;
                         }
-                        let written = append ? base : 0; // 最终文件字节数（含断点已有部分）
-                        if (!append && base > 0) { task.received -= base; task.netReceived -= base; } // 200 重头写：扣除旧断点计数
-                        const hash = crypto.createHash('sha256'); // 本次会话接收字节哈希（无断点时即全量）
+                        let written = append ? base : 0;
+                        if (!append && base > 0) { task.received -= base; task.netReceived -= base; }
                         const stream = fs.createWriteStream(partAbs, { flags: append ? 'a' : 'w' });
                         let settled = false;
                         const fail = function (err) {
                             if (settled) return;
                             settled = true;
-                            self._lim.waiters.delete(gate); // 中断路径清理等待资格（end/close 不清：pend 可能仍有未写盘数据）
+                            self._lim.waiters.delete(gate);
                             try { stream.destroy(); } catch (e) { }
-                            if (myGen !== task._reqGen) { reject({ paused: true }); return; } // 过期请求回调：已被新请求取代，交由调度处理
+                            task._reqs = null;
+                            if (myGen !== task._reqGen) { reject({ paused: true }); return; }
                             if (task.state === 'paused') reject({ paused: true });
                             else reject(err);
                         };
-                        // 请求级写入门控（限速 + 写盘背压统一走挂起队列）：原 res.pipe 会在写盘 drain 时
-                        // 自动 resume 源流覆盖限速 pause（E2E 实测失效根因），故改为手动写盘。recv 收
-                        // chunk 按令牌扣减入队，pump 按"令牌充足 + 写盘可写"节奏落盘；源流由 pause/resume 控制
                         const L = self._lim;
                         const gate = {
-                            pend: [],        // 待写盘数据（限速挂起/背压回退，内存排队量级≈1 秒配额+往返缓冲）
-                            paused: false,   // 源流暂停中（令牌不足）
-                            drainWait: false,// 写盘背压等待中（write 返回 false）
-                            pumping: false,  // pump 重入保护
-                            ended: false,    // 源已结束（挂起数据写完后手动 end 流）
+                            pend: [],
+                            paused: false,
+                            drainWait: false,
+                            pumping: false,
+                            ended: false,
                             recv: function (chunk) {
-                                if (L.down > 0) L.tokens -= chunk.length; // 令牌预扣（挂起数据已计费，放行不再扣）
+                                if (L.down > 0) L.tokens -= chunk.length;
                                 this.pend.push(chunk);
-                                // 令牌不足：先完成挂起登记（入等待集 + 暂停源流 + 武装补充定时器）再尝试写盘。
-                                // 登记必须在 recv 内完成——pump 尾部 res.resume() 会同步触发 data 递归进 recv，
-                                // 此时 pump 被 pumping 守卫挡掉，登记若依赖 pump 会丢失导致末尾 chunk 永久滞留（E2E 实测死锁根因）
                                 if (L.down > 0 && L.tokens < 0) {
                                     L.waiters.add(this);
                                     if (!this.paused) { this.paused = true; try { res.pause(); } catch (e) { } }
@@ -450,23 +764,21 @@ class GameDownloadManager extends EventEmitter {
                                 this.pumping = true;
                                 try {
                                     while (this.pend.length) {
-                                        if (this.drainWait) break;                     // 写盘背压：等 drain
-                                        if (L.down > 0 && L.tokens < 0) {              // 令牌不足：等补充定时器唤醒
+                                        if (this.drainWait) break;
+                                        if (L.down > 0 && L.tokens < 0) {
                                             L.waiters.add(this);
                                             if (!this.paused) { this.paused = true; try { res.pause(); } catch (e) { } }
                                             self._armRefill();
                                             break;
                                         }
                                         const c = this.pend.shift();
-                                        task._diskBytes += c.length; // 磁盘写入字节采集（落盘吞吐曲线数据源）
-                                        if (!stream.write(c)) {                        // 写盘背压：剩余留队
+                                        task._diskBytes += c.length;
+                                        if (!stream.write(c)) {
                                             this.drainWait = true;
-                                            // 背压时同步暂停源流（对齐原 pipe 自动背压行为）：不限速模式下若
-                                            // 网络快于磁盘且不暂停，pend 会无界增长；drain 后由 pump 续写并放行
                                             if (!this.paused) { this.paused = true; try { res.pause(); } catch (e) { } }
                                             const g = this;
                                             stream.once('drain', function () {
-                                                g.drainWait = false; // drain 回调先复位标志再续 pump（否则 pump 首行判 drainWait 死锁）
+                                                g.drainWait = false;
                                                 g.pump();
                                             });
                                             break;
@@ -475,13 +787,11 @@ class GameDownloadManager extends EventEmitter {
                                 } finally { this.pumping = false; }
                                 if (!this.pend.length && !this.drainWait) {
                                     if (this.paused) { this.paused = false; try { res.resume(); } catch (e) { } }
-                                    // 仅在确认无挂起时才移除等待资格：resume 会同步触发 data 递归，recv 可能
-                                    // 刚重新入队挂起并登记等待（此时不能删，否则补充定时器不再唤醒它——死锁）
                                     if (!this.pend.length) L.waiters.delete(this);
                                     this.settleEnd();
                                 }
                             },
-                            flush: function () { this.pump(); }, // setLimits(0)/补充定时器唤醒入口
+                            flush: function () { this.pump(); },
                             settleEnd: function () {
                                 if (this.ended && !this.pend.length && !this.drainWait) {
                                     try { stream.end(); } catch (e) { }
@@ -492,32 +802,27 @@ class GameDownloadManager extends EventEmitter {
                             task.received += chunk.length;
                             task.netReceived += chunk.length;
                             written += chunk.length;
-                            hash.update(chunk);
-                            self._tick(task); // 速度计算 + 500ms 节流推送
-                            gate.recv(chunk); // 限速/写盘门控：令牌不足挂起队列（不 pipe，防 drain 自动 resume）
+                            self._tick(task);
+                            gate.recv(chunk);
                         });
-                        // end/close 不移除等待资格：数据虽已全部送达（end 触发），pend 队列可能仍压着
-                        // 未写盘数据，删除会让补充定时器不再唤醒该门控（E2E 实测收尾死锁根因）；
-                        // 正常收尾由 pump 写空 pend 后自行移除并 end 流，错误路径由 fail 统一清理
                         res.on('end', function () { gate.ended = true; gate.settleEnd(); });
                         res.on('error', fail);
                         res.on('aborted', function () { fail({ message: '连接中断' }); });
                         stream.on('error', fail);
-                        res.resume(); // 手动写盘模式（无 pipe）：data 监听已置 flowing，显式 resume 对齐语义
+                        res.resume();
                         stream.on('finish', function () {
                             if (settled) return;
                             settled = true;
-                            task._req = null;
-                            // 大小校验：下载字节数须等于 file.size（元数据缺 size 时跳过该项）
+                            try { task._reqs.delete(req); } catch (e) { }
+                            task._reqs = null;
                             if (file.size > 0 && written !== file.size) {
                                 self._safeUnlink(partAbs);
                                 reject({ verify: true, message: '文件大小不符' });
                                 return;
                             }
-                            // rename .part → 正式名，随后对正式文件整体流式 SHA256 校验
                             fs.rename(partAbs, abs, function (rnErr) {
                                 if (rnErr) { reject({ message: '写入失败：' + rnErr.message }); return; }
-                                self._emit(task, file.rel_path, null, true, 'verifying'); // 校验中状态（大文件读盘有耗时）
+                                self._emit(task, file.rel_path, null, true, 'verifying');
                                 const h = crypto.createHash('sha256');
                                 const rs = fs.createReadStream(abs);
                                 rs.on('data', function (c) { h.update(c); });
@@ -527,7 +832,7 @@ class GameDownloadManager extends EventEmitter {
                                 });
                                 rs.on('end', function () {
                                     if (file.sha256 && h.digest('hex') !== file.sha256) {
-                                        self._safeUnlink(abs); // 哈希不符：删坏文件交上层重试
+                                        self._safeUnlink(abs);
                                         reject({ verify: true, message: 'SHA256 校验不符' });
                                     } else {
                                         resolve();
@@ -536,14 +841,13 @@ class GameDownloadManager extends EventEmitter {
                             });
                         });
                     });
-                    task._req = req;
+                    task._reqs.add(req);
                     req.on('error', function (err) {
                         if (task.state === 'paused') { reject({ paused: true }); return; }
                         reject({ message: em('网络错误：' + ((err && err.message) || '连接失败')) });
                     });
                 };
-                attempt(url, 0);
-            });
+                attempt(finalUrl, 0);
             }
         });
     }
@@ -567,15 +871,33 @@ class GameDownloadManager extends EventEmitter {
         return u + (u.indexOf('?') >= 0 ? '&' : '?') + 'username=' + encodeURIComponent(task.username || '');
     }
 
-    // 重算任务已接收字节基线：已完成文件之和 + 当前文件断点 .part 大小
+    // 重算任务已接收字节基线：已完成文件之和 + 当前文件断点大小
+    // 分块断点续传优先读 .part-chunks 状态（避免稀疏文件 stat.size 不准），回退 .part stat.size
     _recalcReceived(task) {
         let sum = 0;
         for (let i = 0; i < task.fileIndex && i < task.files.length; i++) sum += task.files[i].size;
         if (task.fileIndex < task.files.length) {
+            const curFile = task.files[task.fileIndex];
+            const base = path.resolve(task.stagingDir, curFile.rel_path);
+            const chunksPath = base + '.part-chunks';
+            const partPath = base + '.part';
+            let got = false;
             try {
-                const st = fs.statSync(path.resolve(task.stagingDir, task.files[task.fileIndex].rel_path) + '.part');
-                if (st.isFile()) sum += st.size;
-            } catch (e) { /* 无断点 */ }
+                if (fs.existsSync(chunksPath)) {
+                    const raw = fs.readFileSync(chunksPath, 'utf8');
+                    const saved = JSON.parse(raw);
+                    if (saved && Array.isArray(saved.chunks)) {
+                        for (let c = 0; c < saved.chunks.length; c++) sum += (saved.chunks[c].downloaded || 0);
+                        got = true;
+                    }
+                }
+            } catch (e) { /* 状态文件损坏 → 回退 stat.size */ }
+            if (!got) {
+                try {
+                    const st = fs.statSync(partPath);
+                    if (st.isFile()) sum += st.size;
+                } catch (e) { /* 无断点 */ }
+            }
         }
         task.received = sum;
         task._lastBytes = sum;

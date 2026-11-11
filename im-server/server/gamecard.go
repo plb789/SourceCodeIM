@@ -4,7 +4,7 @@ package server
 //
 // 链路：管理端按面值批量生成卡号+卡密（明文入库，已拍板）→ 导出发卡 → 玩家在游戏中心标题栏
 // 弹窗输入卡号+卡密核销 → 事务内【条件更新卡 status 0→1（RowsAffected=1 唯一赢家）→ 用户加分 →
-// 流水 reason=card_recharge】——并发/重复提交绝不可能双得。
+// 流水 reason=card_recharge】——并发/重复提交绝不可能双得，任何一步失败整体回滚。
 //
 // 安全归口：
 //   1. 核销资金接口挂 guardRecharge 同款 X-Drive-Token 强校验（自报 username 须与 token 归属一致）；
@@ -413,6 +413,7 @@ func (s *Server) HandleGameCardRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	// 事务归口：核销与加分同事务；条件更新 status 0→1 为唯一赢家判定（并发/重复提交仅一次成功）
 	errTaken := fmt.Errorf("该卡已使用")
+	errUser := fmt.Errorf("用户不存在: %s", username)
 	err := store.DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		res := tx.Model(&model.RechargeCard{}).
@@ -430,7 +431,7 @@ func (s *Server) HandleGameCardRedeem(w http.ResponseWriter, r *http.Request) {
 			return res2.Error
 		}
 		if res2.RowsAffected == 0 {
-			return fmt.Errorf("用户不存在: %s", username)
+			return errUser
 		}
 		return nil
 	})
@@ -438,6 +439,11 @@ func (s *Server) HandleGameCardRedeem(w http.ResponseWriter, r *http.Request) {
 		if err == errTaken {
 			cardRateFail(username)
 			adminFail(w, http.StatusBadRequest, "该卡已使用")
+			return
+		}
+		if err == errUser {
+			cardRateFail(username)
+			adminFail(w, http.StatusBadRequest, "用户不存在")
 			return
 		}
 		logger.Error("卡密核销失败（%s 卡 %s）：%v", username, cardNo, err)
