@@ -63,6 +63,7 @@
       "!elevator/**",
       "!overlay-native/**",
       "!game-visible/**",
+      "!shortcut-helper/**",
       "!Steam/**",
       "!hook/**",
       "!*.log",
@@ -159,6 +160,13 @@
           "*.cat",
           "*.inf",
           "*.dll"
+        ]
+      },
+      {
+        "from": "shortcut-helper/",
+        "to": "shortcut-helper/",
+        "filter": [
+          "shortcut-helper.exe"
         ]
       }
     ]

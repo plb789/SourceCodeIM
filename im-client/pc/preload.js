@@ -1116,6 +1116,29 @@ contextBridge.exposeInMainWorld('desktop', {
     gameWinMinimize: function () {
         return ipcRenderer.invoke('game:win-minimize');
     },
+    // ===== 阶段三百三十二：桌面快捷方式创建/删除/查询 =====
+    // 创建桌面快捷方式 payload={gameId, name, isLocal?, exePath?}
+    // → Promise<{ok, path?, error?}>
+    gameCreateShortcut: function (payload) {
+        return ipcRenderer.invoke('game:create-shortcut', payload);
+    },
+    // 删除桌面快捷方式 payload={name}
+    // → Promise<{ok, error?}>
+    gameDeleteShortcut: function (payload) {
+        return ipcRenderer.invoke('game:delete-shortcut', payload);
+    },
+    // 查询桌面快捷方式是否存在 payload={name}
+    // → Promise<{ok, exists, path?, error?}>
+    gameShortcutExists: function (payload) {
+        return ipcRenderer.invoke('game:shortcut-exists', payload);
+    },
+    // 监听 second-instance 或 first-instance 命令行 --launch-game 自动启动事件
+    // → cb(gameId)
+    onAutoLaunchGame: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('auto-launch-game', function (event, gid) {
+            cb(gid);
+        });
+    },
     // 订阅游戏中心窗最大化状态（maximize/unmaximize 系统级变化与页面加载完成时推送 boolean）
     onGameWinMaximize: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('game-win:maximized', function (event, on) {

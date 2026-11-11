@@ -12,6 +12,7 @@ const path = require('path');
 const os = require('os');
 const https = require('https');
 const { spawn } = require('child_process');
+const child_process = require('child_process'); // spawnSync 快捷方式辅助工具调用
 const agentExecutor = require('./agent-executor.js');
 // 阶段九十：PC 端用户自定义 MCP 服务器管理器（本地 stdio 常驻会话/工具发现/调用，执行器经 require 直接调用）
 const mcpManager = require('./mcp-manager.js');
@@ -321,11 +322,49 @@ var singleInstanceAllowed = app.requestSingleInstanceLock();
 if (!singleInstanceAllowed) {
     app.quit();
 } else {
-    app.on('second-instance', function () {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            if (mainWindow.isMinimized()) {
-                mainWindow.restore();
+    // 阶段三百三十二：桌面快捷方式静默启动 —— second-instance 收到 --launch-game
+    // 时只 send('auto-launch-game', gid) 给渲染层，完全不动 mainWindow 状态
+    // （可见→可见、最小化→最小化、托盘→托盘）。渲染层 launchGame() 正常走完整链路：
+    // 云存档/端口转发/SmartSteamEmu/Overlay 全部联动，与客户端内点击启动等价
+    // 普通双击（无 --launch-game）维持原行为：restore+show+focus 窗口
+    app.on('second-instance', function (event, cmdLine, workingDir) {
+        // 关键坑：second-instance 会继承 first-instance 的 Chromium/Electron 启动开关
+        // （如 --allow-file-access-from-files、--source-shortcut=xxx 等），
+        // 所以不能简单地取 "--launch-game" 后一个元素——要跳过所有以 "--" 开头的开关，
+        // 取第一个不以 "--" 开头的作为真正的 gameId
+        var allArgs = cmdLine || [];
+        var autoLaunchGid = null;
+        for (var i = 0; i < allArgs.length; i++) {
+            if (String(allArgs[i]) === '--launch-game') {
+                for (var j = i + 1; j < allArgs.length; j++) {
+                    var val = String(allArgs[j]);
+                    if (val.indexOf('--') !== 0) { autoLaunchGid = val; break; }
+                }
+                break;
             }
+        }
+
+        if (autoLaunchGid) {
+            // 广播到所有窗口（gameLaunchBroadcast 同口径）
+            // 游戏中心是独立 BrowserWindow（gameStoreWin），不是 mainWindow！
+            var wins = BrowserWindow.getAllWindows();
+            for (var w = 0; w < wins.length; w++) {
+                if (!wins[w].isDestroyed()) wins[w].webContents.send('auto-launch-game', autoLaunchGid);
+            }
+            // 如果游戏中心窗口还没开，先创建它再延迟 send
+            if (!gameStoreWin || gameStoreWin.isDestroyed()) {
+                try { ensureGameStoreWindow(); } catch (eOpen) {}
+                setTimeout(function () {
+                    if (gameStoreWin && !gameStoreWin.isDestroyed()) {
+                        gameStoreWin.webContents.send('auto-launch-game', autoLaunchGid);
+                    }
+                }, 800);
+            }
+            return;
+        }
+        // 普通双击 → 聚焦主窗口（原行为）
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
             mainWindow.show();
             mainWindow.focus();
         }
@@ -693,6 +732,43 @@ function createWindow() {
     mainWindow.webContents.once('did-finish-load', function () {
         console.log('[BOOT] 主窗口页面加载完成（即将显示主窗口） +' + (Date.now() - BOOT_T0) + 'ms');
         revealMainWindow();
+
+        // 阶段三百三十二：first instance 命令行参数解析 —— 快捷方式启动链路
+        // 客户端未运行时双击桌面快捷方式 → 创建窗口后 send('auto-launch-game', gid)
+        try {
+            var bootArgs = (process.argv || []).slice(2);
+            var bootGid = null;
+            for (var k = 0; k < bootArgs.length; k++) {
+                if (bootArgs[k] === '--launch-game') {
+                    // 跳过所有 --xxx 开关（继承的 Chromium 开关），取第一个非 -- 开头的作为 gameId
+                    for (var m = k + 1; m < bootArgs.length; m++) {
+                        var bv = String(bootArgs[m]);
+                        if (bv.indexOf('--') !== 0) { bootGid = bv; break; }
+                    }
+                    break;
+                }
+            }
+            if (bootGid) {
+                // 延迟 500ms 等渲染层初始化（登录态/本地游戏数据加载完毕）
+                setTimeout(function () {
+                    // 确保游戏中心窗口存在（首次启动可能从未打开过 → gameStoreWin 为 null）
+                    if (!gameStoreWin || gameStoreWin.isDestroyed()) {
+                        try { ensureGameStoreWindow(); } catch (eOpen) {}
+                    }
+                    // 全窗口广播 + 游戏中心窗口可能刚创建需要再延迟一次
+                    var wins = BrowserWindow.getAllWindows();
+                    for (var w = 0; w < wins.length; w++) {
+                        if (!wins[w].isDestroyed()) wins[w].webContents.send('auto-launch-game', bootGid);
+                    }
+                    // 如果游戏中心窗口是刚创建的（还在 loading），延迟再 send 一次确保覆盖
+                    if (gameStoreWin && !gameStoreWin.isDestroyed() && gameStoreWin.webContents.isLoading()) {
+                        gameStoreWin.webContents.once('did-finish-load', function () {
+                            gameStoreWin.webContents.send('auto-launch-game', bootGid);
+                        });
+                    }
+                }, 500);
+            }
+        } catch (eBootArgs) { /* 解析失败不阻断启动 */ }
     });
     setTimeout(revealMainWindow, 8000);
 
@@ -2842,7 +2918,128 @@ ipcMain.handle('game:running-list', function () {
     return out;
 });
 
-// 读取用户在库右键“属性”中设置的启动覆盖（args 为原始模板，占位符未替换）：{exe, args}
+// ===== 阶段三百三十二：桌面快捷方式（方案 B：快捷方式指向 im-client.exe --launch-game <gid>）=====
+// 辅助工具路径（打包态 resources/shortcut-helper/shortcut-helper.exe，开发态源码目录）
+function shortcutHelperPath() {
+    var dir = app.isPackaged
+        ? path.join(process.resourcesPath, 'shortcut-helper')
+        : path.join(__dirname, 'shortcut-helper');
+    return path.join(dir, 'shortcut-helper.exe');
+}
+
+// 创建桌面快捷方式：{gameId, name, isLocal?, exePath?}
+// isLocal=true 时 exePath 由渲染层直接传入（用户选的）；
+// isLocal=false 时 main.js 内部用 gameResolveLaunchExe 解析（与 game:launch 同逻辑）
+// 图标：让 Shell 从游戏 exe 资源段读取（SetIconLocation）
+ipcMain.handle('game:create-shortcut', async function (event, data) {
+    try {
+        var helper = shortcutHelperPath();
+        if (!fs.existsSync(helper)) return { ok: false, error: '快捷方式辅助工具缺失' };
+
+        var name = String((data && data.name) || '').trim();
+        var gameId = String((data && data.gameId) || '').trim();
+        var isLocal = !!(data && data.isLocal);
+        if (!name || !gameId) return { ok: false, error: '参数缺失' };
+
+        // 1) 目标程序：im-client.exe（方案 B）
+        var clientExe = app.getPath('exe');
+        var workDir = path.dirname(clientExe);
+        var args = '--launch-game ' + gameId;
+
+        // 2) 图标路径：游戏自身 exe（让 Shell 从资源段读取）
+        var iconPath = '';
+        if (isLocal) {
+            iconPath = String((data && data.exePath) || '').trim();
+        } else {
+            // 优先用渲染层传的 launchExe / launchName + installDir（与 launchGame 同源，最准）
+            var passedInstallDir = String((data && data.installDir) || '').trim();
+            var passedLaunchExe = String((data && data.launchExe) || '').trim();
+            var passedLaunchName = String((data && data.launchName) || '').trim();
+            var reg2 = gameLaunchRegLoad();
+            var r2 = gameResolveLaunchExe(reg2, gameId, {
+                installDir: passedInstallDir,
+                launchExe: passedLaunchExe,
+                launchName: passedLaunchName
+            });
+            iconPath = r2 ? r2.exe : '';
+        }
+        // 兜底：游戏 exe 无效时用 im-client.exe 图标（快捷方式仍能双击启动）
+        if (!iconPath || !fs.existsSync(iconPath)) {
+            iconPath = clientExe;
+        }
+
+        // 3) 调 helper 工具（数组传参自动处理路径含空格）
+        var helperArgs = [
+            'create',
+            '--name', name,
+            '--target', clientExe,
+            '--args', args,
+            '--workdir', workDir,
+            '--icon', iconPath + ',0',
+            '--desktop',
+            '--overwrite'
+        ];
+
+        var result = child_process.spawnSync(helper, helperArgs, {
+            encoding: 'utf-8',
+            timeout: 10000,
+            windowsHide: true
+        });
+
+        if (result.status !== 0) {
+            return { ok: false, error: (result.stderr || '未知错误').trim() };
+        }
+        try { return JSON.parse((result.stdout || '').trim()); }
+        catch (e) { return { ok: false, error: '辅助工具输出解析失败' }; }
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '创建快捷方式异常' };
+    }
+});
+
+// 删除桌面快捷方式：{gameId, name}
+ipcMain.handle('game:delete-shortcut', async function (event, data) {
+    try {
+        var helper = shortcutHelperPath();
+        if (!fs.existsSync(helper)) return { ok: false, error: '快捷方式辅助工具缺失' };
+
+        var name = String((data && data.name) || '').trim();
+        if (!name) return { ok: false, error: '参数缺失' };
+
+        var result = child_process.spawnSync(helper, [
+            'delete', '--name', name, '--desktop'
+        ], { encoding: 'utf-8', timeout: 10000, windowsHide: true });
+
+        if (result.status !== 0) {
+            return { ok: false, error: (result.stderr || '未知错误').trim() };
+        }
+        try { return JSON.parse((result.stdout || '').trim()); }
+        catch (e) { return { ok: false, error: '辅助工具输出解析失败' }; }
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '删除快捷方式异常' };
+    }
+});
+
+// 查询快捷方式是否存在：{name} → {ok, exists, path?}
+ipcMain.handle('game:shortcut-exists', async function (event, data) {
+    try {
+        var helper = shortcutHelperPath();
+        if (!fs.existsSync(helper)) return { ok: false, error: '快捷方式辅助工具缺失' };
+
+        var name = String((data && data.name) || '').trim();
+        if (!name) return { ok: false, error: '参数缺失' };
+
+        var result = child_process.spawnSync(helper, [
+            'exists', '--name', name, '--desktop'
+        ], { encoding: 'utf-8', timeout: 10000, windowsHide: true });
+
+        try { return JSON.parse((result.stdout || '').trim()); }
+        catch (e) { return { ok: false, error: '辅助工具输出解析失败', exists: false }; }
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '查询快捷方式异常', exists: false };
+    }
+});
+
+// 读取用户在库右键"属性"中设置的启动覆盖（args 为原始模板，占位符未替换）：{exe, args}
 ipcMain.handle('game:get-launch-options', function (event, data) {
     var gameId = String((data && data.gameId) || '').trim();
     var item = gameLaunchRegLoad()[gameId] || {};

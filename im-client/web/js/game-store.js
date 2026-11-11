@@ -3758,6 +3758,26 @@
     window.addEventListener('blur', function () { if (ctxOpen) closeCtxMenu(); });
     document.addEventListener('scroll', function () { if (ctxOpen) closeCtxMenu(); }, true);
 
+    // 阶段三百三十二：桌面快捷方式右键菜单项（商店游戏 / 本地游戏共用逻辑）
+    // 查询快捷方式是否存在 → 决定显示「创建」或「删除」
+    async function buildShortcutMenuItem(name, onClickCreate, onClickDelete) {
+        if (!DESKTOP || !DESKTOP.gameShortcutExists) return null;
+        try {
+            var sanitized = String(name || '').replace(/[\\/:*?"<>|]/g, '_');
+            var r = await DESKTOP.gameShortcutExists({ name: sanitized });
+            var exists = r && r.exists;
+            var label = exists ? T('删除桌面快捷方式') : T('创建桌面快捷方式');
+            return {
+                label: label,
+                onClick: function () {
+                    if (exists) onClickDelete(); else onClickCreate();
+                }
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
     function openLibCtxMenu(gid, x, y) {
         var entry = state.lib[gid] || {};
         var lib = entry.lib;
@@ -3770,7 +3790,40 @@
         else if (libState === 3 || libState === 4) items.push({ label: T('启动游戏'), onClick: function () { launchGame(gid); } });
         items.push({ label: T('属性'), onClick: function () { openPropModal(gid); } });
         items.push({ label: T('移出游戏库'), danger: true, onClick: function () { removeFromLib(gid); } });
-        openCtxMenu(x, y, items, g.cover ? { img: assetUrl(g.cover), name: g.name } : null);
+
+        // 异步注入快捷方式菜单项（插入「属性」和「移出游戏库」之间）
+        var headerImg = g.cover ? assetUrl(g.cover) : '';
+        var headerName = g.name || '';
+        var header = headerImg ? { img: headerImg, name: headerName } : null;
+
+        buildShortcutMenuItem(headerName,
+            /* onClickCreate */ function () {
+                if (!DESKTOP || !DESKTOP.gameCreateShortcut) { toast(T('请在 PC 客户端中操作')); return; }
+                // 与 launchGame 同源的 exe 元数据 → 主进程 gameResolveLaunchExe 能精确解析真实游戏 exe
+                var meta = gameLaunchMeta(gid);
+                var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
+                DESKTOP.gameCreateShortcut({
+                    gameId: gid, name: headerName,
+                    installDir: libDir, launchExe: meta.exe, launchName: meta.name
+                }).then(function (r) {
+                    if (r && r.ok) toast(T('桌面快捷方式已创建'));
+                    else toast((r && r.error) || T('创建快捷方式失败'));
+                });
+            },
+            /* onClickDelete */ function () {
+                if (!DESKTOP || !DESKTOP.gameDeleteShortcut) return;
+                DESKTOP.gameDeleteShortcut({ name: headerName }).then(function (r) {
+                    if (r && r.ok) toast(T('桌面快捷方式已删除'));
+                    else toast((r && r.error) || T('删除快捷方式失败'));
+                });
+            }
+        ).then(function (shortcutItem) {
+            if (shortcutItem) {
+                // 插入位置：属性之后、移出之前（items[1]=属性, items[2]=移出 → 在索引 2 前插入）
+                items.splice(items.length - 1, 0, shortcutItem);
+            }
+            openCtxMenu(x, y, items, header);
+        });
     }
 
     // ==================== 本地游戏操作（启动/右键菜单/属性弹窗/移除） ====================
@@ -3817,7 +3870,29 @@
         else items.push({ label: T('启动游戏'), onClick: function () { launchLocalGame(lid); } });
         items.push({ label: T('属性'), onClick: function () { openLocalPropModal(lid); } });
         items.push({ label: T('从库中移除'), danger: true, onClick: function () { removeLocalGame(lid); } });
-        openCtxMenu(x, y, items, lo && lo.icon ? { img: lo.icon, name: lo.name } : null);
+
+        var headerName = lo && lo.name || '';
+        var header = lo && lo.icon ? { img: lo.icon, name: headerName } : null;
+
+        buildShortcutMenuItem(headerName,
+            /* onClickCreate */ function () {
+                if (!DESKTOP || !DESKTOP.gameCreateShortcut) { toast(T('请在 PC 客户端中操作')); return; }
+                DESKTOP.gameCreateShortcut({ gameId: lid, name: headerName, isLocal: true, exePath: lo ? lo.exe : '' }).then(function (r) {
+                    if (r && r.ok) toast(T('桌面快捷方式已创建'));
+                    else toast((r && r.error) || T('创建快捷方式失败'));
+                });
+            },
+            /* onClickDelete */ function () {
+                if (!DESKTOP || !DESKTOP.gameDeleteShortcut) return;
+                DESKTOP.gameDeleteShortcut({ name: headerName }).then(function (r) {
+                    if (r && r.ok) toast(T('桌面快捷方式已删除'));
+                    else toast((r && r.error) || T('删除快捷方式失败'));
+                });
+            }
+        ).then(function (shortcutItem) {
+            if (shortcutItem) items.splice(items.length - 1, 0, shortcutItem);
+            openCtxMenu(x, y, items, header);
+        });
     }
 
     // 从库中移除本地游戏（仅移除库内条目，不删本机文件；二次确认走自绘弹窗）
@@ -5652,6 +5727,17 @@
                 state.lib[gid].lib.play_seconds = (state.lib[gid].lib.play_seconds || 0) + seconds;
             }
             refreshViews();
+        });
+    }
+
+    // 阶段三百三十二：桌面快捷方式双击 → 主进程 send('auto-launch-game', gid)
+    if (DESKTOP && DESKTOP.onAutoLaunchGame) {
+        DESKTOP.onAutoLaunchGame(function (gid) {
+            gid = String(gid || '').trim();
+            if (!gid) return;
+            var gidStr = gid;
+            var isLocal = gidStr.indexOf('local_') === 0 || (state.localLib && state.localLib[gid]);
+            if (isLocal) launchLocalGame(gid); else launchGame(gid);
         });
     }
 
