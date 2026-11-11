@@ -1111,18 +1111,18 @@
     // 页面加载时存在已保存凭据则自动登录（预填登录框便于用户感知当前账号）
     // 乐观显示：立即切换到聊天界面再后台连接，避免等待服务端登录响应期间闪现登录窗口；
     // 连接失败或登录失败时再回退到登录界面（见 LOGIN_RESP 失败分支与 im_connect_failed 监听）
-    // 阶段三百零九：多账号场景下的 autoLogin 策略（QQ 风格）
-    // 单账号 + autoLogin=true → 自动连接；多账号时禁用 autoLogin → 让 initLoginMode 显示账号选择面板
-    // 原因：QQ 有多个历史账号时默认显示账号选择界面，不会自动登录其中一个
+    // 阶段三百零九修复：多账号场景下只要有 autoLogin=true 的账号就自动连接，
+    // 不再因为账号数>=2 就忽略 autoLogin 字段（用户勾选了"自动登录选中账号"就是明确意图）
     (function autoLogin() {
         var saved = null;
         try {
             var arr = loadAccounts();
-            // 多账号时禁用自动登录——让 initLoginMode 显示账号选择面板让用户选
-            if (arr.length >= 2) {
-                saved = null;
-            } else if (arr.length === 1 && arr[0].autoLogin && arr[0].p) {
-                saved = { u: arr[0].u, p: arr[0].p };
+            // 遍历查找 autoLogin=true 且有密码的账号（全局只允许一个 autoLogin，保存逻辑已保证）
+            for (var ai = 0; ai < arr.length; ai++) {
+                if (arr[ai].autoLogin && arr[ai].p) {
+                    saved = { u: arr[ai].u, p: arr[ai].p };
+                    break;
+                }
             }
         } catch (e) {}
         if (saved && saved.u && saved.p) {
@@ -8999,6 +8999,10 @@
             try { ok = JSON.parse(msg.content).result === 'ok'; } catch (e) {}
         }
         if (ok) {
+            // 阶段三百一十 + P0 修复：一进入 ok 分支立即解锁退出锁——
+            // 重连/登录场景 clearAuth() 已把 _loggedOut 置 true，而积分设置（下方）需要调用
+            // setPointsBalance（内部首行 if _loggedOut return）；先解锁再设积分，保证重连也能刷分
+            _loggedOut = false;
             // 登录持久化：登录成功保存凭据，刷新页面时自动重登保持登录状态
             // window._lastPassword 为本次连接使用的密码（socket.js connect 时记录）
             // 阶段三百零九：QR码登录的密码是 qrc:xxx 临时令牌，不保存为凭据
@@ -9014,8 +9018,15 @@
             // 头像缺失修复：从登录响应 JSON 中读取服务端下发的自己头像（服务端归口），
             // 同步更新导航栏头像与消息气泡头像数据源
             // 原代码：无 avatar 解析，导航栏头像登录后为空，消息气泡无头像可用
+            var loginInfo = null;
+            try { loginInfo = JSON.parse(msg.content); } catch (e) { loginInfo = null; }
+            // 阶段七十八（P0 修复）：积分设置独立于 avatar/profile try 块——
+            // 之前 setPointsBalance 在大 try 块末尾，前面 setNavAvatar/upsertAccount 任何一行报错
+            // 被 catch 吞掉后积分永远不设（红包链路因为不在此 try 内所以能正常刷新）
+            if (loginInfo && typeof loginInfo.points === 'number') {
+                setPointsBalance(loginInfo.points);
+            }
             try {
-                var loginInfo = JSON.parse(msg.content);
                 if (loginInfo && loginInfo.avatar) {
                     myAvatar = loginInfo.avatar;
                 }
@@ -9043,12 +9054,7 @@
                 if (loginInfo && loginInfo.chunk_size > 0) {
                     CHUNK_SIZE = loginInfo.chunk_size;
                 }
-                // 阶段七十八：登录响应携带 AI 积分余额（服务端归口），标题栏 ⚡ 积分显示
-                if (loginInfo && typeof loginInfo.points === 'number') {
-                    setPointsBalance(loginInfo.points);
-                }
             } catch (e) {}
-            _loggedOut = false; // 登录成功 → 解锁（迟到的帧现在是合法的了）
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
             dsConsumePendingShareLink(); // /s/<code> 站内分享链接：登录成功即弹分享详情（一次性）
