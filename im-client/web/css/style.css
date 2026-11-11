@@ -1506,6 +1506,41 @@ div.login-accounts-avatar-ph {
     gap: 10px;
 }
 
+/* 服务号头部"关注/取消"按钮（放大镜旁）：
+   和 logout-btn 同容器，但用文字+小标签样式和周围 SVG 图标按钮区分 */
+#official-sub-header-btn {
+    width: auto !important;
+    height: auto !important;
+    padding: 5px 12px;
+    font-size: 13px;
+    border-radius: 14px;
+    border: 1px solid var(--primary, #07c160);
+    color: var(--primary, #07c160);
+    background: transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .15s ease;
+    line-height: 1;
+}
+#official-sub-header-btn:hover {
+    background: var(--primary, #07c160);
+    color: #fff;
+}
+#official-sub-header-btn:active {
+    transform: scale(0.96);
+}
+/* 已关注态：灰底，主色边框，hover 变红提示可取消 */
+#official-sub-header-btn.official-subscribed {
+    border-color: var(--border, #ddd);
+    color: var(--text-light, #888);
+    background: transparent;
+}
+#official-sub-header-btn.official-subscribed:hover {
+    border-color: #e64340;
+    color: #e64340;
+    background: transparent;
+}
+
 .chat-status {
     font-size: 12px;
     color: var(--text-light);
@@ -2772,6 +2807,257 @@ html.m .mobile-plus-panel:not(.hidden) {
     color: var(--text);
     font-size: 20px;
     border-radius: 8px;
+}
+/* 关注/取消关注按钮：固定宽度、不被 flex 拉伸、右侧对齐、垂直居中 */
+.official-search-list .req-btn {
+    flex-shrink: 0;
+    align-self: center;
+    min-width: 64px;
+    padding: 5px 12px;
+    font-size: 12px;
+    text-align: center;
+    border-radius: 14px;
+    line-height: 1;
+}
+/* 已关注按钮：默认小圆圈内 SVG 对勾（全平台兼容，字体 glyph 无关），hover 展开成"取消关注"胶囊 */
+.official-sub-btn {
+    flex-shrink: 0;
+    align-self: center;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary, #f4f4f4);
+    color: var(--primary);
+    cursor: pointer;
+    padding: 0;
+    border-color: var(--border) !important;
+    background: var(--bg-tertiary, #f4f4f4) !important;
+    color: var(--primary) !important;
+    transition: width 0.2s ease, height 0.2s ease, border-radius 0.2s ease, padding 0.2s ease, background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    overflow: hidden;
+}
+.official-sub-btn svg {
+    flex-shrink: 0;
+    opacity: 1;
+    transition: opacity 0.15s ease;
+}
+.official-sub-btn .official-sub-hover-label {
+    display: none;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.official-sub-btn:hover {
+    width: auto !important;
+    height: 28px !important;
+    min-width: 68px;
+    border-radius: 14px !important;
+    padding: 4px 14px !important;
+    border-color: #e64340 !important;
+    background: rgba(230, 67, 64, 0.08) !important;
+    color: #e64340 !important;
+}
+.official-sub-btn:hover svg {
+    opacity: 0;
+    display: none;
+}
+.official-sub-btn:hover .official-sub-hover-label {
+    display: inline;
+}
+/* 触屏设备（无 hover）：直接显示胶囊按钮，不用小圆圈（触屏没法触发 hover 展开） */
+@media (hover: none) {
+    .official-sub-btn {
+        width: auto !important;
+        height: 28px !important;
+        min-width: 60px;
+        border-radius: 14px !important;
+        padding: 4px 12px !important;
+        border-color: var(--border) !important;
+        background: var(--bg-tertiary, #f4f4f4) !important;
+        color: var(--text-light, #888) !important;
+    }
+    .official-sub-btn svg {
+        display: none;
+    }
+    .official-sub-btn .official-sub-hover-label {
+        display: inline;
+        color: inherit;
+        font-weight: 500;
+    }
+    /* 触屏点击/长按 → 红色提示可取消（微信同款长按反馈） */
+    .official-sub-btn:active,
+    .official-sub-btn:active .official-sub-hover-label {
+        border-color: #e64340 !important;
+        color: #e64340 !important;
+        transform: scale(0.95);
+    }
+}
+
+/* ===== 阶段二百九十三：服务号分组标题 + 已关注标签 + 订阅数 ===== */
+.official-section-title {
+    list-style: none;
+    font-size: 11px;
+    color: var(--text-light);
+    padding: 14px 14px 4px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+.official-section-divider {
+    list-style: none;
+    height: 1px;
+    background: var(--divider);
+    margin: 6px 12px;
+}
+.conv-sub-tag {
+    display: inline-block;
+    font-size: 10px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 4px;
+    vertical-align: middle;
+    font-weight: normal;
+}
+.conv-sub-count {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--text-light);
+    margin-left: 4px;
+}
+
+/* ===== 阶段二百九十三 P1+P2：服务号居中卡片流（微信服务号同款） ===== */
+/* 卡片外层：居中占位，不参与气泡左右布局 */
+.official-card-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 10px 0;
+    width: 100%;
+}
+/* 卡片基类 */
+.official-card {
+    width: 85%;
+    max-width: 460px;
+    background: var(--bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    font-size: 14px;
+    line-height: 1.5;
+}
+/* 顶部横幅 */
+.official-card-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: linear-gradient(135deg, var(--primary, #10aeff) 0%, color-mix(in srgb, var(--primary) 80%, #fff) 100%);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+}
+.official-card-banner .ocb-icon {
+    font-size: 14px;
+}
+/* 标题行（notify 专用：标题 + badge 同行） */
+.official-card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 14px 10px;
+    gap: 10px;
+}
+.official-card-title-row .official-card-title {
+    padding: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+/* 标题 */
+.official-card-title {
+    padding: 12px 14px 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text, #1a1a1a);
+}
+/* 正文 */
+.official-card-body {
+    padding: 0 14px 12px;
+    font-size: 14px;
+    color: var(--text-secondary, #555);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+/* 分隔线 */
+.official-card-divider {
+    height: 1px;
+    background: var(--border, #eee);
+    margin: 4px 14px;
+}
+/* 字段列表（notify 键值对） */
+.official-card-fields {
+    padding: 4px 14px 6px;
+}
+.oc-field-row {
+    display: flex;
+    padding: 5px 0;
+    font-size: 13px;
+}
+.oc-field-label {
+    flex-shrink: 0;
+    width: 80px;
+    color: var(--text-light, #999);
+}
+.oc-field-value {
+    flex: 1;
+    color: var(--text, #1a1a1a);
+    word-break: break-all;
+}
+/* 底部按钮 */
+.official-card-footer {
+    padding: 8px 14px 12px;
+    text-align: right;
+}
+.official-card-link {
+    display: inline-block;
+    padding: 5px 16px;
+    background: var(--primary, #10aeff);
+    color: #fff !important;
+    text-decoration: none;
+    font-size: 13px;
+    border-radius: 14px;
+    transition: opacity 0.15s;
+}
+.official-card-link:hover {
+    opacity: 0.85;
+}
+/* 状态 badge（notify 专属） */
+.oc-status-badge {
+    flex-shrink: 0;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+.oc-status-green  { background: rgba(22,163,74,0.12);  color: #16a34a; }
+.oc-status-red    { background: rgba(220,38,38,0.12);  color: #dc2626; }
+.oc-status-blue   { background: rgba(16,174,255,0.12); color: var(--primary, #10aeff); }
+.oc-status-orange { background: rgba(249,115,22,0.12); color: #f97316; }
+/* text 卡片：无字段、有正文的简洁样式 */
+.official-card-text .official-card-title {
+    padding-bottom: 4px;
+}
+/* notify 卡片：比 text 稍宽 */
+.official-card-notify {
+    max-width: 480px;
 }
 
 .conv-list {
@@ -22632,3 +22918,98 @@ html.m .moments-cam-bottom { bottom: calc(34px + env(safe-area-inset-bottom, 0px
 /* 手机端隐藏全部自绘滚动条（触摸设备滚动靠手势，微信同款无滚动条；
    与 chat.js mouseover 入口守卫双保险——即使滑块 DOM 已挂载也永不显示） */
 html.m .osb-thumb { display: none !important; }
+
+/* ============ 服务号底部自定义菜单（微信同款） ============ */
+/* 定位：覆盖在 #input-bar 下方（服务号会话时 input-bar 被隐藏） */
+.off-m-bar {
+    position: relative;
+    display: none;                         /* 默认隐藏，JS 加 .show 才显示 */
+    flex-shrink: 0;
+    background: var(--chat-bg, #f5f5f5);
+    border-top: 1px solid var(--border, #e5e5e5);
+    z-index: 10;
+}
+.off-m-bar.show { display: block; }
+
+/* 一级按钮行：均分整行 */
+.off-m-row {
+    display: flex;
+    align-items: stretch;
+    height: 48px;
+    background: var(--bg, #fff);
+}
+
+/* 一级按钮：无边框、无圆角、均分、点击高亮 */
+.off-m-btn {
+    flex: 1 1 0;
+    border: none;
+    border-right: 1px solid var(--border, #e5e5e5);
+    background: transparent;
+    cursor: pointer;
+    font-size: 15px;
+    color: var(--text-primary, #333);
+    font-weight: 400;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    position: relative;
+    transition: background .12s ease;
+}
+.off-m-btn:last-child { border-right: none; }
+.off-m-btn:hover { background: var(--bg-tertiary, #f4f4f4); }
+.off-m-btn:active { background: var(--bg-tertiary, #f4f4f4); }
+.off-m-btn.active { background: var(--bg-tertiary, #f4f4f4); color: var(--primary, #07c160); }
+
+/* 二级菜单箭头 */
+.off-m-arrow {
+    font-size: 10px;
+    margin-left: 3px;
+    opacity: 0.7;
+}
+
+/* 二级菜单浮层：绝对定位展开在按钮上方，向上弹出 */
+.off-m-sub {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 48px;                          /* 紧贴一级按钮上方 */
+    background: var(--bg, #fff);
+    border-radius: 6px;
+    box-shadow: 0 -2px 12px rgba(0,0,0,.10), 0 -6px 20px rgba(0,0,0,.06);
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: max-height .22s ease, opacity .16s ease;
+    z-index: 20;
+}
+.off-m-sub.show {
+    max-height: 320px;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* 二级菜单按钮 */
+.off-m-sub-btn {
+    display: block;
+    width: 100%;
+    padding: 12px 18px;
+    border: none;
+    border-bottom: 1px solid var(--border, #f0f0f0);
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-primary, #333);
+    text-align: left;
+    transition: background .1s;
+}
+.off-m-sub-btn:last-child { border-bottom: none; }
+.off-m-sub-btn:hover { background: var(--bg-tertiary, #f4f4f4); color: var(--primary, #07c160); }
+.off-m-sub-btn:active { background: var(--bg-tertiary, #f4f4f4); }
+
+/* 手机端：菜单更高一些，便于触摸 */
+html.m .off-m-row { height: 50px; }
+html.m .off-m-sub { bottom: 50px; }
+html.m .off-m-btn { font-size: 16px; }
+html.m .off-m-sub-btn { padding: 14px 18px; font-size: 15px; }

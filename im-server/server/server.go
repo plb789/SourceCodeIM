@@ -1127,7 +1127,8 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，实时可见、重新登录后历史查询不丢失
 		// 阶段二百七十六：纳入名片消息(107)——同 86 口径，历史渲染名片气泡
 		// 阶段二百九十二：纳入联机邀请(111)——同 86 口径，实时可见、重新登录后历史查询不丢失
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92, 104, 107, 111}, msg.ToUser)
+		// 阶段二百九十三：纳入服务号消息(117)——同 86 口径，HISTORY 路径可见
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92, 104, 107, 111, 117}, msg.ToUser)
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
@@ -1136,8 +1137,9 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，历史渲染位置气泡
 		// 阶段二百七十六：纳入名片消息(107)——同 86 口径，历史渲染名片气泡
 		// 阶段二百九十二：纳入联机邀请(111)——同 86 口径，历史渲染联机邀请卡片
+		// 阶段二百九十三：纳入服务号消息(117)——服务号推送落在 to_user=订阅用户，HISTORY 路径必须纳入
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5, 86, 92, 104, 107, 111}, c.username, msg.ToUser, msg.ToUser, c.username)
+			[]int{2, 4, 5, 86, 92, 104, 107, 111, 117}, c.username, msg.ToUser, msg.ToUser, c.username)
 		// 阶段七十一：AI 多会话历史归口——智能体会话按消息盖戳 ai_session_id 过滤
 		// （0=默认会话存量全量；普通私聊无会话语义不受影响。会话归属由上行声明、服务端校验）。
 		// 图片/文件消息不经 AI_CHAT 通道，恒为默认会话盖戳（已知边界，后续可按需扩展上行声明）

@@ -49,6 +49,7 @@
             <nav class="m-nav" id="m-nav">
                 <button class="m-nav-item active" data-view="games"><span class="m-nav-ico">🎮</span>我的游戏</button>
                 <button class="m-nav-item" data-view="stats"><span class="m-nav-ico">📊</span>赞助统计</button>
+                <button class="m-nav-item" data-view="official"><span class="m-nav-ico">📢</span>服务号</button>
                 <button class="m-nav-item" data-view="gateway"><span class="m-nav-ico">🖥️</span>网关部署</button>
             </nav>
             <div class="m-side-foot">
@@ -96,6 +97,36 @@
                 </div>
             </section>
 
+            <!-- ===== 服务号管理 ===== -->
+            <section class="m-view hidden" id="m-view-official">
+                <header class="m-head">
+                    <h2>服务号管理</h2>
+                    <button id="m-off-new" class="admin-btn primary">+ 创建服务号</button>
+                </header>
+                <div class="m-card">
+                    <input id="m-off-kw" class="admin-input" placeholder="搜索服务号名称 / 描述" style="width:280px" value="">
+                    <button id="m-off-refresh" class="admin-btn small">🔄 刷新</button>
+                </div>
+                <div class="m-table-wrap">
+                    <table class="m-table" style="width:100%">
+                        <thead>
+                            <tr>
+                                <th style="width:50px">ID</th>
+                                <th>服务号</th>
+                                <th style="width:160px">AppID</th>
+                                <th style="width:80px">状态</th>
+                                <th style="width:80px">审核</th>
+                                <th style="width:70px">订阅</th>
+                                <th style="width:110px">推送量</th>
+                                <th style="width:80px">创建时间</th>
+                                <th style="width:320px">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="m-off-tbody"><tr><td colspan="9" class="m-empty">加载中…</td></tr></tbody>
+                    </table>
+                </div>
+            </section>
+
             <!-- ===== 网关部署 ===== -->
             <section class="m-view hidden" id="m-view-gateway">
                 <header class="m-head"><h2>网关部署</h2></header>
@@ -108,6 +139,344 @@
                 </div>
             </section>
         </main>
+
+    <!-- ============ 服务号弹窗：编辑/创建 ============ -->
+    <div id="m-off-edit-mask" class="m-mask hidden">
+        <div class="m-modal">
+            <h3 class="m-modal-title" id="m-off-edit-title">创建服务号</h3>
+            <div class="m-form">
+                <div class="m-row"><label>展示名 *</label><input id="m-off-e-name" class="admin-input" maxlength="64"></div>
+                <div class="m-row"><label>头像 URL</label><input id="m-off-e-avatar" class="admin-input" placeholder="/static/upload/xxx.jpg" maxlength="255"></div>
+                <div class="m-row"><label>简介</label><input id="m-off-e-desc" class="admin-input" maxlength="255"></div>
+                <div class="m-row"><label>每日推送上限（0=不限）</label><input id="m-off-e-max" type="number" min="0" class="admin-input" value="0"></div>
+                <div class="m-row"><label>推送需审核（开启后推送必须经过您或管理员审核才能发送）</label><input type="checkbox" id="m-off-e-audit" checked></div>
+            </div>
+            <div class="m-modal-btns">
+                <button id="m-off-edit-close" class="admin-btn">取消</button>
+                <button id="m-off-edit-ok" class="admin-btn primary">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 服务号弹窗：菜单管理 ============ -->
+    <div id="m-off-menu-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:760px">
+            <h3 class="m-modal-title">菜单管理 — <span id="m-off-menu-title" style="font-weight:normal;font-size:14px"></span></h3>
+            <p class="m-head-tip">最多 3 个一级菜单，每个一级下最多 5 个二级菜单。<br>
+                <strong>action</strong>=click 点击触发自动回复（value 填触发关键词）；
+                <strong>action</strong>=view 点击跳转 URL（value 填完整网址）。</p>
+            <div class="m-form">
+                <textarea id="m-off-menu-json" class="admin-input" rows="16" spellcheck="false"
+                    style="font-family:Consolas,Menlo,monospace;font-size:13px"
+                    placeholder='[
+  {
+    "name": "浏览",
+    "action": "click",
+    "value": "browse_root",
+    "children": [
+      { "name": "最新活动", "action": "view", "value": "https://example.com/activity" },
+      { "name": "产品列表", "action": "view", "value": "https://example.com/products" },
+      { "name": "我的订单", "action": "click", "value": "my_orders" }
+    ]
+  },
+  { "name": "在线客服", "action": "click", "value": "contact_service" },
+  { "name": "个人中心", "action": "view", "value": "https://example.com/profile" }
+]'></textarea>
+            </div>
+            <div class="m-modal-btns">
+                <button id="m-off-menu-fill" class="admin-btn small">📝 填入示例</button>
+                <button id="m-off-menu-close" class="admin-btn">关闭</button>
+                <button id="m-off-menu-ok" class="admin-btn primary">保存菜单</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 服务号弹窗：模板管理 ============ -->
+    <div id="m-off-tpl-mask" class="m-mask hidden">
+        <div class="m-modal">
+            <h3 class="m-modal-title">模板管理 — <span id="m-off-tpl-title" style="font-weight:normal;font-size:14px"></span></h3>
+            <div class="m-head-tip" style="margin-bottom:8px">模板正文支持 <code>{{变量名}}</code> 占位符，发送时通过 template_data 传入实际值。</div>
+            <div class="m-modal-btns" style="justify-content:flex-start">
+                <button id="m-off-tpl-add" class="admin-btn primary small">+ 新增模板</button>
+            </div>
+            <table class="m-table" style="width:100%">
+                <thead><tr>
+                    <th style="width:160px">模板 ID</th>
+                    <th style="width:120px">名称</th>
+                    <th style="width:110px">类型</th>
+                    <th>正文预览</th>
+                    <th style="width:180px">操作</th>
+                </tr></thead>
+                <tbody id="m-off-tpl-tbody"><tr><td colspan="5" class="m-empty">加载中…</td></tr></tbody>
+            </table>
+            <div class="m-modal-btns" style="margin-top:12px"><button id="m-off-tpl-close" class="admin-btn">关闭</button></div>
+        </div>
+    </div>
+
+    <!-- ============ 服务号弹窗：模板编辑 ============ -->
+    <div id="m-off-tpl-edit-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:680px">
+            <h3 class="m-modal-title" id="m-off-tpl-edit-title">新增模板</h3>
+            <div class="m-form">
+                <div class="m-row"><label>模板 ID（留空自动生成 tpl_xxxxxxxx）</label><input id="m-off-te-id" class="admin-input" maxlength="64" placeholder="tpl_xxxxxxxx"></div>
+                <div class="m-row"><label>模板名称 *</label><input id="m-off-te-name" class="admin-input" maxlength="64"></div>
+                <div class="m-row"><label>模板类型 *</label>
+                    <select id="m-off-te-type" class="admin-input" style="width:180px">
+                        <option value="text">纯文本 text</option>
+                        <option value="notify">通知卡片 notify</option>
+                        <option value="news">图文卡片 news</option>
+                        <option value="news_list">多图文列表 news_list</option>
+                        <option value="miniapp">小程序入口 miniapp</option>
+                    </select>
+                </div>
+
+                <!-- === text 模板正文（单文本域） === -->
+                <div id="m-off-te-text-wrap">
+                    <div class="m-row"><label>模板正文 *（支持 {{key}} 占位符）</label><textarea id="m-off-te-content" class="admin-input" rows="4" placeholder="您的订单 {{order_no}} 状态：{{status}}"></textarea></div>
+                </div>
+
+                <!-- === notify 通知卡片模板字段 === -->
+                <div id="m-off-te-notify-wrap" style="display:none">
+                    <div class="m-row"><label>标题</label><input id="m-off-te-n-title" class="admin-input" placeholder="如：您的订单 {{order_no}} 已发货"></div>
+                    <div class="m-row"><label>正文</label><textarea id="m-off-te-n-content" class="admin-input" rows="2" placeholder="快递员 {{courier}}，电话 {{phone}}"></textarea></div>
+                    <div class="m-row"><label>状态文案</label><input id="m-off-te-n-status" class="admin-input" style="width:180px" placeholder="如：已发货"></div>
+                    <div class="m-row"><label>状态徽章颜色</label>
+                        <select id="m-off-te-n-badge" class="admin-input" style="width:140px">
+                            <option value="green">绿色 green</option>
+                            <option value="red">红色 red</option>
+                            <option value="blue" selected>蓝色 blue</option>
+                            <option value="orange">橙色 orange</option>
+                        </select>
+                    </div>
+                    <div class="m-row">
+                        <label>字段列表（键值对）</label>
+                        <div style="width:100%">
+                            <div id="m-off-te-n-fields"></div>
+                            <button type="button" class="admin-btn small" onclick="window._moffTplAddNField()">+ 添加字段</button>
+                        </div>
+                    </div>
+                    <div class="m-row"><label>跳转 URL</label><input id="m-off-te-n-url" class="admin-input" placeholder="https://..."></div>
+                    <div class="m-row"><label>按钮文字</label><input id="m-off-te-n-link" class="admin-input" style="width:180px" placeholder="如：查看物流"></div>
+                </div>
+
+                <!-- === news 图文卡片模板字段 === -->
+                <div id="m-off-te-news-wrap" style="display:none">
+                    <div class="m-row"><label>标题</label><input id="m-off-te-ne-title" class="admin-input" placeholder="如：{{product_name}} 上新啦！"></div>
+                    <div class="m-row"><label>封面图 URL</label><input id="m-off-te-ne-image" class="admin-input" placeholder="https://..."></div>
+                    <div class="m-row"><label>摘要/描述</label><textarea id="m-off-te-ne-content" class="admin-input" rows="2" placeholder="简短描述，支持 {{key}}"></textarea></div>
+                    <div class="m-row"><label>跳转 URL</label><input id="m-off-te-ne-url" class="admin-input" placeholder="https://..."></div>
+                    <div class="m-row"><label>按钮文字</label><input id="m-off-te-ne-link" class="admin-input" style="width:180px" placeholder="如：立即查看"></div>
+                </div>
+
+                <!-- === news_list 多图文模板字段 === -->
+                <div id="m-off-te-nlist-wrap" style="display:none">
+                    <div class="m-row"><label>列表标题</label><input id="m-off-te-nl-title" class="admin-input" placeholder="如：精选推荐"></div>
+                    <div class="m-row">
+                        <label>图文项列表</label>
+                        <div style="width:100%">
+                            <div id="m-off-te-nl-items"></div>
+                            <button type="button" class="admin-btn small" onclick="window._moffTplAddNItem()">+ 添加图文项</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- === miniapp 小程序模板字段 === -->
+                <div id="m-off-te-mini-wrap" style="display:none">
+                    <div class="m-row"><label>标题</label><input id="m-off-te-mi-title" class="admin-input" placeholder="如：{{title}}"></div>
+                    <div class="m-row"><label>图标 URL</label><input id="m-off-te-mi-icon" class="admin-input" placeholder="https://..."></div>
+                    <div class="m-row"><label>副标题</label><input id="m-off-te-mi-subtitle" class="admin-input" placeholder="如：{{subtitle}}"></div>
+                    <div class="m-row"><label>小程序跳转 URL / 路径</label><input id="m-off-te-mi-url" class="admin-input" placeholder="https://..."></div>
+                    <div class="m-row"><label>按钮文字</label><input id="m-off-te-mi-link" class="admin-input" style="width:180px" placeholder="如：进入小程序"></div>
+                </div>
+
+                <div class="m-row"><label>渲染示例（帮助预览效果）</label><textarea id="m-off-te-example" class="admin-input" rows="2" placeholder="输入 template_data 键值对预览，如 order_no=SF123456, status=已发货"></textarea></div>
+            </div>
+            <div class="m-modal-btns">
+                <button id="m-off-te-close" class="admin-btn">取消</button>
+                <button id="m-off-te-ok" class="admin-btn primary">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 服务号弹窗：关键词管理 ============ -->
+    <div id="m-off-kw-mask" class="m-mask hidden">
+        <div class="m-modal">
+            <h3 class="m-modal-title">关键词自动回复</h3>
+            <div class="m-head-tip" style="margin-bottom:8px">用户在服务号会话发送消息时自动匹配并回复。精确匹配优先于包含匹配。</div>
+            <div class="m-form" style="border:1px solid var(--admin-field-hint);border-radius:6px;padding:12px;margin-bottom:12px">
+                <div class="m-row"><label>触发词 *</label><input id="m-off-kw-new-keyword" class="admin-input" maxlength="64" placeholder="如：客服"></div>
+                <div class="m-row"><label>回复内容 *</label><textarea id="m-off-kw-new-reply" class="admin-input" rows="2" placeholder="客服电话 400-xxx-xxxx"></textarea></div>
+                <div class="m-row"><label>匹配模式</label>
+                    <select id="m-off-kw-new-match" class="admin-input" style="width:140px">
+                        <option value="exact">精确匹配</option>
+                        <option value="fuzzy" selected>包含匹配</option>
+                    </select>
+                </div>
+                <div class="m-modal-btns"><button id="m-off-kw-new-btn" class="admin-btn primary small">+ 新增</button></div>
+            </div>
+            <table class="m-table" style="width:100%">
+                <thead><tr>
+                    <th style="width:50px">ID</th>
+                    <th style="width:100px">匹配模式</th>
+                    <th style="width:120px">触发词</th>
+                    <th>回复内容</th>
+                    <th style="width:60px">启用</th>
+                    <th style="width:140px">操作</th>
+                </tr></thead>
+                <tbody id="m-off-kw-tbody"><tr><td colspan="6" class="m-empty">加载中…</td></tr></tbody>
+            </table>
+            <div class="m-modal-btns" style="margin-top:12px"><button id="m-off-kw-close" class="admin-btn">关闭</button></div>
+        </div>
+    </div>
+
+    <!-- ============ 服务号弹窗：密钥查看 ============ -->
+    <div id="m-off-secret-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:480px">
+            <h3 class="m-modal-title">服务号凭证</h3>
+            <div id="m-off-secret-val" style="background:rgba(0,0,0,0.3);padding:16px;border-radius:8px;font-family:monospace;font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-all"></div>
+            <p class="m-head-tip" style="margin-top:8px">AppSecret 是企业系统对接 API 的签名密钥，等同于密码，请妥善保管。</p>
+            <div class="m-modal-btns">
+                <button id="m-off-secret-close" class="admin-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 服务号弹窗：审核队列 ============ -->
+    <div id="m-off-audit-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:800px">
+            <h3 class="m-modal-title">待审核消息</h3>
+            <div class="m-head-tip" style="margin-bottom:8px">您推送需要审核的消息在此处等待审批，审核通过后立即发送，驳回需填写理由。</div>
+            <table class="m-table" style="width:100%">
+                <thead><tr>
+                    <th style="width:50px">ID</th>
+                    <th style="width:160px">消息标题</th>
+                    <th style="width:80px">推送类型</th>
+                    <th style="width:80px">接收人数</th>
+                    <th style="width:120px">创建时间</th>
+                    <th style="width:160px">操作</th>
+                </tr></thead>
+                <tbody id="m-off-audit-tbody"><tr><td colspan="6" class="m-empty">加载中…</td></tr></tbody>
+            </table>
+            <div class="m-modal-btns">
+                <button id="m-off-audit-close" class="admin-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 服务号弹窗：手动推送 ============ -->
+    <div id="m-off-send-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:640px">
+            <h3 class="m-modal-title" id="m-off-send-title">推送消息</h3>
+            <div id="m-off-send-audit-tip" class="m-head-tip" style="margin-bottom:12px"></div>
+            <div class="m-form">
+                <div class="m-row">
+                    <label>推送模式</label>
+                    <select id="m-off-send-type" class="admin-input" style="width:180px">
+                        <option value="single">单推（1 用户）</option>
+                        <option value="batch">批量（最多 1000 用户）</option>
+                        <option value="broadcast">群发（所有订阅者）</option>
+                    </select>
+                </div>
+                <!-- P2：消息样式下拉（content_type） -->
+                <div class="m-row">
+                    <label>消息样式</label>
+                    <select id="m-off-send-ctype" class="admin-input" style="width:180px" onchange="if(window.updateMoffSendCardUI) window.updateMoffSendCardUI()">
+                        <option value="text">📄 文本通知</option>
+                        <option value="notify">📢 通知卡片（订单/物流）</option>
+                        <option value="news">🖼️ 图文卡片（P3）</option>
+                    </select>
+                </div>
+                <div class="m-row" id="m-off-send-to-wrap">
+                    <label>接收人 *</label>
+                    <textarea id="m-off-send-to" class="admin-input" rows="2"
+                        placeholder="单个用户名，如 user1"></textarea>
+                </div>
+                <div class="m-row">
+                    <label>使用模板（可选）</label>
+                    <select id="m-off-send-tpl" class="admin-input" style="width:420px">
+                        <option value="">不使用模板，手动填写内容</option>
+                    </select>
+                </div>
+                <div class="m-row">
+                    <label>消息标题（可选）</label>
+                    <input id="m-off-send-title-input" class="admin-input" placeholder="如：订单发货通知" maxlength="64">
+                </div>
+                <div class="m-row">
+                    <label>消息正文 *</label>
+                    <textarea id="m-off-send-content" class="admin-input" rows="4"
+                        placeholder="填写推送内容。如果选择了模板，正文将由模板渲染填充"></textarea>
+                </div>
+                <div class="m-row">
+                    <label>点击跳转链接（可选）</label>
+                    <input id="m-off-send-url" class="admin-input" placeholder="https://example.com/detail/123">
+                </div>
+                <!-- P2：notify 卡片专属字段（content_type=notify 时显示） -->
+                <div id="m-off-send-notify-wrap" style="display:none;border-top:1px dashed var(--border);margin-top:8px;padding-top:12px">
+                    <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">📢 通知卡片专属字段（订单/物流/账单场景）</div>
+                    <div class="m-row">
+                        <label>状态（可选）</label>
+                        <input id="m-off-send-status" class="admin-input" style="width:180px" placeholder="如：已发货 / 待支付">
+                    </div>
+                    <div class="m-row">
+                        <label>状态颜色</label>
+                        <select id="m-off-send-badge" class="admin-input" style="width:120px">
+                            <option value="blue">🔵 蓝色（默认）</option>
+                            <option value="green">🟢 绿色（成功）</option>
+                            <option value="orange">🟠 橙色（警告）</option>
+                            <option value="red">🔴 红色（错误）</option>
+                        </select>
+                    </div>
+                    <div class="m-row" style="align-items:flex-start">
+                        <label>卡片字段</label>
+                        <div style="flex:1">
+                            <div id="m-off-send-fields"></div>
+                            <button type="button" class="admin-btn small" onclick="window._moffAddField()" style="margin-top:4px">+ 添加字段行</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="m-modal-btns">
+                <button id="m-off-send-close" class="admin-btn">取消</button>
+                <button id="m-off-send-btn" class="admin-btn primary">📤 发送</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 推送历史弹窗 -->
+    <div id="m-off-history-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:820px">
+            <h3 class="m-modal-title" id="m-off-history-title">推送历史</h3>
+            <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+                <select id="m-off-history-status" class="admin-input" style="width:160px">
+                    <option value="">全部状态</option>
+                    <option value="pending">⏳ 待发送</option>
+                    <option value="sent">✅ 已发送</option>
+                    <option value="failed">❌ 失败</option>
+                    <option value="recalled">↩️ 已撤回</option>
+                </select>
+                <button id="m-off-history-refresh" class="admin-btn small">🔄 刷新</button>
+                <span id="m-off-history-summary" style="margin-left:auto;color:var(--text-light);font-size:12px"></span>
+            </div>
+            <div style="max-height:480px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+                <table class="admin-table" style="margin:0">
+                    <thead>
+                        <tr>
+                            <th style="width:60px">ID</th>
+                            <th style="width:80px">类型</th>
+                            <th style="width:140px">接收人</th>
+                            <th>内容 / 标题</th>
+                            <th style="width:80px">状态</th>
+                            <th style="width:80px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="m-off-history-tbody"></tbody>
+                </table>
+            </div>
+            <div class="m-modal-footer">
+                <button id="m-off-history-close" class="admin-btn">关闭</button>
+            </div>
+        </div>
+    </div>
     </div>
 
     <!-- 自绘确认弹窗（无系统弹窗） -->
@@ -275,10 +644,74 @@
         </div>
     </div>
 
+    <!-- ============ 服务号弹窗：API 文档 ============ -->
+    <div id="m-off-api-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:920px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column">
+            <h3 class="m-modal-title">服务号 API 接入文档
+                <button id="m-off-api-close" class="admin-btn small" style="float:right;margin-top:-3px">✕ 关闭</button>
+            </h3>
+            <!-- 服务号信息栏 -->
+            <div style="background:rgba(0,0,0,0.03);padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;line-height:1.8">
+                服务号：<strong id="m-off-api-name">—</strong> &nbsp;·&nbsp;
+                AppID：<code id="m-off-api-appid">—</code> &nbsp;·&nbsp;
+                AppSecret：<code id="m-off-api-secret">—</code> &nbsp;·&nbsp;
+                接口域名：<code id="m-off-api-host">—</code>
+            </div>
+            <!-- API 分组 tab -->
+            <div style="display:flex;gap:4px;border-bottom:1px solid var(--admin-field-hint);margin-bottom:10px;flex-wrap:wrap">
+                <button class="admin-btn small m-api-tab active" data-apitab="auth"       style="border-radius:0">🔐 鉴权获取 Token</button>
+                <button class="admin-btn small m-api-tab"        data-apitab="notify"     style="border-radius:0">📤 单发消息</button>
+                <button class="admin-btn small m-api-tab"        data-apitab="batch"      style="border-radius:0">📥 批量发送</button>
+                <button class="admin-btn small m-api-tab"        data-apitab="menu"       style="border-radius:0">📋 自定义菜单</button>
+                <button class="admin-btn small m-api-tab"        data-apitab="template"   style="border-radius:0">📑 模板列表</button>
+                <button class="admin-btn small m-api-tab"        data-apitab="stats"      style="border-radius:0">📊 数据统计</button>
+            </div>
+
+            <!-- 语言 tab -->
+            <div style="display:flex;gap:4px;margin-bottom:8px">
+                <button class="admin-btn small m-lang-tab active" data-lang="curl">cURL</button>
+                <button class="admin-btn small m-lang-tab"        data-lang="python">Python</button>
+                <button class="admin-btn small m-lang-tab"        data-lang="node">Node.js</button>
+                <button class="admin-btn small m-lang-tab"        data-lang="java">Java</button>
+                <button class="admin-btn small m-lang-tab"        data-lang="go">Go</button>
+            </div>
+
+            <!-- 文档内容区 -->
+            <div id="m-off-api-body" style="flex:1;overflow-y:auto;min-height:300px;background:#1e1e1e;border-radius:6px;color:#d4d4d4">
+                <!-- 动态填充 -->
+            </div>
+            <div style="display:flex;justify-content:flex-end;margin-top:8px;gap:8px">
+                <button id="m-off-api-copy" class="admin-btn primary">📋 复制当前代码</button>
+                <button id="m-off-api-ok" class="admin-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 服务号二维码弹窗 -->
+    <div id="m-off-qr-mask" class="m-mask hidden">
+        <div class="m-modal" style="width:420px;text-align:center">
+            <h3 class="m-modal-title">扫码关注服务号</h3>
+            <div style="padding:8px 16px">
+                <div id="m-off-qr-box" style="display:inline-block;margin:12px 0;min-width:200px"></div>
+                <div style="margin:8px 0"><strong id="m-off-qr-name" style="font-size:16px"></strong></div>
+                <div style="font-size:12px;color:var(--text-light);margin:4px 0"><code id="m-off-qr-appid" style="background:rgba(255,255,255,0.08);padding:1px 6px;border-radius:3px"></code></div>
+                <div id="m-off-qr-desc" style="font-size:13px;color:var(--text-light);margin:8px 0 4px"></div>
+                <div style="font-size:11px;color:var(--text-light);word-break:break-all;margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
+                    <div style="margin-bottom:4px;margin-top:-6px">订阅链接：</div>
+                    <code id="m-off-qr-url" style="font-size:11px"></code>
+                </div>
+            </div>
+            <div class="m-modal-btns">
+                <button id="m-off-qr-close" class="admin-btn primary">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 自绘 Toast -->
     <div id="m-toast" class="m-toast hidden"></div>
 
     <script src="js/sha256.js?v=1.0"></script>
-    <script src="js/merchant.js?v=1.7"></script>
+    <script src="js/lib/qrcode.min.js?v=1.4.4"></script>
+    <script src="js/merchant.js?v=2.1"></script>
 </body>
 </html>

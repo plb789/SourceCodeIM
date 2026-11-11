@@ -1586,13 +1586,16 @@ func (OfficialKeyword) TableName() string { return "im_official_keyword" }
 // OfficialTemplate 服务号模板消息 im_official_template
 // content 支持 {{key}} 占位符；API 对接时传 template_id + template_data 即可。
 type OfficialTemplate struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	AccountID  uint      `gorm:"column:account_id;not null;index" json:"account_id"`
-	TemplateID string    `gorm:"column:template_id;type:varchar(64);uniqueIndex;not null" json:"template_id"`
-	Name       string    `gorm:"column:name;type:varchar(64);not null" json:"name"`
-	Content    string    `gorm:"column:content;type:text" json:"content"`
-	Example    string    `gorm:"column:example;type:text" json:"example"`
-	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID   uint      `gorm:"column:account_id;not null;index" json:"account_id"`
+	TemplateID  string    `gorm:"column:template_id;type:varchar(64);uniqueIndex;not null" json:"template_id"`
+	Name        string    `gorm:"column:name;type:varchar(64);not null" json:"name"`
+	// ContentType 模板渲染类型：text 纯文本 / notify 通知卡片 / news 图文卡片 / news_list 多图文 / miniapp 小程序入口
+	// 缺省 text（纯文本消息模板），与 OfficialMessage.content_type 同口径
+	ContentType string    `gorm:"column:content_type;type:varchar(16);default:'text'" json:"content_type"`
+	Content     string    `gorm:"column:content;type:text" json:"content"`
+	Example     string    `gorm:"column:example;type:text" json:"example"`
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
 // TableName 表名沿用 im_ 前缀约定

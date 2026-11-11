@@ -321,7 +321,8 @@
         OFFICIAL_MSG: 117,       // 下行：服务号消息推送（核心，落库 msg_type=117）
         OFFICIAL_MSG_ACK: 118,   // 下行：审核状态变更通知（审核人/发起方）
         OFFICIAL_SEARCH: 119,    // 双向：上行关键词；下行搜索结果 JSON
-        OFFICIAL_CARD: 120       // 双向：聊天内服务号名片（类似联系人名片 107）
+        OFFICIAL_CARD: 120,      // 双向：聊天内服务号名片（类似联系人名片 107）
+        OFFICIAL_RECALL: 121     // 下行：服务号消息撤回通知（商户后台撤回后推给订阅用户；content: {msg_id, official_msg_id}）
     };
 
     // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/

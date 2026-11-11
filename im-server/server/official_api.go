@@ -72,10 +72,11 @@ const (
 )
 
 // officialAPIIdentity 鉴权成功后的身份注入上下文
+// 阶段二百九十三 P2 fix：必须加 json tag，否则 Redis payload 是 snake_case 时反序列化全部为空
 type officialAPIIdentity struct {
-	AccountID uint
-	AppID     string
-	Owner     string
+	AccountID uint   `json:"account_id"`
+	AppID     string `json:"app_id"`
+	Owner     string `json:"owner"`
 }
 
 type ctxKeyOfficialAPI struct{}
@@ -347,6 +348,10 @@ func (s *Server) handleOfficialNotify(w http.ResponseWriter, r *http.Request) {
 		URL          string            `json:"url"`
 		LinkBtn      string            `json:"link_btn"`
 		NeedAudit    *bool             `json:"need_audit"`
+		// 阶段二百九十三 P2：notify 卡片扩展字段
+		Status     string        `json:"status"`
+		BadgeColor string        `json:"badge_color"`
+		Fields     []NotifyField `json:"fields"`
 	}
 	if err := jsonReadBody(r, &req, 1<<20); err != nil {
 		adminFail(w, http.StatusBadRequest, "请求体错误")
@@ -363,9 +368,14 @@ func (s *Server) handleOfficialNotify(w http.ResponseWriter, r *http.Request) {
 		needAudit = acc.NeedAudit
 	}
 
-	// content_type 默认 text
-	if strings.TrimSpace(req.ContentType) == "" {
+	// content_type 默认 text + 白名单校验
+	req.ContentType = strings.TrimSpace(req.ContentType)
+	if req.ContentType == "" {
 		req.ContentType = "text"
+	}
+	if !isValidOfficialContentType(req.ContentType) {
+		adminFail(w, http.StatusBadRequest, "content_type 不合法，可选：text/notify/news/news_list/miniapp")
+		return
 	}
 	// type 默认 single
 	if strings.TrimSpace(req.Type) == "" {
@@ -379,8 +389,9 @@ func (s *Server) handleOfficialNotify(w http.ResponseWriter, r *http.Request) {
 			req.Content = renderOfficialTemplate(tpl.Content, req.TemplateData)
 		}
 	}
-	if strings.TrimSpace(req.Content) == "" {
-		adminFail(w, http.StatusBadRequest, "消息内容为空")
+	// 阶段二百九十三 P2 fix：notify 类型可以没有 content（有 title+fields 就够了），放宽校验
+	if strings.TrimSpace(req.Content) == "" && strings.TrimSpace(req.Title) == "" && len(req.Fields) == 0 {
+		adminFail(w, http.StatusBadRequest, "消息内容/标题/字段至少填一项")
 		return
 	}
 
@@ -452,6 +463,10 @@ func (s *Server) handleOfficialNotify(w http.ResponseWriter, r *http.Request) {
 		LinkBtn:     req.LinkBtn,
 		TriggerType: "api",
 		MessageID:   om.ID,
+		// 阶段二百九十三 P2：notify 卡片扩展字段
+		Status:     req.Status,
+		BadgeColor: req.BadgeColor,
+		Fields:     req.Fields,
 	}
 	var sentCount int
 	switch req.Type {
@@ -515,12 +530,18 @@ func (s *Server) handleOfficialBatchNotify(w http.ResponseWriter, r *http.Reques
 			req.Content = renderOfficialTemplate(tpl.Content, req.TemplateData)
 		}
 	}
-	if strings.TrimSpace(req.Content) == "" {
-		adminFail(w, http.StatusBadRequest, "消息内容为空")
+	// batch-notify struct 没有 Fields，只校验 content/title
+	if strings.TrimSpace(req.Content) == "" && strings.TrimSpace(req.Title) == "" {
+		adminFail(w, http.StatusBadRequest, "消息内容/标题至少填一项")
 		return
 	}
-	if strings.TrimSpace(req.ContentType) == "" {
+	req.ContentType = strings.TrimSpace(req.ContentType)
+	if req.ContentType == "" {
 		req.ContentType = "text"
+	}
+	if !isValidOfficialContentType(req.ContentType) {
+		adminFail(w, http.StatusBadRequest, "content_type 不合法，可选：text/notify/news/news_list/miniapp")
+		return
 	}
 
 	sreq := OfficialSendReq{

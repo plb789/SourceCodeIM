@@ -274,6 +274,7 @@ const (
 	MsgTypeOfficialMsgAck    = 118 // 下行：审核状态变更通知（审核人/发起方收；content: {message_id, status, remark}）
 	MsgTypeOfficialSearch    = 119 // 双向：上行搜索服务号（content: keyword）；下行搜索结果 JSON
 	MsgTypeOfficialCard      = 120 // 双向：聊天内服务号名片（类似联系人名片 107；content: {app_id,name,avatar,desc}；落库 msg_type=120）
+	MsgTypeOfficialRecall    = 121 // 下行：服务号消息撤回通知（商户后台撤回已发消息后推给订阅用户；content: {msg_id, official_msg_id}；客户端按 msg_id 移除对应气泡）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

@@ -1,4 +1,4 @@
-// merchant.js - 商户后台（游戏入驻运营控制台）
+﻿// merchant.js - 商户后台（游戏入驻运营控制台）
 // 运行环境：普通浏览器（同源 /api/merchant/*，Bearer 会话 im_merchant_token）。
 // 主题跟随主界面（localStorage im_theme），全部颜色引用 style.css 现有主题变量；
 // 滚动条复用全站自绘悬浮滑块（.osb-thumb）；确认/提示一律自绘弹窗与 Toast，禁止 alert/confirm/prompt。
@@ -45,11 +45,26 @@
         }
         return fetch(path, opts).then(function (r) {
             if (r.status === 401) { clearToken(); showLogin(); }
-            return r.json().catch(function () { return { ok: false, msg: '网络异常' }; });
+            return r.json().catch(function () { return { ok: false, msg: '网络异常' }; }).then(function (result) {
+                // adminJSON 统一返回 {"ok":true, "data":{业务字段}}；把 data 平铺到顶层，
+                // 这样 result.list / result.account / result.app_secret 都能直接取，
+                // 避免每个调用点都写 result.data.xxx（与 official_admin.js 保持一致）
+                if (result && result.ok && result.data && typeof result.data === 'object') {
+                    var flat = {};
+                    for (var k in result.data) {
+                        if (Object.prototype.hasOwnProperty.call(result.data, k)) flat[k] = result.data[k];
+                    }
+                    flat.ok = true;
+                    if (result.msg) flat.msg = result.msg;
+                    return flat;
+                }
+                return result;
+            });
         }).catch(function () { return { ok: false, msg: '网络异常，请稍后重试' }; });
     }
     function unwrap(res) {
-        if (res && res.ok) return res.data || {};
+        // api() 已将 adminJSON 的 data 层平铺到顶层，成功时 res 即业务字段 + ok:true
+        if (res && res.ok) return res;
         toast((res && res.msg) || '操作失败');
         throw new Error((res && res.msg) || 'failed');
     }
@@ -158,7 +173,7 @@
         osbInit($('m-scroll'));
     }
     function switchView(v) {
-        var names = ['games', 'stats', 'gateway'];
+        var names = ['games', 'stats', 'official', 'gateway'];
         names.forEach(function (n) {
             $('m-view-' + n).classList.toggle('hidden', n !== v);
         });
@@ -172,6 +187,7 @@
         } else {
             stopGamesRefresh();
             if (v === 'stats') loadStats();
+            else if (v === 'official') loadMoffList();
         }
     }
     $('m-nav').addEventListener('click', function (e) {
@@ -1252,6 +1268,818 @@
             });
     });
 
+    // ==================== 商户服务号管理 ====================
+    // 对应后端路由组：/api/merchant/official/*（official_merchant.go，merchantGuard 鉴权）
+
+    var moffEditingId = 0;
+    var moffCurrentAccount = 0;
+    var moffTplEditingId = 0;
+    var moffKwAccount = 0;
+    var moffAuditAccount = 0;
+    var moffBound = false;
+
+    function escHtml(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+    function loadMoffList() {
+        var kw = $('m-off-kw').value.trim();
+        var q = '?page=1&size=100';
+        if (kw) q += '&keyword=' + encodeURIComponent(kw);
+        api('GET', '/api/merchant/official/accounts' + q).then(function (result) {
+            if (!result || !result.ok) { renderMoffList({ list: [] }); return; }
+            renderMoffList(result);
+            bindMoffEvents();
+        });
+    }
+
+    function fmtMoffTime(t) { if (!t) return '-'; try { return new Date(t).toLocaleString(); } catch (e) { return String(t); } }
+
+    // 当前商户账号列表缓存（给 API 文档弹窗等使用）
+    var _moffAccounts = [];
+
+    function renderMoffList(result) {
+        var tbody = $('m-off-tbody');
+        var list = result.list || [];
+        _moffAccounts = list.slice();
+        if (list.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" class="m-empty">暂无服务号，点击右上角「+ 创建服务号」开始</td></tr>';
+            return;
+        }
+        var rows = '';
+        list.forEach(function (a) {
+            var statusHtml = a.status === 0 ? '<span style="color:#2ecc71">● 正常</span>' :
+                             a.status === 1 ? '<span style="color:#e74c3c">● 已停用</span>' :
+                             '<span style="color:#f39c12">● 审核中</span>';
+            var auditHtml = a.need_audit ? '<span style="color:#f39c12">需审核</span>' : '<span style="color:var(--admin-field-hint)">直通</span>';
+            rows += '<tr>' +
+                '<td>' + a.id + '</td>' +
+                '<td><strong>' + escHtml(a.display_name || '') + '</strong><div style="font-size:12px;color:var(--admin-field-hint);margin-top:2px">' + escHtml(a.description || '') + '</div></td>' +
+                '<td><code>' + escHtml(a.app_id || '') + '</code></td>' +
+                '<td>' + statusHtml + '</td>' +
+                '<td>' + auditHtml + '</td>' +
+                '<td>' + (a.subscribe_count || 0) + '</td>' +
+                '<td style="font-size:12px">' + (a.today_sent || 0) + ' / ' + (a.max_per_day || '∞') + '</td>' +
+                '<td style="font-size:12px">' + fmtMoffTime(a.create_time) + '</td>' +
+                '<td>' +
+                '<button class="admin-btn small" data-moff-op="menu" data-id="' + a.id + '">菜单</button> ' +
+                '<button class="admin-btn small" data-moff-op="kw" data-id="' + a.id + '">关键词</button> ' +
+                '<button class="admin-btn small" data-moff-op="tpl" data-id="' + a.id + '">模板</button> ' +
+                '<button class="admin-btn small primary" data-moff-op="send" data-id="' + a.id + '">📤 推送</button> ' +
+                '<button class="admin-btn small" data-moff-op="qr" data-id="' + a.id + '">📱 二维码</button> ' +
+                '<button class="admin-btn small" data-moff-op="history" data-id="' + a.id + '">📜 历史</button> ' +
+                '<button class="admin-btn small" data-moff-op="audit" data-id="' + a.id + '">审核</button> ' +
+                '<button class="admin-btn small" data-moff-op="secret" data-id="' + a.id + '">密钥</button> ' +
+                '<button class="admin-btn small" data-moff-op="api" data-id="' + a.id + '">🔑 API</button> ' +
+                '<button class="admin-btn small" data-moff-op="edit" data-id="' + a.id + '">编辑</button> ' +
+                '<button class="admin-btn small danger" data-moff-op="del" data-id="' + a.id + '">删除</button>' +
+                '</td>' +
+                '</tr>';
+        });
+        tbody.innerHTML = rows;
+        tbody.querySelectorAll('[data-moff-op]').forEach(function (el) {
+            el.addEventListener('click', function () {
+                var op = el.getAttribute('data-moff-op');
+                var id = Number(el.getAttribute('data-id'));
+                handleMoffRowOp(op, id);
+            });
+        });
+    }
+
+    function handleMoffRowOp(op, id) {
+        if (op === 'edit') return openMoffEdit(id);
+        if (op === 'del') return confirmDeleteMoff(id);
+        if (op === 'menu') return openMoffMenu(id);
+        if (op === 'kw') return openMoffKwList(id);
+        if (op === 'tpl') return openMoffTplList(id);
+        if (op === 'send') return openMoffSend(id);
+        if (op === 'secret') return resetMoffSecret(id);
+        if (op === 'audit') return openMoffAudit(id);
+        if (op === 'api') return openMoffApiDocs(id);
+        if (op === 'history') return openMoffHistory(id);
+        if (op === 'qr') return openMoffQR(id);
+    }
+
+    function bindMoffEvents() {
+        if (moffBound) return;
+        moffBound = true;
+        $('m-off-refresh').addEventListener('click', loadMoffList);
+        $('m-off-new').addEventListener('click', function () { openMoffEdit(0); });
+        $('m-off-kw').addEventListener('keydown', function (e) { if (e.key === 'Enter') loadMoffList(); });
+
+        $('m-off-edit-close').addEventListener('click', function () { $('m-off-edit-mask').classList.add('hidden'); });
+        $('m-off-edit-ok').addEventListener('click', saveMoffEdit);
+
+        $('m-off-menu-close').addEventListener('click', function () { $('m-off-menu-mask').classList.add('hidden'); });
+        $('m-off-menu-ok').addEventListener('click', saveMoffMenu);
+        $('m-off-menu-fill').addEventListener('click', function () {
+            $('m-off-menu-json').value = MOFF_MENU_EXAMPLE;
+            toast('已填入示例，修改后点保存');
+        });
+
+        $('m-off-tpl-close').addEventListener('click', function () { $('m-off-tpl-mask').classList.add('hidden'); });
+        $('m-off-tpl-add').addEventListener('click', function () { openMoffTplEdit(0); });
+        $('m-off-te-close').addEventListener('click', function () { $('m-off-tpl-edit-mask').classList.add('hidden'); });
+        $('m-off-te-ok').addEventListener('click', saveMoffTplEdit);
+        $('m-off-te-type').addEventListener('change', renderMoffTplEditTypeUI);
+
+        $('m-off-kw-close').addEventListener('click', function () { $('m-off-kw-mask').classList.add('hidden'); });
+        $('m-off-kw-new-btn').addEventListener('click', saveMoffKw);
+
+        $('m-off-secret-close').addEventListener('click', function () { $('m-off-secret-mask').classList.add('hidden'); });
+
+        $('m-off-audit-close').addEventListener('click', function () { $('m-off-audit-mask').classList.add('hidden'); });
+
+        // 手动推送弹窗
+        $('m-off-send-close').addEventListener('click', function () { $('m-off-send-mask').classList.add('hidden'); });
+        $('m-off-send-type').addEventListener('change', updateMoffSendTypeUI);
+        $('m-off-send-btn').addEventListener('click', doMoffSend);
+    }
+
+    // ==================== 编辑 / 创建 ====================
+    function openMoffEdit(id) {
+        moffEditingId = id;
+        $('m-off-edit-title').textContent = id ? '编辑服务号 #' + id : '创建服务号';
+        $('m-off-e-name').value = '';
+        $('m-off-e-avatar').value = '';
+        $('m-off-e-desc').value = '';
+        $('m-off-e-max').value = '0';
+        $('m-off-e-audit').checked = true;
+        if (id) {
+            api('GET', '/api/merchant/official/accounts/' + id).then(function (result) {
+                if (!result.account) return toast('加载失败');
+                var a = result.account;
+                $('m-off-e-name').value = a.display_name || '';
+                $('m-off-e-avatar').value = a.avatar || '';
+                $('m-off-e-desc').value = a.description || '';
+                $('m-off-e-max').value = a.max_per_day || 0;
+                $('m-off-e-audit').checked = !!a.need_audit;
+            });
+        }
+        $('m-off-edit-mask').classList.remove('hidden');
+    }
+
+    function saveMoffEdit() {
+        var body = {
+            display_name: $('m-off-e-name').value.trim(),
+            avatar: $('m-off-e-avatar').value.trim(),
+            description: $('m-off-e-desc').value.trim(),
+            need_audit: $('m-off-e-audit').checked,
+            max_per_day: Number($('m-off-e-max').value) || 0
+        };
+        if (!body.display_name) return toast('展示名不能为空');
+        var p;
+        if (moffEditingId === 0) {
+            p = api('POST', '/api/merchant/official/accounts', body);
+        } else {
+            p = api('PUT', '/api/merchant/official/accounts/' + moffEditingId, body);
+        }
+        p.then(function (result) {
+            if (result.app_secret) {
+                toast('创建成功！请立即复制 AppSecret（仅显示一次）');
+                setTimeout(function () {
+                    if (window.prompt) window.prompt('新服务号凭证（请立即复制保存）：',
+                        'AppID: ' + result.app_id + '\nAppSecret: ' + result.app_secret);
+                }, 200);
+            } else if (!result.ok) {
+                return toast(result.msg || '保存失败');
+            } else {
+                toast('保存成功');
+            }
+            $('m-off-edit-mask').classList.add('hidden');
+            loadMoffList();
+        });
+    }
+
+    function confirmDeleteMoff(id) {
+        if (!window.confirm('确定删除该服务号？\n· 菜单、模板、订阅关系、推送记录、审核记录将一并删除\n· 此操作不可撤销')) return;
+        api('DELETE', '/api/merchant/official/accounts/' + id).then(function (result) {
+            if (!result.ok) return toast(result.msg || '删除失败');
+            toast('已删除');
+            loadMoffList();
+        });
+    }
+
+    function resetMoffSecret(id) {
+        if (!window.confirm('重置后旧密钥立即失效，企业系统需要更新调用凭证。确定继续？')) return;
+        api('PUT', '/api/merchant/official/accounts/' + id + '/secret').then(function (result) {
+            if (!result.app_secret) return toast(result.msg || '重置失败');
+            $('m-off-secret-val').textContent = 'AppID: ' + result.app_id + '\nAppSecret: ' + result.app_secret;
+            $('m-off-secret-mask').classList.remove('hidden');
+        });
+    }
+
+    // ==================== 菜单管理 ====================
+    // 菜单完整示例（顶级数组，保存时 JS 自动包 {"menus": 数组} 发给后端）
+    var MOFF_MENU_EXAMPLE = JSON.stringify([
+        {
+            name: '浏览',
+            action: 'click',
+            value: 'browse_root',
+            children: [
+                { name: '🔥 最新活动', action: 'view', value: 'https://example.com/activity' },
+                { name: '🛍 产品列表', action: 'view', value: 'https://example.com/products' },
+                { name: '📝 我的订单', action: 'click', value: 'my_orders' }
+            ]
+        },
+        { name: '💬 在线客服', action: 'click', value: 'contact_service' },
+        { name: '👤 个人中心', action: 'view', value: 'https://example.com/profile' }
+    ], null, 2);
+
+    function openMoffMenu(id) {
+        moffCurrentAccount = id;
+        $('m-off-menu-json').value = '';
+        api('GET', '/api/merchant/official/accounts/' + id).then(function (res) {
+            if (res.account) $('m-off-menu-title').textContent = res.account.display_name;
+        });
+        api('GET', '/api/merchant/official/accounts/' + id + '/menu').then(function (res) {
+            var convert = function (nodes) {
+                return (nodes || []).map(function (n) {
+                    var o = { name: n.name, action: n.action, value: n.value };
+                    if (n.children && n.children.length > 0) o.children = convert(n.children);
+                    return o;
+                });
+            };
+            var arr = convert(res.menus);
+            // 从未设置过菜单 → 自动填入示例，让商户直接复制改
+            $('m-off-menu-json').value = arr.length === 0 ? MOFF_MENU_EXAMPLE : JSON.stringify(arr, null, 2);
+        });
+        $('m-off-menu-mask').classList.remove('hidden');
+    }
+
+    function saveMoffMenu() {
+        var txt = $('m-off-menu-json').value.trim() || '[]';
+        var menus;
+        try { menus = JSON.parse(txt); } catch (e) { return toast('JSON 格式错误：' + e.message); }
+        if (!Array.isArray(menus)) return toast('必须为数组');
+        api('POST', '/api/merchant/official/accounts/' + moffCurrentAccount + '/menu', { menus: menus }).then(function (res) {
+            if (!res.ok) return toast(res.msg || '保存失败');
+            toast('菜单已保存');
+            $('m-off-menu-mask').classList.add('hidden');
+        });
+    }
+
+    // ==================== 模板管理 ====================
+    function openMoffTplList(id) {
+        moffCurrentAccount = id;
+        api('GET', '/api/merchant/official/accounts/' + id).then(function (res) {
+            if (res.account) $('m-off-tpl-title').textContent = res.account.display_name;
+        });
+        loadMoffTplList();
+        $('m-off-tpl-mask').classList.remove('hidden');
+    }
+
+    // content_type 展示名映射
+    var MOFF_TPL_TYPE_NAME = { text: '纯文本', notify: '通知卡片', news: '图文卡片', news_list: '多图文', miniapp: '小程序' };
+    var MOFF_TPL_TYPE_COLOR = { text: '#888', notify: '#f39c12', news: '#3498db', news_list: '#9b59b6', miniapp: '#27ae60' };
+
+    function loadMoffTplList() {
+        api('GET', '/api/merchant/official/accounts/' + moffCurrentAccount + '/templates').then(function (list) {
+            _moffTplCache = list || [];
+            var tbody = $('m-off-tpl-tbody');
+            if (!list || list.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="m-empty">暂无模板，点击上方「+ 新增模板」开始</td></tr>';
+                return;
+            }
+            var html = '';
+            list.forEach(function (t) {
+                var ct = t.content_type || 'text';
+                var typeName = MOFF_TPL_TYPE_NAME[ct] || ct;
+                var typeColor = MOFF_TPL_TYPE_COLOR[ct] || '#888';
+                html += '<tr>' +
+                    '<td><code>' + escHtml(t.template_id || '') + '</code></td>' +
+                    '<td>' + escHtml(t.name || '') + '</td>' +
+                    '<td><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:' + typeColor + '22;color:' + typeColor + '">' + typeName + '</span></td>' +
+                    '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(t.content || '') + '">' + escHtml(t.content || '') + '</td>' +
+                    '<td>' +
+                    '<button class="admin-btn small" data-moff-tpl-op="edit" data-id="' + t.id + '">编辑</button> ' +
+                    '<button class="admin-btn small danger" data-moff-tpl-op="del" data-id="' + t.id + '">删除</button>' +
+                    '</td>' +
+                    '</tr>';
+            });
+            tbody.innerHTML = html;
+            tbody.querySelectorAll('[data-moff-tpl-op]').forEach(function (el) {
+                el.addEventListener('click', function () {
+                    var op = el.getAttribute('data-moff-tpl-op');
+                    var id = Number(el.getAttribute('data-id'));
+                    if (op === 'edit') openMoffTplEdit(id);
+                    else confirmDeleteMoffTpl(id);
+                });
+            });
+        });
+    }
+
+    // 缓存当前模板列表（编辑时复用，避免单独 GET 详情）
+    var _moffTplCache = [];
+
+    // 模板编辑器：notify 字段列表 / news_list 图文项 状态
+    var _moffTplNFields = [];   // notify [{label, value}]
+    var _moffTplNItems = [];    // news_list [{image, title, summary, url}]
+    window._moffTplAddNField = function () { _moffTplNFields.push({ label: '', value: '' }); renderMoffTplNFields(); };
+    window._moffTplDelNField = function (i) { _moffTplNFields.splice(i, 1); renderMoffTplNFields(); };
+    window._moffTplAddNItem = function () { _moffTplNItems.push({ image: '', title: '', summary: '', url: '' }); renderMoffTplNItems(); };
+    window._moffTplDelNItem = function (i) { _moffTplNItems.splice(i, 1); renderMoffTplNItems(); };
+
+    function renderMoffTplEditTypeUI() {
+        var ct = $('m-off-te-type').value;
+        $('m-off-te-text-wrap').style.display       = (ct === 'text')      ? '' : 'none';
+        $('m-off-te-notify-wrap').style.display     = (ct === 'notify')    ? '' : 'none';
+        $('m-off-te-news-wrap').style.display       = (ct === 'news')      ? '' : 'none';
+        $('m-off-te-nlist-wrap').style.display      = (ct === 'news_list') ? '' : 'none';
+        $('m-off-te-mini-wrap').style.display       = (ct === 'miniapp')   ? '' : 'none';
+    }
+
+    function renderMoffTplNFields() {
+        var box = $('m-off-te-n-fields');
+        box.innerHTML = '';
+        _moffTplNFields.forEach(function (f, i) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+            row.innerHTML =
+                '<input class="admin-input" placeholder="字段名（如 订单号）" value="' + escHtml(f.label) + '" style="flex:1">' +
+                '<input class="admin-input" placeholder="字段值（如 {{order_no}}）" value="' + escHtml(f.value) + '" style="flex:2">' +
+                '<button type="button" class="admin-btn small danger" onclick="window._moffTplDelNField(' + i + ')">✕</button>';
+            var inputs = row.querySelectorAll('input');
+            inputs[0].addEventListener('input', function () { _moffTplNFields[i].label = inputs[0].value; });
+            inputs[1].addEventListener('input', function () { _moffTplNFields[i].value = inputs[1].value; });
+            box.appendChild(row);
+        });
+    }
+
+    function renderMoffTplNItems() {
+        var box = $('m-off-te-nl-items');
+        box.innerHTML = '';
+        _moffTplNItems.forEach(function (it, i) {
+            var row = document.createElement('div');
+            row.style.cssText = 'border:1px solid var(--admin-field-hint);border-radius:6px;padding:8px;margin-bottom:8px;background:rgba(0,0,0,0.02)';
+            row.innerHTML =
+                '<div style="display:flex;gap:6px;margin-bottom:4px"><input class="admin-input" placeholder="封面图 URL" value="' + escHtml(it.image) + '" style="flex:3"></div>' +
+                '<div style="display:flex;gap:6px;margin-bottom:4px"><input class="admin-input" placeholder="标题" value="' + escHtml(it.title) + '" style="flex:2"><input class="admin-input" placeholder="跳转 URL" value="' + escHtml(it.url) + '" style="flex:2"></div>' +
+                '<div style="display:flex;gap:6px;align-items:center"><input class="admin-input" placeholder="摘要" value="' + escHtml(it.summary) + '" style="flex:4"><button type="button" class="admin-btn small danger" onclick="window._moffTplDelNItem(' + i + ')">删除</button></div>';
+            var inputs = row.querySelectorAll('input');
+            inputs[0].addEventListener('input', function () { _moffTplNItems[i].image = inputs[0].value; });
+            inputs[1].addEventListener('input', function () { _moffTplNItems[i].title = inputs[1].value; });
+            inputs[2].addEventListener('input', function () { _moffTplNItems[i].url = inputs[2].value; });
+            inputs[3].addEventListener('input', function () { _moffTplNItems[i].summary = inputs[3].value; });
+            box.appendChild(row);
+        });
+    }
+
+    // 从结构化表单收集数据 → 序列化为 content 字段
+    function collectMoffTplContent(ct) {
+        if (ct === 'text') {
+            return $('m-off-te-content').value.trim();
+        }
+        var obj = {};
+        if (ct === 'notify') {
+            obj.title       = $('m-off-te-n-title').value.trim();
+            obj.content     = $('m-off-te-n-content').value.trim();
+            obj.status      = $('m-off-te-n-status').value.trim();
+            obj.badge_color = $('m-off-te-n-badge').value;
+            obj.fields      = _moffTplNFields.filter(function (f) { return f.label || f.value; });
+            obj.url         = $('m-off-te-n-url').value.trim();
+            obj.link_btn    = $('m-off-te-n-link').value.trim();
+        } else if (ct === 'news') {
+            obj.title    = $('m-off-te-ne-title').value.trim();
+            obj.image    = $('m-off-te-ne-image').value.trim();
+            obj.content  = $('m-off-te-ne-content').value.trim();
+            obj.url      = $('m-off-te-ne-url').value.trim();
+            obj.link_btn = $('m-off-te-ne-link').value.trim();
+        } else if (ct === 'news_list') {
+            obj.title = $('m-off-te-nl-title').value.trim();
+            obj.items = _moffTplNItems.map(function (it) {
+                return { image: it.image.trim(), title: it.title.trim(), summary: it.summary.trim(), url: it.url.trim() };
+            }).filter(function (it) { return it.image || it.title; });
+        } else if (ct === 'miniapp') {
+            obj.title    = $('m-off-te-mi-title').value.trim();
+            obj.icon     = $('m-off-te-mi-icon').value.trim();
+            obj.subtitle = $('m-off-te-mi-subtitle').value.trim();
+            obj.url      = $('m-off-te-mi-url').value.trim();
+            obj.link_btn = $('m-off-te-mi-link').value.trim();
+        }
+        return JSON.stringify(obj);
+    }
+
+    // 反序列化 content → 填入结构化表单（编辑时回显）
+    function populateMoffTplForm(ct, rawContent) {
+        // 先清空所有表单
+        $('m-off-te-n-title').value = '';
+        $('m-off-te-n-content').value = '';
+        $('m-off-te-n-status').value = '';
+        $('m-off-te-n-badge').value = 'blue';
+        $('m-off-te-n-url').value = '';
+        $('m-off-te-n-link').value = '';
+        _moffTplNFields = [];
+        $('m-off-te-ne-title').value = '';
+        $('m-off-te-ne-image').value = '';
+        $('m-off-te-ne-content').value = '';
+        $('m-off-te-ne-url').value = '';
+        $('m-off-te-ne-link').value = '';
+        $('m-off-te-nl-title').value = '';
+        _moffTplNItems = [];
+        $('m-off-te-mi-title').value = '';
+        $('m-off-te-mi-icon').value = '';
+        $('m-off-te-mi-subtitle').value = '';
+        $('m-off-te-mi-url').value = '';
+        $('m-off-te-mi-link').value = '';
+
+        if (ct === 'text') {
+            $('m-off-te-content').value = rawContent || '';
+            return;
+        }
+
+        var obj;
+        try { obj = JSON.parse(rawContent || '{}'); } catch (e) { obj = {}; }
+
+        if (ct === 'notify') {
+            $('m-off-te-n-title').value    = obj.title || '';
+            $('m-off-te-n-content').value  = obj.content || '';
+            $('m-off-te-n-status').value   = obj.status || '';
+            $('m-off-te-n-badge').value    = obj.badge_color || 'blue';
+            $('m-off-te-n-url').value      = obj.url || '';
+            $('m-off-te-n-link').value     = obj.link_btn || '';
+            _moffTplNFields = Array.isArray(obj.fields) ? obj.fields.slice() : [];
+            renderMoffTplNFields();
+        } else if (ct === 'news') {
+            $('m-off-te-ne-title').value   = obj.title || '';
+            $('m-off-te-ne-image').value   = obj.image || '';
+            $('m-off-te-ne-content').value = obj.content || '';
+            $('m-off-te-ne-url').value     = obj.url || '';
+            $('m-off-te-ne-link').value    = obj.link_btn || '';
+        } else if (ct === 'news_list') {
+            $('m-off-te-nl-title').value = obj.title || '';
+            _moffTplNItems = Array.isArray(obj.items) ? obj.items.slice() : [];
+            renderMoffTplNItems();
+        } else if (ct === 'miniapp') {
+            $('m-off-te-mi-title').value    = obj.title || '';
+            $('m-off-te-mi-icon').value     = obj.icon || '';
+            $('m-off-te-mi-subtitle').value = obj.subtitle || '';
+            $('m-off-te-mi-url').value      = obj.url || '';
+            $('m-off-te-mi-link').value     = obj.link_btn || '';
+        }
+    }
+
+    function openMoffTplEdit(id) {
+        moffTplEditingId = id;
+        $('m-off-te-id').value = '';
+        $('m-off-te-name').value = '';
+        $('m-off-te-type').value = 'text';
+        $('m-off-te-example').value = '';
+        $('m-off-te-content').value = '';
+        _moffTplNFields = [];
+        _moffTplNItems = [];
+        $('m-off-tpl-edit-title').textContent = id ? '编辑模板 #' + id : '新增模板';
+
+        var ct = 'text', rawContent = '';
+        if (id) {
+            var t = null;
+            for (var i = 0; i < _moffTplCache.length; i++) {
+                if (_moffTplCache[i].id === id) { t = _moffTplCache[i]; break; }
+            }
+            if (t) {
+                $('m-off-te-id').value = t.template_id || '';
+                $('m-off-te-name').value = t.name || '';
+                $('m-off-te-example').value = t.example || '';
+                ct = t.content_type || 'text';
+                rawContent = t.content || '';
+            }
+        }
+
+        $('m-off-te-type').value = ct;
+        renderMoffTplEditTypeUI();
+        populateMoffTplForm(ct, rawContent);
+        $('m-off-tpl-edit-mask').classList.remove('hidden');
+    }
+
+    function saveMoffTplEdit() {
+        var name = $('m-off-te-name').value.trim();
+        if (!name) return toast('模板名称不能为空');
+        var ct = $('m-off-te-type').value;
+        var content = collectMoffTplContent(ct);
+        if (!content) return toast('模板内容不能为空（请至少填写一项字段）');
+        // text 类型校验更严格（必须是非空文本）
+        if (ct === 'text' && !content.trim()) return toast('模板正文不能为空');
+
+        var body = {
+            template_id: $('m-off-te-id').value.trim(),
+            name: name,
+            content_type: ct,
+            content: content,
+            example: $('m-off-te-example').value.trim()
+        };
+        var p;
+        if (moffTplEditingId === 0) {
+            p = api('POST', '/api/merchant/official/accounts/' + moffCurrentAccount + '/templates', body);
+        } else {
+            var patch = {};
+            if (body.name) patch.name = body.name;
+            patch.content_type = body.content_type;
+            patch.content = body.content;
+            if (body.example) patch.example = body.example;
+            p = api('PUT', '/api/merchant/official/templates/' + moffTplEditingId, patch);
+        }
+        p.then(function (res) {
+            if (!res.ok) return toast(res.msg || '保存失败');
+            toast('模板已保存');
+            $('m-off-tpl-edit-mask').classList.add('hidden');
+            loadMoffTplList();
+        });
+    }
+
+    function confirmDeleteMoffTpl(id) {
+        if (!window.confirm('确定删除该模板？')) return;
+        api('DELETE', '/api/merchant/official/templates/' + id).then(function (res) {
+            if (!res.ok) return toast(res.msg || '删除失败');
+            toast('已删除');
+            loadMoffTplList();
+        });
+    }
+
+    // ==================== 关键词管理 ====================
+    function openMoffKwList(id) {
+        moffKwAccount = id;
+        $('m-off-kw-mask').classList.remove('hidden');
+        loadMoffKwList();
+    }
+
+    function loadMoffKwList() {
+        api('GET', '/api/merchant/official/accounts/' + moffKwAccount + '/keywords').then(function (list) {
+            var tbody = $('m-off-kw-tbody');
+            if (!list || !list.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="m-empty">暂无关键词，在上方输入触发词和回复内容后点 + 新增</td></tr>';
+                return;
+            }
+            var rows = '';
+            list.forEach(function (kw) {
+                var mtLabel = kw.match_type === 'exact' ? '精确' : '包含';
+                rows += '<tr>' +
+                    '<td>' + kw.id + '</td>' +
+                    '<td>' + mtLabel + '</td>' +
+                    '<td>' + escHtml(kw.keyword || '') + '</td>' +
+                    '<td>' + escHtml((kw.reply_text || '').slice(0, 80)) + '</td>' +
+                    '<td>' + (kw.enabled ? '✓' : '✗') + '</td>' +
+                    '<td>' +
+                    '<button class="admin-btn small" data-moff-kw-op="toggle" data-id="' + kw.id + '" data-en="' + (kw.enabled ? '0' : '1') + '">' +
+                    (kw.enabled ? '禁用' : '启用') + '</button> ' +
+                    '<button class="admin-btn small danger" data-moff-kw-op="del" data-id="' + kw.id + '">删除</button>' +
+                    '</td>' +
+                    '</tr>';
+            });
+            tbody.innerHTML = rows;
+            tbody.querySelectorAll('[data-moff-kw-op]').forEach(function (el) {
+                el.addEventListener('click', function () {
+                    var op = el.getAttribute('data-moff-kw-op');
+                    var kid = Number(el.getAttribute('data-id'));
+                    if (op === 'del') confirmDeleteMoffKw(kid);
+                    else if (op === 'toggle') toggleMoffKw(kid, el.getAttribute('data-en') === '1');
+                });
+            });
+        });
+    }
+
+    function saveMoffKw() {
+        var keyword = $('m-off-kw-new-keyword').value.trim();
+        var reply = $('m-off-kw-new-reply').value.trim();
+        var match = $('m-off-kw-new-match').value;
+        if (!keyword || !reply) return toast('触发词和回复内容不能为空');
+        api('POST', '/api/merchant/official/accounts/' + moffKwAccount + '/keywords', {
+            keyword: keyword, reply_text: reply, match_type: match, enabled: true, sort_order: 0
+        }).then(function (res) {
+            if (!res.ok) return toast(res.msg || '保存失败');
+            toast('已添加');
+            $('m-off-kw-new-keyword').value = '';
+            $('m-off-kw-new-reply').value = '';
+            loadMoffKwList();
+        });
+    }
+
+    function toggleMoffKw(id, enable) {
+        api('PUT', '/api/merchant/official/keywords/' + id, { enabled: enable }).then(function (res) {
+            if (!res.ok) return toast(res.msg || '操作失败');
+            toast(enable ? '已启用' : '已禁用');
+            loadMoffKwList();
+        });
+    }
+
+    function confirmDeleteMoffKw(id) {
+        if (!window.confirm('确定删除该关键词？')) return;
+        api('DELETE', '/api/merchant/official/keywords/' + id).then(function (res) {
+            if (!res.ok) return toast(res.msg || '删除失败');
+            toast('已删除');
+            loadMoffKwList();
+        });
+    }
+
+    // ==================== 审核队列 ====================
+    function openMoffAudit(id) {
+        moffAuditAccount = id;
+        api('GET', '/api/merchant/official/accounts/' + id).then(function (res) {
+            if (res.account) {
+                $('m-off-audit-mask').querySelector('.m-modal-title').textContent = '待审核消息 — ' + res.account.display_name;
+            }
+        });
+        loadMoffAuditList();
+        $('m-off-audit-mask').classList.remove('hidden');
+    }
+
+    function loadMoffAuditList() {
+        api('GET', '/api/merchant/official/audit/pending').then(function (result) {
+            var list = (result && result.list) || [];
+            // 后端可能返回全部 pending，需要按 account_id 过滤
+            var filtered = moffAuditAccount ? list.filter(function (a) { return a.account_id === moffAuditAccount; }) : list;
+            var tbody = $('m-off-audit-tbody');
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="m-empty">暂无待审核消息</td></tr>';
+                return;
+            }
+            var rows = '';
+            filtered.forEach(function (a) {
+                var typeLabel = a.send_type === 1 ? '单推' : a.send_type === 2 ? '批量' : a.send_type === 3 ? '群发' : '-';
+                var count = a.recipient_count || 0;
+                // broadcast 时 count 可能无意义
+                var countStr = a.send_type === 3 ? '全部订阅者' : count + ' 人';
+                rows += '<tr>' +
+                    '<td>' + a.id + '</td>' +
+                    '<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(a.title || a.content || '') + '">' + escHtml(a.title || '(无标题)') + '</td>' +
+                    '<td>' + typeLabel + '</td>' +
+                    '<td>' + countStr + '</td>' +
+                    '<td style="font-size:12px">' + fmtMoffTime(a.create_time) + '</td>' +
+                    '<td>' +
+                    '<button class="admin-btn small" data-moff-audit-op="approve" data-id="' + a.id + '">通过</button> ' +
+                    '<button class="admin-btn small danger" data-moff-audit-op="reject" data-id="' + a.id + '">驳回</button>' +
+                    '</td>' +
+                    '</tr>';
+            });
+            tbody.innerHTML = rows;
+            tbody.querySelectorAll('[data-moff-audit-op]').forEach(function (el) {
+                el.addEventListener('click', function () {
+                    var op = el.getAttribute('data-moff-audit-op');
+                    var id = Number(el.getAttribute('data-id'));
+                    if (op === 'approve') approveMoffAudit(id);
+                    else rejectMoffAudit(id);
+                });
+            });
+        });
+    }
+
+    function approveMoffAudit(id) {
+        if (!window.confirm('确定通过该消息审核？通过后立即发送')) return;
+        api('POST', '/api/merchant/official/audit/' + id + '/approve').then(function (res) {
+            if (!res.ok) return toast(res.msg || '操作失败');
+            toast('已通过');
+            loadMoffAuditList();
+        });
+    }
+
+    function rejectMoffAudit(id) {
+        var remark = window.prompt('请填写驳回原因：', '内容需要修改');
+        if (!remark) return;
+        api('POST', '/api/merchant/official/audit/' + id + '/reject', { remark: remark }).then(function (res) {
+            if (!res.ok) return toast(res.msg || '操作失败');
+            toast('已驳回');
+            loadMoffAuditList();
+        });
+    }
+
+    // ==================== 手动推送 ====================
+
+    var moffSendAccount = 0;
+
+    function openMoffSend(id) {
+        moffSendAccount = id;
+        // 标题显示服务号名
+        api('GET', '/api/merchant/official/accounts/' + id).then(function (res) {
+            if (res.account) {
+                $('m-off-send-title').textContent = '推送消息 — ' + res.account.display_name;
+                $('m-off-send-audit-tip').textContent = res.account.need_audit
+                    ? '💡 该服务号开启了推送审核，消息发送后需审批'
+                    : '💡 该服务号直通模式，消息将立即发送';
+            }
+        });
+        // 加载模板下拉
+        api('GET', '/api/merchant/official/accounts/' + id + '/templates').then(function (list) {
+            var sel = $('m-off-send-tpl');
+            sel.innerHTML = '<option value="">不使用模板，手动填写内容</option>';
+            (list || []).forEach(function (t) {
+                var opt = document.createElement('option');
+                opt.value = t.template_id;
+                opt.textContent = t.name + ' (' + t.template_id + ')';
+                sel.appendChild(opt);
+            });
+        });
+        // 重置表单
+        $('m-off-send-type').value = 'single';
+        $('m-off-send-ctype').value = 'text';
+        $('m-off-send-to').value = '';
+        $('m-off-send-title-input').value = '';
+        $('m-off-send-content').value = '';
+        $('m-off-send-url').value = '';
+        // P2 notify 字段重置
+        $('m-off-send-status').value = '';
+        $('m-off-send-badge').value = 'blue';
+        moffSendFields = [];
+        renderMoffSendFields();
+        $('m-off-send-btn').textContent = '📤 发送';
+        // 切换显示逻辑
+        updateMoffSendTypeUI();
+        updateMoffSendCardUI(); // P2：按 content_type 显示/隐藏 notify 字段
+        $('m-off-send-mask').classList.remove('hidden');
+    }
+
+    // P2：服务号推送 notify 字段列表状态
+    var moffSendFields = []; // [{label, value}]
+
+    // P2：content_type 切换 → 显示/隐藏 notify 专属字段
+    function updateMoffSendCardUI() {
+        var ctype = $('m-off-send-ctype').value;
+        var notifyWrap = $('m-off-send-notify-wrap');
+        if (notifyWrap) {
+            notifyWrap.style.display = (ctype === 'notify') ? '' : 'none';
+        }
+    }
+
+    // P2：渲染 notify 字段列表（动态增删）
+    function renderMoffSendFields() {
+        var box = $('m-off-send-fields');
+        box.innerHTML = '';
+        moffSendFields.forEach(function (f, i) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+            row.innerHTML =
+                '<input class="m-form-input" placeholder="字段名（如 订单号）" value="' + escHtml(f.label) + '" style="flex:1">' +
+                '<input class="m-form-input" placeholder="字段值（如 SF123456）" value="' + escHtml(f.value) + '" style="flex:2">' +
+                '<button type="button" style="padding:4px 10px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;color:#dc2626" onclick="window._moffDelField(' + i + ')">✕</button>';
+            var inputs = row.querySelectorAll('input');
+            inputs[0].addEventListener('input', function () { moffSendFields[i].label = inputs[0].value; });
+            inputs[1].addEventListener('input', function () { moffSendFields[i].value = inputs[1].value; });
+            box.appendChild(row);
+        });
+    }
+    window._moffDelField = function (i) {
+        moffSendFields.splice(i, 1);
+        renderMoffSendFields();
+    };
+    window._moffAddField = function () {
+        moffSendFields.push({ label: '', value: '' });
+        renderMoffSendFields();
+    };
+
+    function updateMoffSendTypeUI() {
+        var type = $('m-off-send-type').value;
+        var toWrap = $('m-off-send-to-wrap');
+        if (type === 'broadcast') {
+            toWrap.style.display = 'none';
+        } else {
+            toWrap.style.display = '';
+            $('m-off-send-to').placeholder = type === 'batch'
+                ? '多个用户名用换行或逗号分隔（最多 1000）'
+                : '单个用户名，如 user1';
+        }
+    }
+
+    function doMoffSend() {
+        var type = $('m-off-send-type').value;
+        var recipients = [];
+        if (type !== 'broadcast') {
+            var raw = $('m-off-send-to').value;
+            recipients = raw.split(/[\s,，\n]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+            if (recipients.length === 0) return toast('请填写接收人');
+            if (type === 'single' && recipients.length !== 1) return toast('单推模式只能填 1 个用户');
+            if (type === 'batch' && recipients.length > 1000) return toast('批量最多 1000 用户');
+        }
+        var body = {
+            account_id: moffSendAccount,
+            type: type,
+            recipients: recipients,
+            content_type: $('m-off-send-ctype').value || 'text',
+            title: $('m-off-send-title-input').value.trim(),
+            content: $('m-off-send-content').value.trim(),
+            url: $('m-off-send-url').value.trim(),
+        };
+        var tplId = $('m-off-send-tpl').value;
+        if (tplId) body.template_id = tplId;
+        // P2：notify 卡片专属字段
+        if (body.content_type === 'notify') {
+            body.status = $('m-off-send-status').value.trim();
+            body.badge_color = $('m-off-send-badge').value;
+            body.fields = moffSendFields.filter(function (f) { return f.label; });
+        }
+        if (!body.content && !body.template_id) return toast('请填写消息内容或选择模板');
+
+        $('m-off-send-btn').textContent = '发送中…';
+        $('m-off-send-btn').disabled = true;
+
+        api('POST', '/api/merchant/official/send', body).then(function (res) {
+            $('m-off-send-btn').textContent = '📤 发送';
+            $('m-off-send-btn').disabled = false;
+            if (!res.ok) return toast(res.msg || '发送失败');
+            if (res.audit_status === 'pending') {
+                toast('已进入审核队列（消息 ID #' + res.message_id + '）');
+            } else {
+                toast('发送成功！消息 ID #' + res.message_id);
+            }
+            $('m-off-send-mask').classList.add('hidden');
+        });
+    }
+
     // ==================== 启动 ====================
     (function boot() {
         if (!getToken()) { showLogin(); return; }
@@ -1262,4 +2090,464 @@
         }).catch(function () { showLogin(); });
         $('m-boot').classList.add('hidden');
     })();
+
+
+    // ==================== API 文档弹窗 ====================
+
+    // 各 API 端点定义：method / url / 标题 / 请求体 / 说明
+    // 字段名必须与后端 official_api.go 里的 json tag 完全一致
+    var NO_BODY = '（GET 请求，无请求体）';
+    var MOFF_API_DEFS = {
+        auth: {
+            method: 'POST', url: '/api/official/token',
+            title: '🔐 获取 AccessToken',
+            desc: '先用 AppID + AppSecret 换取 2 小时有效的 AccessToken，所有后续接口都要在 Header 里带 Bearer Token。也支持 HMAC-SHA256 签名模式。',
+            body: '{ "app_id": "{APP_ID}", "app_secret": "{APP_SECRET}" }',
+            resp: '{ "ok": true, "data": { "access_token": "xxx.xxx.xxx", "expires_in": 7200 } }'
+        },
+        notify: {
+            method: 'POST', url: '/api/official/notify',
+            title: '📤 发送消息（单发/批量/广播三合一）',
+            desc: '一个接口搞定三种推送模式：type=single 单发 / batch 批量 / broadcast 全员广播。\n必填：type。single/batch 需传 recipients 数组。\ncontent_type 可选：text / notify / news / news_list / miniapp。notify 卡片支持 status 状态徽章、badge_color、fields 键值对列表、url + link_btn 跳转。\n也可以传 template_id 用模板发送，配合 template_data 做占位符替换。',
+            body: JSON.stringify({
+                type: 'single',
+                recipients: ['user_123'],
+                content_type: 'notify',
+                title: '您的订单 {{order_no}} 已发货',
+                content: '快递员：张三，电话：13800138000',
+                status: '已发货',
+                badge_color: 'green',
+                fields: [
+                    { label: '订单号', value: '{{order_no}}' },
+                    { label: '物流公司', value: '顺丰速运' }
+                ],
+                url: 'https://example.com/order/detail',
+                link_btn: '查看物流',
+                template_data: { order_no: 'SF1234567890' }
+            }, null, 2),
+            resp: '{ "ok": true, "data": { "message_id": 12345, "sent": 1 } }'
+        },
+        batch: {
+            method: 'POST', url: '/api/official/batch-notify',
+            title: '📥 批量发送消息（专用接口）',
+            desc: '一次最多发送给 1000 个用户。与 notify type=batch 等价，但返回结果更详细。\n必填：recipients 数组、content（或 template_id）。',
+            body: JSON.stringify({
+                recipients: ['user_1', 'user_2', 'user_3'],
+                content_type: 'text',
+                content: '本周活动通知：您有一张满 100 减 20 优惠券待领取',
+                template_data: {}
+            }, null, 2),
+            resp: '{ "ok": true, "data": { "sent": 3, "failed": 0, "failed_reasons": [] } }'
+        },
+        menu: {
+            method: 'POST', url: '/api/official/menu/set',
+            title: '📋 设置 / 获取自定义菜单',
+            desc: '【设置菜单】POST /api/official/menu/set — 设置后立即生效。最多 3 个一级菜单，每个一级菜单最多 5 个二级菜单。\n字段说明：action=click 点击触发事件（value 存事件 key）；action=view 点击打开 URL（value 存网址）。\n【获取菜单】GET /api/official/menu/get — 无参数，返回当前菜单树。',
+            body: JSON.stringify({
+                menus: [
+                    {
+                        name: '📖 浏览',
+                        action: 'click',
+                        value: 'browse_root',
+                        children: [
+                            { name: '🔥 最新活动', action: 'view', value: 'https://example.com/activity' },
+                            { name: '🛍 产品列表', action: 'view', value: 'https://example.com/products' },
+                            { name: '📝 我的订单', action: 'click', value: 'my_orders' }
+                        ]
+                    },
+                    {
+                        name: '💬 在线客服',
+                        action: 'click',
+                        value: 'contact_service'
+                    },
+                    {
+                        name: '👤 个人中心',
+                        action: 'view',
+                        value: 'https://example.com/profile'
+                    }
+                ]
+            }, null, 2),
+            resp: '{ "ok": true }\n\n// GET /api/official/menu/get 响应示例:\n{ "ok": true, "data": { "menus": [ { "name": "📖 浏览", "children": [...] } ] } }'
+        },
+        template: {
+            method: 'GET', url: '/api/official/template/list',
+            title: '📑 模板列表 + 🎨 模板渲染',
+            desc: '【获取模板列表】GET /api/official/template/list — 无参数。返回当前服务号所有模板。\n【渲染模板】POST /api/official/template/render — 手动把模板里的 {{key}} 替换成真实值，预览最终内容。',
+            body: NO_BODY,
+            resp: '{ "ok": true, "data": { "list": [ { "id": 1, "template_id": "tpl_abc123", "name": "订单发货通知", "content_type": "notify" } ], "total": 1 } }\n\n// POST /api/official/template/render 请求体:\n// { "template_id": "tpl_abc123", "template_data": { "order_no": "SF123456", "courier": "张三" } }'
+        },
+        stats: {
+            method: 'GET', url: '/api/official/stats',
+            title: '📊 数据统计',
+            desc: '无参数 GET。返回订阅数、今日/本月推送数、取消订阅数、消息历史概览等运营数据。',
+            body: NO_BODY,
+            resp: '{ "ok": true, "data": { "subscribe_count": 128, "today_sent": 12, "month_sent": 356, "unsubscribe_count": 3 } }'
+        }
+    };
+
+    var _hasBody = function (def) { return def.body && def.body !== NO_BODY; };
+
+    var MOFF_CODE_TEMPLATES = {
+        curl: {
+            auth: function (host, def) {
+                return '# 1. 获取 AccessToken\ncurl -X POST "' + host + def.url + '"\n' +
+                    '  -H "Content-Type: application/json"\n' +
+                    '  -d \'{"app_id": "{APP_ID}", "app_secret": "{APP_SECRET}"}\'\n\n' +
+                    '# 返回: {"ok":true,"data":{"access_token":"xxx.xxx.xxx"}}\n' +
+                    '# 2. 后续接口都带这个 Header:\n' +
+                    '# Authorization: Bearer <access_token>';
+            },
+            _default: function (host, def) {
+                var h = _hasBody(def) ? '  -H "Content-Type: application/json"' : '';
+                var body = _hasBody(def) ? '\n  -d \'' + def.body + '\'' : '';
+                return 'curl -X ' + def.method + ' "' + host + def.url + '"\n' +
+                    (_hasBody(def) ? '  -H "Authorization: Bearer <access_token>"\n' : '  -H "Authorization: Bearer <access_token>"\n') +
+                    h + body;
+            }
+        },
+        python: {
+            auth: function (host, def) {
+                return 'import requests\n\n' +
+                    'HOST = "' + host + '"\n' +
+                    'APP_ID = "{APP_ID}"\n' +
+                    'APP_SECRET = "{APP_SECRET}"\n\n' +
+                    '# 1. 获取 Token\n' +
+                    'r = requests.post(HOST + "' + def.url + '", json={"app_id": APP_ID, "app_secret": APP_SECRET})\n' +
+                    'token = r.json()["data"]["access_token"]\n' +
+                    'print("token:", token)\n\n' +
+                    '# 2. 后续调用\n' +
+                    'headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}';
+            },
+            _default: function (host, def) {
+                var body = _hasBody(def) ? '\nbody = ' + def.body.replace(/"/g, "'") + '\n' : '';
+                var method = def.method.toLowerCase();
+                return 'import requests\n\n' +
+                    'HOST = "' + host + '"\n' +
+                    'TOKEN = "<从上一步获取的 access_token>"\n\n' +
+                    'headers = {"Authorization": f"Bearer {TOKEN}"' + (_hasBody(def) ? ', "Content-Type": "application/json"' : '') + '}' + body + '\n' +
+                    'r = requests.' + method + '(HOST + "' + def.url + '", headers=headers' + (_hasBody(def) ? ', json=body' : '') + ')\n' +
+                    'print(r.json())';
+            }
+        },
+        node: {
+            auth: function (host, def) {
+                return '// Node.js (axios)\nconst axios = require("axios");\n\n' +
+                    'const HOST = "' + host + '";\n' +
+                    'const APP_ID = "{APP_ID}";\n' +
+                    'const APP_SECRET = "{APP_SECRET}";\n\n' +
+                    'async function main() {\n' +
+                    '  // 1. 获取 Token\n' +
+                    '  const { data: r } = await axios.post(HOST + "' + def.url + '", {\n' +
+                    '    app_id: APP_ID, app_secret: APP_SECRET\n' +
+                    '  });\n' +
+                    '  const token = r.data.access_token;\n' +
+                    '  console.log("token:", token);\n' +
+                    '}\nmain();';
+            },
+            _default: function (host, def) {
+                var bodyCode = _hasBody(def) ? '  const body = ' + def.body + ';\n' : '';
+                var method = def.method.toLowerCase();
+                return '// Node.js (axios)\nconst axios = require("axios");\n\n' +
+                    'axios.defaults.baseURL = "' + host + '";\n' +
+                    'axios.defaults.headers.common["Authorization"] = "Bearer <access_token>";\n' + bodyCode +
+                    'axios.' + method + '("' + def.url + '"' + (_hasBody(def) ? ', body' : '') + ')\n' +
+                    '  .then(r => console.log(r.data))\n' +
+                    '  .catch(e => console.error(e.response?.data));';
+            }
+        },
+        java: {
+            auth: function (host, def) {
+                return '// Java (OkHttp)\nimport okhttp3.*;\nimport org.json.*;\n\n' +
+                    'public class OfficialApiDemo {\n' +
+                    '    private static final String HOST = "' + host + '";\n' +
+                    '    private static final String APP_ID = "{APP_ID}";\n' +
+                    '    private static final String APP_SECRET = "{APP_SECRET}";\n\n' +
+                    '    public static void main(String[] args) throws Exception {\n' +
+                    '        OkHttpClient client = new OkHttpClient();\n' +
+                    '        JSONObject creds = new JSONObject();\n' +
+                    '        creds.put("app_id", APP_ID).put("app_secret", APP_SECRET);\n' +
+                    '        RequestBody rb = RequestBody.create(creds.toString(), MediaType.parse("application/json"));\n' +
+                    '        Request req = new Request.Builder().url(HOST + "' + def.url + '").post(rb).build();\n' +
+                    '        try (Response r = client.newCall(req).execute()) {\n' +
+                    '            JSONObject root = new JSONObject(r.body().string());\n' +
+                    '            String token = root.getJSONObject("data").getString("access_token");\n' +
+                    '            System.out.println("token: " + token);\n' +
+                    '        }\n' +
+                    '    }\n}';
+            },
+            _default: function (host, def) {
+                var bodyCode = '';
+                if (_hasBody(def)) {
+                    var javaBodyStr = def.body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                    bodyCode = '        JSONObject body = new JSONObject(\n' +
+                        '            "' + javaBodyStr + '"\n' +
+                        '        );\n        RequestBody rb = RequestBody.create(body.toString(), MediaType.parse("application/json"));\n';
+                }
+                var reqBuilder = !_hasBody(def) || def.method === 'GET' ?
+                    '        Request req = new Request.Builder().url(HOST + "' + def.url + '").get()' :
+                    '        Request req = new Request.Builder().url(HOST + "' + def.url + '").post(rb)';
+                return '// Java (OkHttp)\nimport okhttp3.*;\nimport org.json.*;\n\n' +
+                    'public class Demo {\n' +
+                    '    public static void main(String[] args) throws Exception {\n' +
+                    '        final String HOST = "' + host + '";\n' +
+                    '        final String TOKEN = "<access_token>";\n' +
+                    '        OkHttpClient client = new OkHttpClient();\n' + bodyCode +
+                    reqBuilder + '\n' +
+                    '            .addHeader("Authorization", "Bearer " + TOKEN)\n' +
+                    '            .addHeader("Content-Type", "application/json")\n' +
+                    '            .build();\n' +
+                    '        try (Response r = client.newCall(req).execute()) {\n' +
+                    '            System.out.println(r.body().string());\n' +
+                    '        }\n' +
+                    '    }\n}';
+            }
+        },
+        go: {
+            auth: function (host, def) {
+                return '// Go (net/http)\npackage main\n\nimport (\n    "bytes"\n    "encoding/json"\n    "fmt"\n    "io"\n    "net/http"\n)\n\nconst (\n    Host      = "' + host + '"\n    AppID     = "{APP_ID}"\n    AppSecret = "{APP_SECRET}"\n)\n\nfunc main() {\n    body := map[string]string{"app_id": AppID, "app_secret": AppSecret}\n    b, _ := json.Marshal(body)\n    req, _ := http.NewRequest("POST", Host+"' + def.url + '", bytes.NewReader(b))\n    req.Header.Set("Content-Type", "application/json")\n    resp, _ := http.DefaultClient.Do(req)\n    defer resp.Body.Close()\n    raw, _ := io.ReadAll(resp.Body)\n    fmt.Println(string(raw))\n}';
+            },
+            _default: function (host, def) {
+                var bodyCode = _hasBody(def) ?
+                    '    body := map[string]interface{}{}\n    _ = json.Unmarshal([]byte(`' + def.body + '`), &body)\n    b, _ := json.Marshal(body)\n' :
+                    '    var b []byte\n';
+                var newReq = !_hasBody(def) || def.method === 'GET' ?
+                    '    req, _ := http.NewRequest("GET", Host+"' + def.url + '", nil)' :
+                    '    req, _ := http.NewRequest("' + def.method + '", Host+"' + def.url + '", bytes.NewReader(b))';
+                return '// Go (net/http)\npackage main\n\nimport (\n    "bytes"\n    "encoding/json"\n    "fmt"\n    "io"\n    "net/http"\n)\n\nconst (\n    Host  = "' + host + '"\n    Token = "<access_token>"\n)\n\nfunc main() {\n' + bodyCode + newReq + '\n' +
+                    '    req.Header.Set("Authorization", "Bearer "+Token)\n' +
+                    '    req.Header.Set("Content-Type", "application/json")\n' +
+                    '    resp, _ := http.DefaultClient.Do(req)\n' +
+                    '    defer resp.Body.Close()\n' +
+                    '    raw, _ := io.ReadAll(resp.Body)\n' +
+                    '    fmt.Println(string(raw))\n}';
+            }
+        }
+    };
+
+    var _moffApiTab = 'auth';
+    var _moffApiLang = 'curl';
+
+    function openMoffApiDocs(id) {
+        var acc = null;
+        for (var i = 0; i < _moffAccounts.length; i++) {
+            if (_moffAccounts[i].id === id) { acc = _moffAccounts[i]; break; }
+        }
+        if (!acc) return toast('服务号信息加载中，请刷新列表重试');
+
+        var host = window.location.origin;
+        var secret = acc.app_secret || '（请点击列表"密钥"按钮查看）';
+
+        $('m-off-api-name').textContent = acc.display_name || acc.name || '—';
+        $('m-off-api-appid').textContent = acc.app_id || '—';
+        $('m-off-api-secret').textContent = secret;
+        $('m-off-api-host').textContent = host;
+
+        _moffApiTab = 'auth';
+        _moffApiLang = 'curl';
+        renderMoffApiBody();
+        document.querySelectorAll('.m-api-tab').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-apitab') === 'auth');
+        });
+        document.querySelectorAll('.m-lang-tab').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-lang') === 'curl');
+        });
+        $('m-off-api-mask').classList.remove('hidden');
+    }
+
+    function renderMoffApiBody() {
+        var body = $('m-off-api-body');
+        var host = $('m-off-api-host').textContent;
+        var appId = $('m-off-api-appid').textContent;
+        var appSecret = $('m-off-api-secret').textContent;
+
+        var def = MOFF_API_DEFS[_moffApiTab];
+        var tpl = MOFF_CODE_TEMPLATES[_moffApiLang];
+        var code = tpl[_moffApiTab] ? tpl[_moffApiTab](host, def) : tpl._default(host, def);
+        code = code.replace(/\{APP_ID\}/g, appId).replace(/\{APP_SECRET\}/g, appSecret);
+
+        body.innerHTML =
+            '<div style="padding:14px 16px 6px;font-size:14px;color:#7cdcfc;font-family:Consolas,Menlo,monospace">' + escHtml(def.title) + '</div>' +
+            '<div style="padding:0 16px 8px;font-size:12px;color:#9cdcfc">' + escHtml(def.desc) + '</div>' +
+            '<div style="padding:0 16px 8px"><span style="background:#0e639c;color:#fff;padding:2px 8px;border-radius:3px;font-size:12px;margin-right:6px;font-family:Consolas,Menlo,monospace">' + def.method + '</span><code style="color:#ffb86c;font-size:12px;font-family:Consolas,Menlo,monospace">' + escHtml(def.url) + '</code></div>' +
+            '<pre style="margin:0;padding:16px;overflow:auto;font-family:Consolas,Menlo,monospace;font-size:12.5px;line-height:1.6;color:#d4d4d4;white-space:pre">' + escHtml(code) + '</pre>' +
+            (def.resp ?
+                '<div style="padding:8px 16px 2px;font-size:12px;color:#7cdcfc">✅ 响应示例：</div>' +
+                '<pre style="margin:0;padding:8px 16px 16px;overflow:auto;font-family:Consolas,Menlo,monospace;font-size:12px;color:#8dc78e">' + escHtml(def.resp) + '</pre>' : '');
+    }
+
+    function copyCurrentCode() {
+        var body = $('m-off-api-body');
+        var pres = body.querySelectorAll('pre');
+        if (pres.length === 0) return toast('没有可复制的内容');
+        var text = pres[0].textContent;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () { toast('✅ 代码已复制到剪贴板'); });
+        } else {
+            var ta = document.createElement('textarea');
+            ta.value = text; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); toast('✅ 代码已复制'); } catch (e) { toast('复制失败，请手动选择复制'); }
+            document.body.removeChild(ta);
+        }
+    }
+
+    function bindMoffApiEvents() {
+        var apiMask = $('m-off-api-mask');
+        if (!apiMask) return;
+        $('m-off-api-close').addEventListener('click', function () { apiMask.classList.add('hidden'); });
+        $('m-off-api-ok').addEventListener('click', function () { apiMask.classList.add('hidden'); });
+        $('m-off-api-copy').addEventListener('click', copyCurrentCode);
+        document.querySelectorAll('.m-api-tab').forEach(function (b) {
+            b.addEventListener('click', function () {
+                _moffApiTab = b.getAttribute('data-apitab');
+                document.querySelectorAll('.m-api-tab').forEach(function (x) { x.classList.remove('active'); });
+                b.classList.add('active');
+                renderMoffApiBody();
+            });
+        });
+        document.querySelectorAll('.m-lang-tab').forEach(function (b) {
+            b.addEventListener('click', function () {
+                _moffApiLang = b.getAttribute('data-lang');
+                document.querySelectorAll('.m-lang-tab').forEach(function (x) { x.classList.remove('active'); });
+                b.classList.add('active');
+                renderMoffApiBody();
+            });
+        });
+    }
+    bindMoffApiEvents();
+
+    // ===== 推送历史弹窗 =====
+    var _moffHistoryAccountId = 0;
+    function openMoffHistory(accountId) {
+        _moffHistoryAccountId = accountId;
+        var acc = (_moffAccounts || []).find(function (a) { return a.id === accountId; });
+        var name = acc ? (acc.display_name || '') : ('#' + accountId);
+        document.getElementById('m-off-history-title').textContent = '📜 推送历史 — ' + name;
+        document.getElementById('m-off-history-status').value = '';
+        document.getElementById('m-off-history-mask').classList.remove('hidden');
+        loadMoffHistory();
+    }
+    function loadMoffHistory() {
+        var status = document.getElementById('m-off-history-status').value;
+        var path = '/api/merchant/official/messages?account_id=' + _moffHistoryAccountId + '&size=50';
+        if (status) path += '&send_status=' + status;
+        api('GET', path).then(function (result) {
+            if (!result || !result.ok) {
+                toast((result && result.msg) || '查询失败');
+                return;
+            }
+            var list = result.list || [];
+            var tbody = document.getElementById('m-off-history-tbody');
+            if (!list.length) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light);padding:30px">暂无推送记录</td></tr>';
+                document.getElementById('m-off-history-summary').textContent = '';
+                return;
+            }
+            document.getElementById('m-off-history-summary').textContent = '共 ' + (result.total || list.length) + ' 条';
+            var fmtType = function (t) {
+                var m = { text: '📄 文本', notify: '📢 通知', news: '🖼️ 图文', news_list: '📑 多图文', miniapp: '💎 小程序' };
+                return m[t] || t || '-';
+            };
+            var fmtStatus = function (s) {
+                var m = {
+                    pending:  '<span style="color:#ff9800">⏳ 待发送</span>',
+                    sending:  '<span style="color:#2196f3">📤 发送中</span>',
+                    sent:     '<span style="color:#4caf50">✅ 已发送</span>',
+                    failed:   '<span style="color:#f44336">❌ 失败</span>',
+                    recalled: '<span style="color:#9e9e9e">↩️ 已撤回</span>'
+                };
+                return m[s] || (s || '-');
+            };
+            var esc = function (s) {
+                if (!s) return '';
+                return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; });
+            };
+            var rows = list.map(function (r) {
+                var content = r.title || '';
+                if (!content && r.content) {
+                    var plain = String(r.content).replace(/<[^>]+>/g, '');
+                    content = plain.length > 60 ? plain.slice(0, 60) + '...' : plain;
+                }
+                var canRecall = r.send_status === 'sent' && r.recipient && String(r.recipient).length > 0 && String(r.recipient).indexOf(',') === -1;
+                var recallBtn = canRecall
+                    ? '<button class="admin-btn small danger" data-recall="' + r.id + '">↩️ 撤回</button>'
+                    : '<span style="color:var(--text-light);font-size:12px">-</span>';
+                return '<tr>' +
+                    '<td>#' + r.id + '</td>' +
+                    '<td>' + fmtType(r.content_type) + '</td>' +
+                    '<td>' + (r.recipient ? esc(r.recipient) : '<span style="color:#ff9800">👥 群发</span>') + '</td>' +
+                    '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(content) + '">' + esc(content || '-') + '</td>' +
+                    '<td>' + fmtStatus(r.send_status) + '</td>' +
+                    '<td>' + recallBtn + '</td>' +
+                    '</tr>';
+            }).join('');
+            tbody.innerHTML = rows;
+            tbody.querySelectorAll('[data-recall]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var mid = parseInt(b.getAttribute('data-recall'), 10);
+                    if (!mid) return;
+                    if (!window.confirm('确定撤回这条消息吗？撤回后订阅用户将看不到这条消息。')) return;
+                    api('POST', '/api/merchant/official/messages/' + mid + '/recall').then(function (res) {
+                        if (res && res.ok) {
+                            toast(res.msg || '撤回成功');
+                            loadMoffHistory();
+                        } else {
+                            toast((res && res.msg) || '撤回失败');
+                        }
+                    });
+                });
+            });
+        });
+    }
+    document.getElementById('m-off-history-close').addEventListener('click', function () {
+        document.getElementById('m-off-history-mask').classList.add('hidden');
+    });
+    document.getElementById('m-off-history-mask').addEventListener('click', function (e) {
+        if (e.target === this) this.classList.add('hidden');
+    });
+    document.getElementById('m-off-history-refresh').addEventListener('click', loadMoffHistory);
+    document.getElementById('m-off-history-status').addEventListener('change', loadMoffHistory);
+    // esc 关闭
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !document.getElementById('m-off-history-mask').classList.contains('hidden')) {
+            document.getElementById('m-off-history-mask').classList.add('hidden');
+        }
+    });
+
+    // ========== 服务号二维码弹窗 ==========
+    function openMoffQR(accountId) {
+        var acc = (_moffAccounts || []).find(function (a) { return a.id === accountId; });
+        if (!acc) { toast('服务号不存在'); return; }
+        var appId = acc.app_id || '';
+        if (!appId) { toast('服务号 app_id 无效'); return; }
+        var modal = document.getElementById('m-off-qr-mask');
+        if (!modal) return;
+        // 填充信息
+        document.getElementById('m-off-qr-name').textContent = acc.display_name || '';
+        document.getElementById('m-off-qr-appid').textContent = appId;
+        document.getElementById('m-off-qr-desc').textContent = acc.description || '扫码即可关注此服务号';
+        // 构造订阅 URL 并生成二维码
+        var subUrl = window.location.origin + '/subscribe.html?app_id=' + encodeURIComponent(appId);
+        document.getElementById('m-off-qr-url').textContent = subUrl;
+        var box = document.getElementById('m-off-qr-box');
+        box.innerHTML = '';
+        if (typeof window.qrcode === 'function') {
+            var qr = window.qrcode(0, 'M');
+            qr.addData(subUrl);
+            qr.make();
+            box.innerHTML = qr.createImgTag(6, 8);
+            // 深色主题下强制白底（二维码需要）
+            var img = box.querySelector('img');
+            if (img) { img.style.background = '#fff'; img.style.padding = '8px'; img.style.borderRadius = '6px'; }
+        } else {
+            box.innerHTML = '<div style="color:var(--danger);padding:20px">二维码库未加载</div>';
+        }
+        modal.classList.remove('hidden');
+    }
+    document.getElementById('m-off-qr-close').addEventListener('click', function () {
+        document.getElementById('m-off-qr-mask').classList.add('hidden');
+    });
+    document.getElementById('m-off-qr-mask').addEventListener('click', function (e) {
+        if (e.target === this) this.classList.add('hidden');
+    });
+
 })();

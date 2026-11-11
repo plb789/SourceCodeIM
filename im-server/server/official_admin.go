@@ -584,10 +584,11 @@ func (s *Server) handleOfficialAdminTplCreate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var req struct {
-		Name       string `json:"name"`
-		Content    string `json:"content"`
-		Example    string `json:"example"`
-		TemplateID string `json:"template_id"` // 可选：不传自动生成
+		Name        string `json:"name"`
+		ContentType string `json:"content_type"`
+		Content     string `json:"content"`
+		Example     string `json:"example"`
+		TemplateID  string `json:"template_id"` // 可选：不传自动生成
 	}
 	if err := jsonDecodeLimit(w, r, &req, 32768); err != nil {
 		return
@@ -598,6 +599,14 @@ func (s *Server) handleOfficialAdminTplCreate(w http.ResponseWriter, r *http.Req
 		adminFail(w, http.StatusBadRequest, "name 和 content 不能为空")
 		return
 	}
+	req.ContentType = strings.TrimSpace(req.ContentType)
+	if req.ContentType == "" {
+		req.ContentType = "text"
+	}
+	if !isValidOfficialContentType(req.ContentType) {
+		adminFail(w, http.StatusBadRequest, "content_type 不合法，可选：text/notify/news/news_list/miniapp")
+		return
+	}
 	tplID := strings.TrimSpace(req.TemplateID)
 	if tplID == "" {
 		// 自动生成：tpl_ + 8 位 hex
@@ -606,11 +615,12 @@ func (s *Server) handleOfficialAdminTplCreate(w http.ResponseWriter, r *http.Req
 		tplID = "tpl_" + hex.EncodeToString(b)
 	}
 	tpl := model.OfficialTemplate{
-		AccountID:  uint(id),
-		TemplateID: tplID,
-		Name:       req.Name,
-		Content:    req.Content,
-		Example:    req.Example,
+		AccountID:   uint(id),
+		TemplateID:  tplID,
+		Name:        req.Name,
+		ContentType: req.ContentType,
+		Content:     req.Content,
+		Example:     req.Example,
 	}
 	if err := store.DB.Create(&tpl).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "创建失败: "+err.Error())
@@ -627,9 +637,10 @@ func (s *Server) handleOfficialAdminTplUpdate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var req struct {
-		Name    *string `json:"name"`
-		Content *string `json:"content"`
-		Example *string `json:"example"`
+		Name        *string `json:"name"`
+		ContentType *string `json:"content_type"`
+		Content     *string `json:"content"`
+		Example     *string `json:"example"`
 	}
 	if err := jsonDecodeLimit(w, r, &req, 32768); err != nil {
 		return
@@ -645,6 +656,17 @@ func (s *Server) handleOfficialAdminTplUpdate(w http.ResponseWriter, r *http.Req
 		if v != "" {
 			updates["name"] = v
 		}
+	}
+	if req.ContentType != nil {
+		v := strings.TrimSpace(*req.ContentType)
+		if v == "" {
+			v = "text"
+		}
+		if !isValidOfficialContentType(v) {
+			adminFail(w, http.StatusBadRequest, "content_type 不合法，可选：text/notify/news/news_list/miniapp")
+			return
+		}
+		updates["content_type"] = v
 	}
 	if req.Content != nil {
 		v := strings.TrimSpace(*req.Content)

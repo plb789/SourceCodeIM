@@ -49,7 +49,7 @@
          须先于 socket.js/chat.js 加载（登录 platform 上报与通话入口注册依赖） -->
     <script src="/js/web-call-bridge.js?v=2.5"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
-    <script src="/js/mobile.js?v=1.28"></script>
+    <script src="/js/mobile.js?v=1.30"></script>
     <!-- 阶段二百六十：客户端自动更新（APP 原生壳检测/下载/安装弹窗 + PC 设置页检查更新接线；
          纯浏览器 WEB 端服务端托管即全员生效，本脚本自动旁路） -->
     <script src="/js/app-update.js?v=1.1"></script>
@@ -64,7 +64,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.83">
+    <link rel="stylesheet" href="/css/style.css?v=3.85">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -358,12 +358,12 @@
                     </span>
                     <span class="new-friends-text">发起群聊</span>
                 </div>
-                <!-- 搜索服务号入口 -->
-                <div id="official-search-entry" class="new-friends-entry" title="搜索服务号">
+                <!-- 阶段二百九十三：服务号入口（通讯录分组，微信同款） -->
+                <div id="official-search-entry" class="new-friends-entry" title="服务号">
                     <span class="new-friends-icon">
                         <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
                     </span>
-                    <span class="new-friends-text">搜索服务号</span>
+                    <span class="new-friends-text">服务号</span>
                 </div>
                 <ul id="user-list" class="user-list">
                     <li class="user-item group-item active" data-user="">群聊</li>
@@ -379,7 +379,7 @@
                     </button>
                     <div class="official-search-box">
                         <svg class="official-search-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-                        <input id="off-search-input" type="text" placeholder="输入服务号名称 / 关键词" autocomplete="off">
+                        <input id="off-search-input" type="text" placeholder="搜索名称 / 简介（留空显示全部）" autocomplete="off">
                         <button id="off-search-clear" class="off-search-clear hidden" title="清空">×</button>
                     </div>
                 </div>
@@ -542,6 +542,8 @@
                     <button id="conv-search-btn" class="logout-btn" title="搜索聊天记录">
                         <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
                     </button>
+                    <!-- 服务号会话：头部关注/取消按钮（仅 PC 显式可见；移动端统一归入口"更多"菜单） -->
+                    <button id="official-sub-header-btn" class="logout-btn hidden" title="关注 / 取消关注"></button>
                     <!-- 阶段一百四十二：邀请成员按钮（仅群聊会话且当前用户为群主时显示，点击打开多选弹窗发 74 邀请） -->
                     <button id="grp-invite-btn" class="logout-btn hidden" title="邀请成员">
                         <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm8 1c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm-8 1.08c-1.29.31-4 1.02-4 2.92v2H1v-2c0-2.05 3.4-3.4 6-3.92z"/></svg>
@@ -2909,7 +2911,7 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.50"></script>
+    <script src="/js/socket.js?v=1.51"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.11"></script>
@@ -2924,7 +2926,7 @@
     <script src="/js/remote-engine.js?v=1.2"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.12"></script>
-    <script src="/js/chat.js?v=3.218"></script>
+    <script src="/js/chat.js?v=3.229"></script>
     <!-- 阶段二百九十二 M8：联机引擎（gn-net.js）与房间层（gn-room.js）已迁入游戏中心窗
          （game-store.html 加载），主窗口仅保留 109/110/112 跨窗中继（socket.js）与 111 邀请卡片（chat.js）；
          两窗同持房间状态会脑裂，故此处不得再引入 -->

@@ -1183,6 +1183,14 @@
         loginBtn.classList.remove('logging-in');
         loginBtn.disabled = false;
         loginBtn.textContent = I18N.t('登录');
+        // 扫码关注跳转：登录成功后检查 redirect_url 参数（subscribe.html 传入），自动跳回
+        try {
+            var rd = new URLSearchParams(location.search).get('redirect_url');
+            // 仅允许本站 subscribe.html 相对路径（带可选 query），禁止外部域名跳转
+            if (rd && /^\/subscribe\.html(\?.*)?$/.test(rd)) {
+                setTimeout(function () { location.href = rd; }, 300);
+            }
+        } catch (e) {}
     });
 
     // ===== 阶段二百五十：在途自发消息气泡跨"交接重拉历史"保全 =====
@@ -9219,6 +9227,58 @@
         });
         officialMap = next;
         renderConvList();
+        // 订阅列表变了 → 如果当前正在看服务号会话，同步刷新头部按钮状态
+        if (currentChatUser && currentChatUser.startsWith && currentChatUser.startsWith('o_')) {
+            _syncOfficialHeaderBtn(currentChatUser);
+        }
+    });
+
+    // ===== 阶段二百九十三 P3：服务号会话头部"关注/取消"按钮（放大镜旁 / 移动端 ··· 菜单自动镜像） =====
+    function _syncOfficialHeaderBtn(target) {
+        var btn = document.getElementById('official-sub-header-btn');
+        if (!btn) return;
+        // 只在服务号会话里显示
+        if (!target || !target.startsWith || !target.startsWith('o_')) {
+            btn.classList.add('hidden');
+            btn.removeAttribute('data-appid');
+            btn.removeAttribute('data-subscribed');
+            btn.removeAttribute('data-off-action');
+            btn.title = '';
+            return;
+        }
+        // 解析 app_id（target 格式可能是 o_<id> 或 o_o_<id>）
+        var appID = target.replace(/^o_/, '');
+        btn.setAttribute('data-appid', appID);
+        // 判断是否已关注：officialMap 里存在 = 已关注
+        var isSub = !!officialMap[target];
+        btn.setAttribute('data-subscribed', isSub ? '1' : '0');
+        btn.setAttribute('data-off-action', isSub ? 'unsubscribe' : 'subscribe');
+        // 结构：SVG 图标 + 文字（和 mobile.js more-menu 图标一致）
+        var iconSvg = isSub
+            ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="8 12 11 15 16 9"/></svg>'
+            : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>';
+        btn.innerHTML = iconSvg + '<span class="label">' + (isSub ? '已关注' : '关注') + '</span>';
+        btn.title = isSub ? '点击取消关注' : '点击关注';
+        btn.classList.toggle('official-subscribed', isSub);
+        btn.classList.remove('hidden');
+    }
+    // 头部按钮点击 → 走 WS OFFICIAL_SUB_ACTION（和搜索面板里的关注按钮复用同一个后端推送）
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('#official-sub-header-btn');
+        if (!btn) return;
+        e.stopPropagation();
+        var appID = btn.getAttribute('data-appid');
+        if (!appID) return;
+        var isSub = btn.getAttribute('data-subscribed') === '1';
+        // IMSocket.send 只接收一个对象参数（内部做 JSON.stringify），必须传 {msg_type, content}
+        IMSocket.send({
+            msg_type: MSG.OFFICIAL_SUB_ACTION,
+            content: JSON.stringify({
+                action: isSub ? 'unsubscribe' : 'subscribe',
+                app_id: appID
+            })
+        });
+        showToast(isSub ? '取消关注中…' : '关注中…');
     });
 
     // 114 OFFICIAL_SUB_ACTION：关注/取消关注回执（关注成功后后端会同步推 113 刷新）
@@ -9227,6 +9287,31 @@
             var p = JSON.parse(msg.content);
             if (!p.ok) {
                 showToast(p.err || '操作失败');
+                return;
+            }
+            // 取消关注成功 + 当前正看这个服务号会话 → 自动退出（微信同款：关注的号取消后页面关闭）
+            if (p.action === 'unsubscribe' && p.app_id && currentChatUser) {
+                var target = 'o_' + p.app_id;
+                if (currentChatUser === target || currentChatUser === 'o_' + target) {
+                    // 移动端（html.m 标记）：滑回列表视图（等价 mobile.js exitChat）
+                    if (document.documentElement.classList.contains('m')) {
+                        document.body.classList.remove('in-chat');
+                        var obMobile = document.getElementById('official-menu-bar');
+                        if (obMobile) obMobile.classList.add('hidden');
+                    } else {
+                        // PC 端：清空消息区 + 切回会话列表态
+                        var ml = document.getElementById('message-list');
+                        if (ml) ml.innerHTML = '';
+                        var cs = document.getElementById('chat-status');
+                        if (cs) cs.textContent = '';
+                        var ct = document.getElementById('chat-title');
+                        if (ct) ct.textContent = '';
+                        var ob = document.getElementById('official-menu-bar');
+                        if (ob) ob.classList.add('hidden');
+                    }
+                    currentChatUser = '';
+                    showToast('已取消关注');
+                }
             }
         } catch (e) { }
     });
@@ -9256,6 +9341,20 @@
     // 历史消息由 HISTORY / CONV_LIST 路径已落库带 msg_type=117，此处仅处理实时路径
     IMSocket.on(MSG.OFFICIAL_MSG, function (msg) {
         renderOfficialMsgBubble(msg);
+    });
+
+    // 121 OFFICIAL_RECALL：服务号消息撤回通知（商户后台撤回已发消息后推给订阅用户）
+    // content: {"msg_id": 59115, "official_msg_id": 7}
+    IMSocket.on(MSG.OFFICIAL_RECALL, function (msg) {
+        var info = null;
+        try { info = JSON.parse(msg.content || '{}'); } catch (e) { return; }
+        if (!info || !info.msg_id) return;
+        var el = document.querySelector('[data-msg-id="' + info.msg_id + '"]');
+        if (!el) return;
+        var tip = document.createElement('div');
+        tip.className = 'system-tip';
+        tip.textContent = '该消息已被服务号撤回';
+        el.replaceWith(tip);
     });
 
     // ===== 阶段二百九十三：服务号辅助函数集（sidebar 内嵌搜索面板 / 消息气泡 / 关注动作） =====
@@ -9289,7 +9388,9 @@
         var hint = document.getElementById('off-search-hint');
         if (input) { input.value = ''; input.focus(); }
         if (listEl) listEl.innerHTML = '';
-        if (hint) hint.textContent = '输入关键词后按回车搜索';
+        if (hint) hint.textContent = '加载中…';
+        // 立即请求全部服务号（空关键词 = 列出全部）
+        IMSocket.send({ msg_type: MSG.OFFICIAL_SEARCH, content: '' });
     }
     function closeOfficialSearch() {
         var panel = document.getElementById('official-panel');
@@ -9304,10 +9405,9 @@
     function sendOfficialSearch() {
         var input = document.getElementById('off-search-input');
         var kw = input ? input.value.trim() : '';
-        if (!kw) return;
         var hint = document.getElementById('off-search-hint');
         var listEl = document.getElementById('off-search-list');
-        if (hint) hint.textContent = '搜索中…';
+        if (hint) hint.textContent = kw ? '搜索中…' : '加载中…';
         if (listEl) listEl.innerHTML = '';
         IMSocket.send({ msg_type: MSG.OFFICIAL_SEARCH, content: kw });
     }
@@ -9316,61 +9416,102 @@
         var listEl = document.getElementById('off-search-list');
         if (!listEl) return;
         if (!list || list.length === 0) {
-            if (hint) hint.textContent = '未找到匹配的服务号';
+            if (hint) hint.textContent = '暂无服务号';
             listEl.innerHTML = '';
             return;
         }
-        if (hint) hint.textContent = '共 ' + list.length + ' 个结果';
-        // 复用 user-item 结构（和会话列表同样式：方形圆角头像 + 名称 + 简介 + 关注按钮）
-        var html = '';
+        var subscribed = [], notSubscribed = [];
         list.forEach(function (off) {
+            (off.subscribed ? subscribed : notSubscribed).push(off);
+        });
+        if (hint) {
+            var parts = [];
+            if (subscribed.length) parts.push('已关注 ' + subscribed.length);
+            if (notSubscribed.length) parts.push('可关注 ' + notSubscribed.length);
+            hint.textContent = parts.join(' · ') || '共 ' + list.length + ' 个';
+        }
+        function renderItem(off) {
             var appID = escapeHtml(off.app_id);
             var target = 'o_' + appID;
-            var subscribed = !!off.subscribed;
-            var btnText = subscribed ? '取消关注' : '关注';
+            var isSub = !!off.subscribed;
             var safeName = escapeHtml(off.display_name);
             var safeDesc = escapeHtml(off.description || '');
             var safeAvatar = escapeHtml(off.avatar || '');
+            var subCount = off.subscribe_count || 0;
+            var countStr = subCount > 0 ? '<span class="conv-sub-count">👥 ' + subCount + '</span>' : '';
             var avatarHtml = safeAvatar
                 ? '<img src="' + safeAvatar + '" style="width:100%;height:100%;border-radius:8px;object-fit:cover" onerror="this.parentNode.textContent=\'🏢\';this.remove()">'
                 : '🏢';
-            html += '<li class="user-item official-item" data-target="' + target + '">' +
+            // 已关注：小圆圈内 SVG 对勾（全平台字体兼容），hover 展开成"取消关注"胶囊；未关注：胶囊按钮
+            var btnHtml;
+            if (isSub) {
+                btnHtml = '<button class="official-sub-btn" data-off-action="unsubscribe" data-appid="' + appID + '" title="点击取消关注">' +
+                    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+                    '<span class="official-sub-hover-label">取消关注</span>' +
+                    '</button>';
+            } else {
+                btnHtml = '<button class="req-btn primary" data-off-action="subscribe" data-appid="' + appID + '">关注</button>';
+            }
+            return '<li class="user-item official-item' + (isSub ? ' is-subscribed' : '') + '" data-target="' + target + '">' +
                 '<div class="conv-avatar conv-official-avatar">' + avatarHtml + '</div>' +
                 '<div class="conv-info">' +
                 '<div class="conv-name">' + safeName + '</div>' +
-                '<div class="conv-desc">' + safeDesc + '</div>' +
+                '<div class="conv-desc">' + safeDesc + countStr + '</div>' +
                 '</div>' +
-                '<button class="admin-btn small' + (subscribed ? '' : ' primary') + '" data-off-action="' + (subscribed ? 'unsubscribe' : 'subscribe') + '" data-appid="' + appID + '">' + btnText + '</button>' +
+                btnHtml +
                 '</li>';
-        });
+        }
+        var html = '';
+        if (subscribed.length > 0) {
+            html += '<li class="official-section-title">已关注（' + subscribed.length + '）</li>';
+            subscribed.forEach(function (off) { html += renderItem(off); });
+        }
+        if (notSubscribed.length > 0) {
+            if (subscribed.length > 0) html += '<li class="official-section-divider"></li>';
+            html += '<li class="official-section-title">发现更多（' + notSubscribed.length + '）</li>';
+            notSubscribed.forEach(function (off) { html += renderItem(off); });
+        }
         listEl.innerHTML = html;
         // 绑定关注/取消按钮
         listEl.querySelectorAll('[data-off-action]').forEach(function (btn) {
             btn.addEventListener('click', function (e) {
-                e.stopPropagation();   // 防止冒泡到 user-item 打开会话
-                var action = btn.getAttribute('data-off-action');
+                e.stopPropagation();
+                var action = btn.getAttribute('data-off-action'); // 点击时的动作：subscribe 或 unsubscribe
                 var appID = btn.getAttribute('data-appid');
                 IMSocket.send({
                     msg_type: MSG.OFFICIAL_SUB_ACTION,
                     content: JSON.stringify({ action: action, app_id: appID })
                 });
-                // 乐观 UI：按钮立即切换，后端回执到达后再由 SubList 刷新
-                btn.setAttribute('data-off-action', action === 'subscribe' ? 'unsubscribe' : 'subscribe');
-                btn.textContent = action === 'subscribe' ? '取消关注' : '关注';
-                btn.classList.toggle('primary');
+                // 乐观更新 UI：按钮切换到相反状态（后端 114 回执会再次确认）
+                var nextAction = action === 'subscribe' ? 'unsubscribe' : 'subscribe';
+                var nextLabel = action === 'subscribe' ? '取消关注' : '关注';
+                btn.setAttribute('data-off-action', nextAction);
+                // subscribed 态（official-sub-btn 类）才更新 span label；未关注态用 textContent
+                var labelEl = btn.querySelector('.official-sub-hover-label');
+                if (labelEl) {
+                    labelEl.textContent = nextLabel;
+                } else {
+                    btn.textContent = nextLabel;
+                    btn.classList.toggle('primary');
+                }
             });
         });
-        // 点击结果项 → 打开会话（和会话列表同交互）
+        // 点击条目 → 打开服务号会话
         listEl.querySelectorAll('.official-item').forEach(function (item) {
             item.addEventListener('click', function () {
                 var tgt = item.getAttribute('data-target');
-                if (tgt) openConversation(tgt);
+                if (tgt) {
+                    openConversation(tgt);
+                    // 关闭服务号面板（移动端盖在聊天视图上必须关；PC 端侧边栏也应自动收起）
+                    closeOfficialSearch();
+                }
             });
         });
     }
 
     // renderOfficialMsgBubble 服务号消息气泡渲染（接收实时 MSG 117）
-    // 后端信封格式：{app_id, name, avatar, msg_type, title, content, url, template_id, link_btn}
+    // 阶段二百九十三 P2：switch 分流——text 居中卡片 / notify 通知卡片 / news/news_list/miniapp 预留分支
+    // 后端信封格式：{official: {app_id, msg_type, title, content, url, link_btn, status?, badge_color?, fields[]?, image?, items[]?, icon?, subtitle?}}
     function renderOfficialMsgBubble(msg) {
         var envelope = null;
         try {
@@ -9388,47 +9529,153 @@
             touchConvLocal(target, envelope.title || envelope.content);
             return;
         }
-        // 服务号当前会话 → 渲染气泡（左侧 🏢 标识 + 标题 + 正文 + 可选链接按钮）
-        var bubble = document.createElement('div');
-        bubble.className = 'msg-wrap left';
-        var body = document.createElement('div');
-        body.className = 'msg-bubble official-msg';
-        var avatarDiv = document.createElement('div');
-        avatarDiv.className = 'conv-avatar';
-        avatarDiv.textContent = '🏢';
-        if (envelope.avatar) {
-            var im = document.createElement('img');
-            im.src = envelope.avatar;
-            im.alt = '';
-            im.addEventListener('error', function () { im.remove(); avatarDiv.textContent = '🏢'; });
-            avatarDiv.appendChild(im);
+        var contentType = envelope.msg_type || 'text';
+        // 根据 content_type 分流渲染
+        switch (contentType) {
+            case 'notify':
+                appendOfficialNotifyCard(envelope);
+                break;
+            case 'news':
+            case 'news_list':
+            case 'miniapp':
+                // 后续阶段实现，暂降级为 text 卡片
+                appendOfficialTextCard(envelope);
+                break;
+            case 'text':
+            default:
+                appendOfficialTextCard(envelope);
         }
-        var inner = document.createElement('div');
-        inner.style.maxWidth = '420px';
-        var titleEl = document.createElement('div');
-        titleEl.style.fontWeight = '600';
-        titleEl.style.marginBottom = '4px';
-        titleEl.textContent = envelope.title || envelope.name || '';
-        var contentEl = document.createElement('div');
-        contentEl.textContent = envelope.content || '';
-        inner.appendChild(titleEl);
-        inner.appendChild(contentEl);
-        if (envelope.url) {
-            var linkRow = document.createElement('div');
-            linkRow.style.marginTop = '6px';
+    }
+
+    // appendOfficialTextCard 居中文本通知卡片（P1：替代原来的左气泡样式，微信服务号同款）
+    function buildOfficialTextBubbleEl(env, msgId) {
+        var wrap = document.createElement('div');
+        wrap.className = 'official-card-wrap'; // 居中占位
+        if (msgId) wrap.setAttribute('data-msg-id', msgId);
+        var card = document.createElement('div');
+        card.className = 'official-card official-card-text';
+        // 顶部横幅
+        var banner = document.createElement('div');
+        banner.className = 'official-card-banner';
+        banner.innerHTML = '<span class="ocb-icon">📢</span><span class="ocb-label">消息通知</span>';
+        card.appendChild(banner);
+        // 标题
+        if (env.title) {
+            var title = document.createElement('div');
+            title.className = 'official-card-title';
+            title.textContent = env.title;
+            card.appendChild(title);
+        }
+        // 正文
+        if (env.content) {
+            var body = document.createElement('div');
+            body.className = 'official-card-body';
+            body.textContent = env.content;
+            card.appendChild(body);
+        }
+        // 底部按钮
+        if (env.url) {
+            var footer = document.createElement('div');
+            footer.className = 'official-card-footer';
             var a = document.createElement('a');
-            a.href = envelope.url;
+            a.href = env.url;
             a.target = '_blank';
-            a.textContent = envelope.link_btn || '查看详情';
-            a.className = 'admin-btn small';
-            linkRow.appendChild(a);
-            inner.appendChild(linkRow);
+            a.className = 'official-card-link';
+            a.textContent = env.link_btn || '查看详情';
+            footer.appendChild(a);
+            card.appendChild(footer);
         }
-        body.appendChild(inner);
-        bubble.appendChild(avatarDiv);
-        bubble.appendChild(body);
+        wrap.appendChild(card);
+        return wrap;
+    }
+    function appendOfficialTextCard(env) {
         var list = document.getElementById('chat-msg-list');
-        if (list) list.appendChild(bubble);
+        if (!list) return;
+        var wrap = buildOfficialTextBubbleEl(env);
+        list.appendChild(wrap);
+        var scroll = document.getElementById('chat-msg-scroll');
+        if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    }
+
+    // appendOfficialNotifyCard 通知卡片（P2：订单/物流/账单场景，微信模板消息同款）
+    function buildOfficialNotifyBubbleEl(env, msgId) {
+        var wrap = document.createElement('div');
+        wrap.className = 'official-card-wrap';
+        if (msgId) wrap.setAttribute('data-msg-id', msgId);
+        var card = document.createElement('div');
+        card.className = 'official-card official-card-notify';
+        // 顶部横幅
+        var banner = document.createElement('div');
+        banner.className = 'official-card-banner';
+        banner.innerHTML = '<span class="ocb-icon">📢</span><span class="ocb-label">消息通知</span>';
+        card.appendChild(banner);
+        // 标题 + 状态 badge（同一行，badge 靠右）
+        if (env.title || env.status) {
+            var titleRow = document.createElement('div');
+            titleRow.className = 'official-card-title-row';
+            var titleEl = document.createElement('div');
+            titleEl.className = 'official-card-title';
+            titleEl.textContent = env.title || '';
+            titleRow.appendChild(titleEl);
+            if (env.status) {
+                var badge = document.createElement('span');
+                badge.className = 'oc-status-badge oc-status-' + (env.badge_color || 'blue');
+                badge.textContent = env.status;
+                titleRow.appendChild(badge);
+            }
+            card.appendChild(titleRow);
+        }
+        // 底部分隔线
+        var divider = document.createElement('div');
+        divider.className = 'official-card-divider';
+        card.appendChild(divider);
+        // 字段列表（键值对）
+        if (env.fields && env.fields.length > 0) {
+            var fieldBox = document.createElement('div');
+            fieldBox.className = 'official-card-fields';
+            env.fields.forEach(function (f) {
+                if (!f || !f.label) return;
+                var row = document.createElement('div');
+                row.className = 'oc-field-row';
+                var lbl = document.createElement('div');
+                lbl.className = 'oc-field-label';
+                lbl.textContent = f.label;
+                var val = document.createElement('div');
+                val.className = 'oc-field-value';
+                val.textContent = f.value || '';
+                row.appendChild(lbl);
+                row.appendChild(val);
+                fieldBox.appendChild(row);
+            });
+            card.appendChild(fieldBox);
+        }
+        // 卡片附带的正文（可选）
+        if (env.content) {
+            var body = document.createElement('div');
+            body.className = 'official-card-body';
+            body.textContent = env.content;
+            card.appendChild(body);
+        }
+        // 底部按钮
+        if (env.url) {
+            var footer = document.createElement('div');
+            footer.className = 'official-card-footer';
+            var a = document.createElement('a');
+            a.href = env.url;
+            a.target = '_blank';
+            a.className = 'official-card-link';
+            a.textContent = env.link_btn || '查看详情';
+            footer.appendChild(a);
+            card.appendChild(footer);
+        }
+        wrap.appendChild(card);
+        return wrap;
+    }
+    function appendOfficialNotifyCard(env) {
+        var list = document.getElementById('chat-msg-list');
+        if (!list) return;
+        var wrap = buildOfficialNotifyBubbleEl(env);
+        list.appendChild(wrap);
         var scroll = document.getElementById('chat-msg-scroll');
         if (scroll) scroll.scrollTop = scroll.scrollHeight;
     }
@@ -20832,7 +21079,7 @@
             // 阶段一百四十二：多群泛化——多群会话（'gN'）同按群聊口径渲染
             var isGroup = isGroupTarget(cv.target);
             // 阶段二百九十三：服务号会话（'o_' 前缀）——从 officialMap 取展示信息
-            var isOfficial = !isGroup && cv.target && cv.target.charAt(0) === 'o_';
+            var isOfficial = !isGroup && cv.target && cv.target.startsWith('o_');
             var convName;
             if (isOfficial) {
                 var off = officialMap[cv.target];
@@ -21913,17 +22160,26 @@
     // 服务号面板返回按钮
     var officialPanelBack = document.getElementById('official-panel-back');
     if (officialPanelBack) officialPanelBack.addEventListener('click', closeOfficialSearch);
-    // 服务号搜索框 Enter 键 + 清空按钮
+    // 服务号搜索框：Enter 触发 + 清空按钮重查全部 + input 事件实时触发（300ms 防抖）
     var offSearchInput = document.getElementById('off-search-input');
-    if (offSearchInput) offSearchInput.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') sendOfficialSearch();
-    });
+    var _offSearchTimer = null;
+    if (offSearchInput) {
+        offSearchInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                if (_offSearchTimer) { clearTimeout(_offSearchTimer); _offSearchTimer = null; }
+                sendOfficialSearch();
+            }
+        });
+        offSearchInput.addEventListener('input', function () {
+            if (_offSearchTimer) clearTimeout(_offSearchTimer);
+            _offSearchTimer = setTimeout(sendOfficialSearch, 300);
+        });
+    }
     var offSearchClear = document.getElementById('off-search-clear');
     if (offSearchClear) offSearchClear.addEventListener('click', function () {
-        if (offSearchInput) offSearchInput.value = '';
-        if (document.getElementById('off-search-list')) document.getElementById('off-search-list').innerHTML = '';
-        if (document.getElementById('off-search-hint')) document.getElementById('off-search-hint').textContent = '输入关键词后按回车搜索';
-        if (offSearchInput) offSearchInput.focus();
+        if (offSearchInput) { offSearchInput.value = ''; offSearchInput.focus(); }
+        if (_offSearchTimer) { clearTimeout(_offSearchTimer); _offSearchTimer = null; }
+        sendOfficialSearch(); // 清空后立即显示全部
     });
     var grpInviteBtn = document.getElementById('grp-invite-btn');
     if (grpInviteBtn) grpInviteBtn.addEventListener('click', function () {
@@ -22321,6 +22577,24 @@
             if (conv && conv.unread > 0) conv.unread = 0;
         }
         updateChatTitle();
+        // 阶段二百九十三：服务号会话 → 隐藏输入框（微信服务号同款：底部只有自定义菜单 bar，没有输入框）；
+        // 切换回好友/群聊/AI → 恢复输入框。officialMenuEnsure 在下方已调用，自动处理 menu bar 显隐
+        // 阶段二百九十三 P2 修：服务号 target 格式是 "o_o_<appid>"（双 o_），startsWith('o_') 仍能命中；
+        // 用 inline style.display 双保险（CSS .hidden 理论上 !important 能覆盖 .input-bar display:flex，
+        // 但实测有场景下 CSS specificity + 加载顺序会漏掉，inline style 优先级最高无敌覆盖）
+        var inputBar = document.getElementById('input-bar');
+        var isOfficial = !!(user && user.startsWith && user.startsWith('o_'));
+        if (inputBar) {
+            if (isOfficial) {
+                inputBar.style.display = 'none';
+                inputBar.classList.add('hidden');
+            } else {
+                inputBar.style.display = '';   // 清空 inline style，让 CSS 的 display:flex 生效
+                inputBar.classList.remove('hidden');
+            }
+        }
+        // 阶段二百九十三 P3：服务号会话 → 头部放大镜旁显示"关注/取消"按钮；移动端自动归入 ··· 菜单
+        _syncOfficialHeaderBtn(user);
         // 切换会话后无条件重渲染两个列表，保证选中高亮跟随点击切换
         // 原实现：renderConvList 仅在该会话有未读时调用（unread>0 分支内），点击无未读的好友时会话列表 active 停留在上一个会话
         // if (conv && conv.unread > 0) { conv.unread = 0; renderConvList(); renderFriendList(); }
@@ -22355,7 +22629,7 @@
             loadHistory();
         }
         // 阶段二百九十三：打开服务号会话 → 发 115 拉底部菜单（服务端按 target='o_<appid>' 识别）
-        if (user && user.charAt(0) === 'o_') {
+        if (user && user.startsWith('o_')) {
             IMSocket.send({ msg_type: MSG.OFFICIAL_MENU, to_user: user });
         }
         // 服务号底部 Tab Bar 容器（动态创建，切换会话时实时刷新）
@@ -22372,16 +22646,25 @@
         if (!_officialMenuBar) {
             _officialMenuBar = document.createElement('div');
             _officialMenuBar.id = 'official-menu-bar';
-            _officialMenuBar.style.cssText =
-                'position:relative;display:none;max-height:45vh;overflow-y:auto;' +
-                'border-top:1px solid var(--border,#e5e5e5);background:var(--bg,#fff);' +
-                'padding:6px 8px;font-size:14px;z-index:2;';
-            var container = document.querySelector('.chat-input-row') ||
-                document.getElementById('chat-input-wrap') ||
-                document.querySelector('#chat-view > .chat-body');
+            _officialMenuBar.className = 'off-m-bar';
+            var container = document.getElementById('input-bar') ||
+                document.querySelector('.input-bar') ||
+                document.querySelector('#chat-view');
             if (container && container.parentNode) {
                 container.parentNode.insertBefore(_officialMenuBar, container.nextSibling);
             }
+            // 点击页面其他地方 → 自动收起二级菜单
+            document.addEventListener('click', function (e) {
+                if (!_officialMenuBar) return;
+                if (!_officialMenuBar.contains(e.target)) {
+                    _officialMenuBar.querySelectorAll('.off-m-sub.show').forEach(function (el) {
+                        el.classList.remove('show');
+                    });
+                    _officialMenuBar.querySelectorAll('.off-m-btn.active').forEach(function (el) {
+                        el.classList.remove('active');
+                    });
+                }
+            });
         }
         renderOfficialMenuBar();
     }
@@ -22389,78 +22672,79 @@
     function renderOfficialMenuBar() {
         if (!_officialMenuBar) return;
         var target = currentChatUser;
-        if (!target || target.charAt(0) !== 'o_') {
-            _officialMenuBar.style.display = 'none';
+        if (!target || !target.startsWith || !target.startsWith('o_')) {
+            _officialMenuBar.classList.remove('show');
             _officialMenuBar.innerHTML = '';
             return;
         }
         var cached = _officialMenuCache[target];
         if (!cached || !cached.menus || !cached.menus.length) {
-            _officialMenuBar.style.display = 'none';
+            _officialMenuBar.classList.remove('show');
             _officialMenuBar.innerHTML = '';
             return;
         }
-        _officialMenuBar.style.display = 'block';
-        _officialMenuBar.innerHTML = '';
-        cached.menus.forEach(function (m) {
+        _officialMenuBar.classList.add('show');
+
+        // 组装 HTML：微信服务号同款——一级按钮横排均分；有二级的点击展开浮层
+        var html = '<div class="off-m-row">';
+        cached.menus.forEach(function (m, idx) {
             var hasChildren = m.children && m.children.length > 0;
-            var btn = document.createElement('button');
-            btn.style.cssText =
-                'display:inline-flex;align-items:center;justify-content:center;min-width:80px;' +
-                'padding:6px 12px;margin:2px;border:1px solid var(--border,#e5e5e5);' +
-                'border-radius:6px;background:var(--bg-tertiary,#f4f4f4);cursor:pointer;' +
-                'font-size:13px;color:var(--text-primary,#333);' +
-                'transition:background .15s,border-color .15s;';
-            btn.textContent = hasChildren ? ('▾ ' + m.name) : m.name;
-            btn.addEventListener('mouseenter', function () {
-                btn.style.background = 'var(--primary-bg,rgba(7,193,96,.12))';
-                btn.style.borderColor = 'var(--primary,#07c160)';
+            html += '<button class="off-m-btn" data-idx="' + idx + '">' + escapeHtml(m.name || '') + (hasChildren ? ' <span class="off-m-arrow">▾</span>' : '') + '</button>';
+        });
+        html += '</div>';
+
+        // 二级菜单浮层容器（绝对定位，覆盖在按钮上方弹出）
+        cached.menus.forEach(function (m, idx) {
+            var hasChildren = m.children && m.children.length > 0;
+            if (!hasChildren) return;
+            html += '<div class="off-m-sub" data-parent-idx="' + idx + '">';
+            m.children.forEach(function (c) {
+                html += '<button class="off-m-sub-btn" ' +
+                    'data-action="' + escapeHtml(c.action || 'click') + '" ' +
+                    'data-value="' + escapeHtml(c.value || '') + '">' +
+                    escapeHtml(c.name || '') + '</button>';
             });
-            btn.addEventListener('mouseleave', function () {
-                btn.style.background = 'var(--bg-tertiary,#f4f4f4)';
-                btn.style.borderColor = 'var(--border,#e5e5e5)';
+            html += '</div>';
+        });
+
+        _officialMenuBar.innerHTML = html;
+
+        // 绑定一级按钮点击
+        _officialMenuBar.querySelectorAll('.off-m-btn').forEach(function (btn) {
+            btn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                var idx = Number(btn.getAttribute('data-idx'));
+                var menu = cached.menus[idx];
+                var hasChildren = menu.children && menu.children.length > 0;
+
+                // 先收起所有其他浮层 + 移除其他按钮 active
+                _officialMenuBar.querySelectorAll('.off-m-btn').forEach(function (b) { b.classList.remove('active'); });
+                _officialMenuBar.querySelectorAll('.off-m-sub').forEach(function (s) { s.classList.remove('show'); });
+
+                if (hasChildren) {
+                    // 展开浮层 + 按钮高亮
+                    btn.classList.add('active');
+                    var sub = _officialMenuBar.querySelector('.off-m-sub[data-parent-idx="' + idx + '"]');
+                    if (sub) sub.classList.add('show');
+                } else {
+                    // 无子菜单 → 直接触发
+                    sendOfficialMenuClick(cached.app_id, menu.action || 'click', menu.value || '');
+                }
             });
-            if (hasChildren) {
-                var subWrap = document.createElement('div');
-                subWrap.style.cssText =
-                    'position:relative;display:none;padding:4px 2px 2px;';
-                m.children.forEach(function (c) {
-                    var subBtn = document.createElement('button');
-                    subBtn.style.cssText =
-                        'display:block;width:100%;text-align:left;padding:4px 10px 4px 18px;' +
-                        'border:none;background:none;cursor:pointer;font-size:13px;color:var(--text-primary,#333);' +
-                        'border-radius:4px;';
-                    subBtn.textContent = c.name;
-                    subBtn.addEventListener('mouseenter', function () {
-                        subBtn.style.background = 'var(--bg-tertiary,#f4f4f4)';
-                    });
-                    subBtn.addEventListener('mouseleave', function () {
-                        subBtn.style.background = 'none';
-                    });
-                    subBtn.addEventListener('click', function () {
-                        sendOfficialMenuClick(cached.app_id, c.action || 'click', c.value || '');
-                        subWrap.style.display = 'none';
-                        btn.textContent = '▾ ' + m.name;
-                    });
-                    subWrap.appendChild(subBtn);
-                });
-                btn.addEventListener('click', function () {
-                    if (subWrap.style.display === 'none') {
-                        subWrap.style.display = 'block';
-                        btn.textContent = '▴ ' + m.name;
-                    } else {
-                        subWrap.style.display = 'none';
-                        btn.textContent = '▾ ' + m.name;
-                    }
-                });
-                _officialMenuBar.appendChild(btn);
-                _officialMenuBar.appendChild(subWrap);
-            } else {
-                btn.addEventListener('click', function () {
-                    sendOfficialMenuClick(cached.app_id, m.action || 'click', m.value || '');
-                });
-                _officialMenuBar.appendChild(btn);
-            }
+        });
+
+        // 绑定二级按钮点击
+        _officialMenuBar.querySelectorAll('.off-m-sub-btn').forEach(function (subBtn) {
+            subBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                var action = subBtn.getAttribute('data-action') || 'click';
+                var value = subBtn.getAttribute('data-value') || '';
+                // 收起浮层
+                _officialMenuBar.querySelectorAll('.off-m-sub').forEach(function (s) { s.classList.remove('show'); });
+                _officialMenuBar.querySelectorAll('.off-m-btn').forEach(function (b) { b.classList.remove('active'); });
+                // 触发
+                sendOfficialMenuClick(cached.app_id, action, value);
+            });
         });
     }
 
@@ -22474,7 +22758,7 @@
 
     // 115 OFFICIAL_MENU：服务号底部自定义菜单（下行）
     IMSocket.on(MSG.OFFICIAL_MENU, function (msg) {
-        if (!currentChatUser || currentChatUser.charAt(0) !== 'o_') return; // 非当前会话忽略
+        if (!currentChatUser || !currentChatUser.startsWith || !currentChatUser.startsWith('o_')) return; // 非当前会话忽略（修 charAt(0) !== 'o_' 永远 true 的 BUG#293）
         var env = {};
         try { env = JSON.parse(msg.content) || {}; } catch (e) { env = {}; }
         var target = currentChatUser;
@@ -23044,6 +23328,58 @@
                 messageList.insertBefore(ocTip, beforeEl);
             } else {
                 messageList.appendChild(ocTip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
+        // 阶段二百九十三 P3：服务号消息(117)历史持久化渲染 —— 复用实时路径的 renderOfficialMsgBubble 逻辑
+        // 历史消息 content 是完整信封 {"official":{app_id, msg_type, title, content, ...}}
+        if (r.msg_type === 117) {
+            // 撤回占位：后端 recalled=true 的服务号消息，显示灰色占位条（不渲染卡片）
+            if (r.recalled === true || r.recalled === 1) {
+                var recalledTip = document.createElement('div');
+                recalledTip.className = 'system-tip';
+                recalledTip.textContent = '该服务号消息已被撤回';
+                if (beforeEl) {
+                    messageList.insertBefore(recalledTip, beforeEl);
+                } else {
+                    messageList.appendChild(recalledTip);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                return;
+            }
+            var offEnv = null;
+            try { offEnv = JSON.parse(r.content); } catch (e) { offEnv = null; }
+            var bubble = null;
+            if (offEnv && offEnv.official) {
+                var contentType = offEnv.official.msg_type || 'text';
+                // 把 envelope 塞进一个假 msg 对象，复用实时路径的渲染函数
+                var fakeMsg = { content: r.content, from_user: r.from_user, msg_id: r.id };
+                // 直接调 appendOfficialXXXCard 但让它们 append 到 messageList 末尾（历史渲染时 beforeEl 是 null 时 appendChild 到末尾）
+                if (contentType === 'notify') {
+                    bubble = buildOfficialNotifyBubbleEl(offEnv.official, r.id);
+                } else {
+                    bubble = buildOfficialTextBubbleEl(offEnv.official, r.id);
+                }
+            }
+            if (bubble) {
+                bubble.setAttribute('data-ts', ts);
+                if (beforeEl) {
+                    messageList.insertBefore(bubble, beforeEl);
+                } else {
+                    messageList.appendChild(bubble);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                return;
+            }
+            // 降级：渲染成系统提示 + 原始 JSON（异常兜底）
+            var offTip = document.createElement('div');
+            offTip.className = 'system-tip';
+            offTip.textContent = '[服务号消息] ' + (offEnv && offEnv.official ? (offEnv.official.title || offEnv.official.content || '') : '');
+            if (beforeEl) {
+                messageList.insertBefore(offTip, beforeEl);
+            } else {
+                messageList.appendChild(offTip);
                 messageList.scrollTop = messageList.scrollHeight;
             }
             return;
@@ -24927,6 +25263,24 @@
             chatTitle.textContent = currentChatUser;
             chatStatus.textContent = I18N.t('AI 助手');
             if (chatTitleAvatar) { chatTitleAvatar.classList.add('hidden'); chatTitleAvatar.innerHTML = ''; }
+        } else if (currentChatUser && currentChatUser.startsWith('o_')) {
+            // 阶段二百九十三：服务号会话标题——从 officialMap 取 display_name；兜底用 target 去掉 o_ 前缀
+            var off = officialMap[currentChatUser];
+            chatTitle.textContent = off ? (off.display_name || currentChatUser) : currentChatUser;
+            chatStatus.textContent = I18N.t('服务号');
+            if (chatTitleAvatar) {
+                chatTitleAvatar.classList.remove('hidden');
+                if (off && off.avatar) {
+                    chatTitleAvatar.innerHTML = '';
+                    var img = document.createElement('img');
+                    img.src = off.avatar;
+                    img.className = 'grp-avatar-fill';
+                    img.onerror = function () { img.outerHTML = ''; };
+                    chatTitleAvatar.appendChild(img);
+                } else {
+                    chatTitleAvatar.innerHTML = '<span class="conv-official-badge">🏢</span>';
+                }
+            }
         } else {
             var f = friendList.find(function (x) { return x.username === currentChatUser; });
             chatTitle.textContent = (f && f.remark) ? f.remark + '(' + currentChatUser + ')' : currentChatUser;

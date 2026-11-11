@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>关注服务号</title>
+    <!-- 主题防闪烁 -->
+    <script>
+        (function () {
+            var theme = localStorage.getItem('im_theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <link rel="stylesheet" href="css/style.css?v=1.52">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html, body { height: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--panel-bg, #1a1a1a);
+            color: var(--text, #e0e0e0);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .page-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            width: 100%;
+            max-width: 380px;
+            background: var(--panel-bg, #242424);
+            border-radius: 16px;
+            border: 1px solid var(--border, #333);
+            padding: 28px 24px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 16px;
+            background: var(--primary, #1890ff);
+            margin: 0 auto 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            color: #fff;
+            font-weight: bold;
+            overflow: hidden;
+        }
+        .avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .name {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text, #e0e0e0);
+            margin-bottom: 6px;
+        }
+        .app-id {
+            font-size: 12px;
+            color: var(--text-light, #888);
+            font-family: monospace;
+            background: rgba(255,255,255,0.06);
+            padding: 2px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 12px;
+        }
+        .desc {
+            font-size: 14px;
+            color: var(--text-light, #aaa);
+            line-height: 1.6;
+            margin-bottom: 20px;
+            min-height: 44px;
+        }
+        .sub-count {
+            font-size: 12px;
+            color: var(--text-light, #888);
+            margin-bottom: 24px;
+        }
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .btn {
+            width: 100%;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--primary, #1890ff);
+            color: #fff;
+        }
+        .btn-primary:active { opacity: 0.85; transform: scale(0.98); }
+        .btn-secondary {
+            background: rgba(255,255,255,0.06);
+            color: var(--text, #e0e0e0);
+            border: 1px solid var(--border, #333);
+        }
+        .btn-secondary:active { background: rgba(255,255,255,0.1); }
+        .btn-success {
+            background: #52c41a;
+            color: #fff;
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .loader {
+            display: inline-block;
+            width: 20px; height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .hidden { display: none !important; }
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .login-form input {
+            width: 100%;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--border, #333);
+            border-radius: 8px;
+            color: var(--text, #e0e0e0);
+            font-size: 14px;
+            outline: none;
+        }
+        .login-form input:focus { border-color: var(--primary, #1890ff); }
+        .login-tip {
+            font-size: 12px;
+            color: var(--text-light, #888);
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="page-wrap">
+        <!-- 加载中 -->
+        <div id="loading-view" class="card">
+            <div class="loader" style="margin:40px auto"></div>
+            <p style="color:var(--text-light);font-size:13px;margin-top:12px">加载中…</p>
+        </div>
+
+        <!-- 错误 -->
+        <div id="error-view" class="card hidden">
+            <div style="font-size:48px;margin-bottom:12px">😕</div>
+            <div id="error-msg" style="color:var(--text);font-size:15px;margin-bottom:20px"></div>
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="goHome()">返回首页</button>
+            </div>
+        </div>
+
+        <!-- 服务号信息 + 未登录 -->
+        <div id="login-view" class="card hidden">
+            <div class="avatar" id="login-avatar">🏢</div>
+            <div class="name" id="login-name">—</div>
+            <div class="desc" id="login-desc"></div>
+            <div class="sub-count" id="login-count"></div>
+            <div class="login-tip">请先登录你的 IM 账号以关注此服务号</div>
+            <div class="btn-group">
+                <button id="btn-go-login" class="btn btn-primary">前往登录并关注</button>
+                <button class="btn btn-secondary" onclick="goHome()">返回首页</button>
+            </div>
+        </div>
+
+        <!-- 服务号信息 + 已登录/已订阅 -->
+        <div id="main-view" class="card hidden">
+            <div class="avatar" id="m-avatar">🏢</div>
+            <div class="name" id="m-name">—</div>
+            <div class="app-id" id="m-appid"></div>
+            <div class="desc" id="m-desc"></div>
+            <div class="sub-count" id="m-count"></div>
+            <div class="btn-group" id="m-btn-group">
+                <!-- 动态填充按钮 -->
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            var params = new URLSearchParams(location.search);
+            var appId = params.get('app_id') || '';
+
+            var $loading = document.getElementById('loading-view');
+            var $error   = document.getElementById('error-view');
+            var $errMsg  = document.getElementById('error-msg');
+            var $login   = document.getElementById('login-view');
+            var $loginAvatar = document.getElementById('login-avatar');
+            var $loginName   = document.getElementById('login-name');
+            var $loginDesc   = document.getElementById('login-desc');
+            var $loginCount  = document.getElementById('login-count');
+            var $main    = document.getElementById('main-view');
+            var $mAvatar = document.getElementById('m-avatar');
+            var $mName   = document.getElementById('m-name');
+            var $mAppid  = document.getElementById('m-appid');
+            var $mDesc   = document.getElementById('m-desc');
+            var $mCount  = document.getElementById('m-count');
+            var $mBtns   = document.getElementById('m-btn-group');
+            var $toast   = document.getElementById('toast');
+
+            var accountCache = null;
+
+            function showToast(msg) {
+                $toast.textContent = msg;
+                $toast.classList.add('show');
+                clearTimeout(showToast._t);
+                showToast._t = setTimeout(function () { $toast.classList.remove('show'); }, 2000);
+            }
+
+            function hideAll() {
+                $loading.classList.add('hidden');
+                $error.classList.add('hidden');
+                $login.classList.add('hidden');
+                $main.classList.add('hidden');
+            }
+
+            function showView(el) { hideAll(); el.classList.remove('hidden'); }
+
+            function goHome() {
+                location.href = 'index.html';
+            }
+
+            function getToken() {
+                try { return localStorage.getItem('drive_token') || ''; } catch (e) { return ''; }
+            }
+
+            function showError(msg) {
+                $errMsg.textContent = msg || '加载失败';
+                showView($error);
+            }
+
+            function renderAvatar(el, avatar, name) {
+                if (avatar && avatar.indexOf('http') === 0) {
+                    el.innerHTML = '<img src="' + avatar + '" onerror="this.parentNode.textContent=\'🏢\';this.remove()">';
+                } else {
+                    el.textContent = (name || '🏢').charAt(0).toUpperCase();
+                }
+            }
+
+            function renderAccount(data, token) {
+                accountCache = data;
+                var name = data.display_name || '未知服务号';
+                var desc = data.description || '感谢您的关注';
+                var count = (data.subscribe_count || 0) + ' 人已关注';
+                var subscribed = !!data.subscribed;
+
+                if (token) {
+                    // 已登录
+                    $mName.textContent = name;
+                    $mAppid.textContent = data.app_id || '';
+                    $mDesc.textContent = desc;
+                    $mCount.textContent = count;
+                    renderAvatar($mAvatar, data.avatar, name);
+
+                    if (subscribed) {
+                        $mBtns.innerHTML =
+                            '<button class="btn btn-success" disabled>✓ 已关注</button>' +
+                            '<button class="btn btn-secondary" onclick="goChat()">进入聊天</button>' +
+                            '<button class="btn btn-secondary" id="btn-unsub">取消关注</button>';
+                        document.getElementById('btn-unsub').addEventListener('click', doUnsubscribe);
+                    } else {
+                        $mBtns.innerHTML =
+                            '<button class="btn btn-primary" id="btn-sub">立即关注</button>' +
+                            '<button class="btn btn-secondary" onclick="goHome()">返回首页</button>';
+                        document.getElementById('btn-sub').addEventListener('click', doSubscribe);
+                    }
+                    showView($main);
+                } else {
+                    // 未登录 - 在登录表单上方显示信息
+                    $loginName.textContent = name;
+                    $loginDesc.textContent = desc;
+                    $loginCount.textContent = count;
+                    renderAvatar($loginAvatar, data.avatar, name);
+                    showView($login);
+                }
+            }
+
+            function loadAccount() {
+                if (!appId) { showError('缺少 app_id 参数'); return; }
+                showView($loading);
+
+                var token = getToken();
+                var hdrs = {};
+                if (token) hdrs['Authorization'] = 'Bearer ' + token;
+
+                fetch('/api/official/accounts/' + encodeURIComponent(appId), { headers: hdrs })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        var data = res && res.data ? res.data : res;
+                        if (!data || !data.app_id) {
+                            showError(res && res.message ? res.message : '服务号不存在');
+                            return;
+                        }
+                        renderAccount(data, token);
+                    })
+                    .catch(function (err) {
+                        showError('网络错误：' + (err.message || err));
+                    });
+            }
+
+            function doSubscribe() {
+                var token = getToken();
+                if (!token) { showToast('请先登录'); return; }
+                var btn = document.getElementById('btn-sub');
+                btn.disabled = true;
+                btn.innerHTML = '<span class="loader"></span> 关注中…';
+
+                fetch('/api/official/subscribe/' + encodeURIComponent(appId), {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (res && res.ok) {
+                        showToast('✓ 关注成功');
+                        setTimeout(function () {
+                            // 刷新页面状态
+                            loadAccount();
+                        }, 800);
+                    } else {
+                        showToast((res && res.message) || '关注失败');
+                        btn.disabled = false;
+                        btn.textContent = '立即关注';
+                    }
+                })
+                .catch(function (err) {
+                    showToast('网络错误');
+                    btn.disabled = false;
+                    btn.textContent = '立即关注';
+                });
+            }
+
+            function doUnsubscribe() {
+                var token = getToken();
+                if (!token) { showToast('请先登录'); return; }
+                if (!confirm('确定取消关注此服务号吗？')) return;
+
+                fetch('/api/official/unsubscribe/' + encodeURIComponent(appId), {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (res && res.ok) {
+                        showToast('已取消关注');
+                        setTimeout(loadAccount, 800);
+                    } else {
+                        showToast((res && res.message) || '取消失败');
+                    }
+                })
+                .catch(function () { showToast('网络错误'); });
+            }
+
+            window.goChat = function () {
+                location.href = 'index.html';
+            };
+
+            // ========= 跳转到首页登录 =========
+            var $goLoginBtn = document.getElementById('btn-go-login');
+            if ($goLoginBtn) {
+                $goLoginBtn.addEventListener('click', function () {
+                    // 把当前页面 URL 编码后传给 index.html，登录成功后跳回
+                    var currentUrl = location.pathname + location.search;
+                    location.href = 'index.html?redirect_url=' + encodeURIComponent(currentUrl);
+                });
+            }
+
+            // 启动
+            loadAccount();
+        })();
+    </script>
+</body>
+</html>

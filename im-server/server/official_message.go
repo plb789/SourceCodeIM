@@ -35,18 +35,47 @@ import (
 // ============= 发送核心入口 =============
 
 // OfficialSendReq 推送请求（API / 后台 / 审核通过 统一入口）
+// ContentType 取值：text / notify / news / news_list / miniapp
+//   text       — 简单文本通知（默认）
+//   notify     — 结构化通知卡片（订单/物流/账单；带 status badge + fields 键值对）
+//   news       — 单图文卡片（封面图 + 标题 + 摘要 + url）
+//   news_list  — 多图文列表（items: [{image,title,summary,url}]）
+//   miniapp    — 小程序入口卡片（icon + name + subtitle + url）
+// 扩展字段：Status/BadgeColor/Fields/Image 等按需序列化为信封扩展字段
 type OfficialSendReq struct {
 	AccountID   uint
 	AppID       string
 	Recipients  []string // 单推/多推时的用户列表；空=群发
 	Title       string
-	ContentType string // text/image/news/template
+	ContentType string // text/notify/news/news_list/miniapp/template
 	Content     string
 	URL         string
 	LinkBtn     string
 	TriggerType string // api / manual / menu / event
 	NeedAudit   bool
 	MessageID   uint   // 关联 official_message 记录（发送成功后回填）
+	// --- P2 通知卡片扩展字段（ContentType=notify 时使用） ---
+	Status      string            `json:"status"`       // 订单/物流状态：如 "已发货" / "待支付"
+	BadgeColor  string            `json:"badge_color"`  // 状态 badge 颜色：green/red/blue/orange（默认 blue）
+	Fields      []NotifyField     `json:"fields"`       // 键值对列表（订单号/快递员/时间等）
+	Image       string            `json:"image"`        // 卡片顶部图片（news 也可用）
+	Items       []NewsItem        `json:"items"`        // 多图文列表
+	Icon        string            `json:"icon"`         // miniapp 图标
+	Subtitle    string            `json:"subtitle"`     // miniapp 副标题
+}
+
+// NotifyField 通知卡片字段（渲染为两行 key-value）
+type NotifyField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// NewsItem 多图文项
+type NewsItem struct {
+	Image   string `json:"image"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	URL     string `json:"url"`
 }
 
 // officialTask 入队推送任务（Redis List 存储，worker pool 消费）
@@ -61,6 +90,59 @@ type officialTask struct {
 	LinkBtn     string `json:"link_btn"`
 	TriggerType string `json:"trigger_type"`
 	MessageID   uint   `json:"message_id"`
+	// P2 扩展字段（与 OfficialSendReq 对齐，序列化进 Redis JSON）
+	Status     string        `json:"status,omitempty"`
+	BadgeColor string        `json:"badge_color,omitempty"`
+	Fields     []NotifyField `json:"fields,omitempty"`
+	Image      string        `json:"image,omitempty"`
+	Items      []NewsItem    `json:"items,omitempty"`
+	Icon       string        `json:"icon,omitempty"`
+	Subtitle   string        `json:"subtitle,omitempty"`
+}
+
+// reqToTask 将 OfficialSendReq 转为 officialTask（单 recipient 版本）
+func reqToTask(req OfficialSendReq, recipient string) officialTask {
+	return officialTask{
+		AccountID:   req.AccountID,
+		AppID:       req.AppID,
+		Recipient:   recipient,
+		Title:       req.Title,
+		ContentType: req.ContentType,
+		Content:     req.Content,
+		URL:         req.URL,
+		LinkBtn:     req.LinkBtn,
+		TriggerType: req.TriggerType,
+		MessageID:   req.MessageID,
+		Status:      req.Status,
+		BadgeColor:  req.BadgeColor,
+		Fields:      req.Fields,
+		Image:       req.Image,
+		Items:       req.Items,
+		Icon:        req.Icon,
+		Subtitle:    req.Subtitle,
+	}
+}
+
+// taskToReq 将 officialTask 还原为 OfficialSendReq（worker 消费时调用）
+func taskToReq(t officialTask) OfficialSendReq {
+	return OfficialSendReq{
+		AccountID:   t.AccountID,
+		AppID:       t.AppID,
+		ContentType: t.ContentType,
+		Title:       t.Title,
+		Content:     t.Content,
+		URL:         t.URL,
+		LinkBtn:     t.LinkBtn,
+		TriggerType: t.TriggerType,
+		MessageID:   t.MessageID,
+		Status:      t.Status,
+		BadgeColor:  t.BadgeColor,
+		Fields:      t.Fields,
+		Image:       t.Image,
+		Items:       t.Items,
+		Icon:        t.Icon,
+		Subtitle:    t.Subtitle,
+	}
 }
 
 // officialPool 状态（once 懒启动 + 原子计数器）
@@ -100,18 +182,8 @@ func (s *Server) SendOfficialBatchMsg(req OfficialSendReq, recipients []string) 
 		if blocked, _ := s.officialUserLimitCheck(ctx, u); blocked {
 			continue
 		}
-		task := officialTask{
-			AccountID:   req.AccountID,
-			AppID:       req.AppID,
-			Recipient:   u,
-			Title:       req.Title,
-			ContentType: req.ContentType,
-			Content:     req.Content,
-			URL:         req.URL,
-			LinkBtn:     req.LinkBtn,
-			TriggerType: req.TriggerType,
-			MessageID:   req.MessageID,
-		}
+		// 阶段二百九十三 P2：用 reqToTask 统一构造（包含 Status/Fields/Image 扩展字段）
+		task := reqToTask(req, u)
 		payload, err := json.Marshal(task)
 		if err != nil {
 			logger.Error("服务号批量入队 JSON 序列化失败 err=%s", err.Error())
@@ -164,17 +236,48 @@ func (s *Server) SendOfficialBroadcast(req OfficialSendReq) {
 // sendOfficialOne 单发一个用户：构造信封 → 落库 → 推在线 → 离线入队 → touchConversation
 // 异常时仅记录日志（旁路隔离），不回传 error 覆盖上层主事务
 func (s *Server) sendOfficialOne(req OfficialSendReq, recipient string) error {
-	// 1. 构造信封 JSON
-	envelope, _ := json.Marshal(map[string]interface{}{
-		"official": map[string]interface{}{
-			"app_id":      req.AppID,
-			"msg_type":    req.ContentType,
-			"title":       req.Title,
-			"content":     req.Content,
-			"url":         req.URL,
-			"link_btn":    req.LinkBtn,
-		},
-	})
+	// 1. 构造信封 JSON（按 ContentType 按需追加扩展字段）
+	official := map[string]interface{}{
+		"app_id":   req.AppID,
+		"msg_type": req.ContentType,
+		"title":    req.Title,
+		"content":  req.Content,
+		"url":      req.URL,
+		"link_btn": req.LinkBtn,
+	}
+	// notify 卡片专属
+	if req.ContentType == "notify" {
+		if req.Status != "" {
+			official["status"] = req.Status
+			if req.BadgeColor == "" {
+				req.BadgeColor = "blue"
+			}
+			official["badge_color"] = req.BadgeColor
+		}
+		if len(req.Fields) > 0 {
+			official["fields"] = req.Fields
+		}
+	}
+	// news / notify 通用图片
+	if req.ContentType == "news" || req.ContentType == "notify" {
+		if req.Image != "" {
+			official["image"] = req.Image
+		}
+	}
+	// news_list 多图文
+	if req.ContentType == "news_list" && len(req.Items) > 0 {
+		official["items"] = req.Items
+	}
+	// miniapp 小程序入口
+	if req.ContentType == "miniapp" {
+		if req.Icon != "" {
+			official["icon"] = req.Icon
+		}
+		if req.Subtitle != "" {
+			official["subtitle"] = req.Subtitle
+		}
+	}
+	envelope, _ := json.Marshal(map[string]interface{}{"official": official})
 	chatMsg := protocol.Message{
 		MsgType:   protocol.MsgTypeOfficialMsg,
 		FromUser:  "o_" + req.AppID,
@@ -219,6 +322,14 @@ func (s *Server) sendOfficialOne(req OfficialSendReq, recipient string) error {
 	// 4. touchConversation + 会话刷新（未读角标自动 +1）
 	s.touchConversationDebounced(recipient, "o_"+req.AppID, summary, record.ID)
 	s.notifyConvUpdate(recipient)
+
+	// 5. 回写 official_message 记录：send_status='sent' + msg_id
+	if req.MessageID > 0 {
+		store.DB.Model(&model.OfficialMessage{}).Where("id = ?", req.MessageID).Updates(map[string]interface{}{
+			"send_status": "sent",
+			"msg_id":      record.ID,
+		})
+	}
 
 	logger.Info("服务号推送：%s → %s（msg_id=%d）", req.AppID, recipient, record.ID)
 	return nil
@@ -305,17 +416,8 @@ func (s *Server) officialWorkerPool() {
 					}
 				}()
 				for t := range pushCh {
-					req := OfficialSendReq{
-						AccountID:   t.AccountID,
-						AppID:       t.AppID,
-						Title:       t.Title,
-						ContentType: t.ContentType,
-						Content:     t.Content,
-						URL:         t.URL,
-						LinkBtn:     t.LinkBtn,
-						TriggerType: t.TriggerType,
-						MessageID:   t.MessageID,
-					}
+					// 阶段二百九十三 P2：用 taskToReq 统一还原（包含 Status/Fields/Image 扩展字段）
+					req := taskToReq(t)
 					if err := s.sendOfficialOne(req, t.Recipient); err != nil {
 						// 旁路错误：不中断 worker，仅记录（与主事务隔离，experience ref 2159869）
 						logger.Warn("服务号 worker-%d 推送失败 app=%s → %s err=%s",
@@ -405,6 +507,227 @@ func htmlEscape(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// fillOfficialTemplateFields 当使用 template_id 发送时，根据模板的 content_type 和结构化 content
+// 自动把标题/状态/badge/fields/URL/图文项等专属字段填充到 OfficialSendReq。
+// 发送接口自己显式传的字段优先覆盖模板默认值（非空即覆盖）。
+//
+// 模板 content 格式（JSON）：
+//
+//	text  → "纯文本内容 {{key}} 占位符"（老格式也兼容）
+//
+//	notify → {
+//	  "title":   "您的订单 {{order_no}} 已发货",
+//	  "content": "快递员 {{courier}}，电话 {{phone}}",
+//	  "status":  "已发货",
+//	  "badge_color": "green",
+//	  "fields":  [{"label":"订单号","value":"{{order_no}}"},{"label":"快递员","value":"{{courier}}"}],
+//	  "url":     "https://...",
+//	  "link_btn":"查看物流"
+//	}
+//
+//	news → {
+//	  "title": "{{product_name}} 上新啦！",
+//	  "content": "摘要描述 {{desc}}",
+//	  "image":   "https://封面图.jpg",
+//	  "url":     "https://跳转链接",
+//	  "link_btn":"立即查看"
+//	}
+//
+//	news_list → {
+//	  "title": "精选推荐",
+//	  "items": [{"image":"..","title":"..","summary":"..","url":".."}, ...]
+//	}
+//
+//	miniapp → {
+//	  "title": "{{title}}",
+//	  "icon":   "https://图标.png",
+//	  "subtitle":"{{subtitle}}",
+//	  "url":    "https://小程序路径"
+//	}
+func fillOfficialTemplateFields(tpl model.OfficialTemplate, data map[string]string, req *OfficialSendReq) {
+	if req == nil {
+		return
+	}
+	ct := strings.TrimSpace(tpl.ContentType)
+	if ct == "" {
+		ct = "text"
+	}
+	raw := strings.TrimSpace(tpl.Content)
+	if raw == "" {
+		return
+	}
+
+	// text 类型：content 就是一段占位符文本，已经在外面 renderOfficialTemplate 处理过
+	if ct == "text" {
+		return
+	}
+
+	// 尝试解析 JSON
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		// 不是合法 JSON，降级为纯文本 content（兼容老模板）
+		if req.Content == "" {
+			req.Content = renderOfficialTemplate(raw, data)
+		}
+		return
+	}
+
+	// 先对 payload 里所有字符串值做占位符替换
+	replacePlaceholdersInMap(payload, data)
+
+	// --- notify ---
+	if ct == "notify" {
+		if v, ok := strVal(payload, "title"); ok && req.Title == "" {
+			req.Title = v
+		}
+		if v, ok := strVal(payload, "content"); ok && req.Content == "" {
+			req.Content = v
+		}
+		if v, ok := strVal(payload, "status"); ok && req.Status == "" {
+			req.Status = v
+		}
+		if v, ok := strVal(payload, "badge_color"); ok && req.BadgeColor == "" {
+			req.BadgeColor = v
+		}
+		if v, ok := strVal(payload, "url"); ok && req.URL == "" {
+			req.URL = v
+		}
+		if v, ok := strVal(payload, "link_btn"); ok && req.LinkBtn == "" {
+			req.LinkBtn = v
+		}
+		if req.Fields == nil || len(req.Fields) == 0 {
+			req.Fields = extractFieldsFromMap(payload)
+		}
+	}
+
+	// --- news ---
+	if ct == "news" {
+		if v, ok := strVal(payload, "title"); ok && req.Title == "" {
+			req.Title = v
+		}
+		if v, ok := strVal(payload, "content"); ok && req.Content == "" {
+			req.Content = v
+		}
+		if v, ok := strVal(payload, "image"); ok && req.Image == "" {
+			req.Image = v
+		}
+		if v, ok := strVal(payload, "url"); ok && req.URL == "" {
+			req.URL = v
+		}
+		if v, ok := strVal(payload, "link_btn"); ok && req.LinkBtn == "" {
+			req.LinkBtn = v
+		}
+	}
+
+	// --- news_list ---
+	if ct == "news_list" {
+		if v, ok := strVal(payload, "title"); ok && req.Title == "" {
+			req.Title = v
+		}
+		if req.Items == nil || len(req.Items) == 0 {
+			req.Items = extractItemsFromMap(payload)
+		}
+	}
+
+	// --- miniapp ---
+	if ct == "miniapp" {
+		if v, ok := strVal(payload, "title"); ok && req.Title == "" {
+			req.Title = v
+		}
+		if v, ok := strVal(payload, "icon"); ok && req.Icon == "" {
+			req.Icon = v
+		}
+		if v, ok := strVal(payload, "subtitle"); ok && req.Subtitle == "" {
+			req.Subtitle = v
+		}
+		if v, ok := strVal(payload, "url"); ok && req.URL == "" {
+			req.URL = v
+		}
+		if v, ok := strVal(payload, "link_btn"); ok && req.LinkBtn == "" {
+			req.LinkBtn = v
+		}
+	}
+}
+
+// strVal 安全取 map 里的字符串值
+func strVal(m map[string]interface{}, key string) (string, bool) {
+	v, ok := m[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	return s, true
+}
+
+// replacePlaceholdersInMap 对 map 里所有字符串值递归替换 {{key}} 占位符
+func replacePlaceholdersInMap(m map[string]interface{}, data map[string]string) {
+	for k, v := range m {
+		switch vv := v.(type) {
+		case string:
+			m[k] = renderOfficialTemplate(vv, data)
+		case map[string]interface{}:
+			replacePlaceholdersInMap(vv, data)
+		case []interface{}:
+			for i, item := range vv {
+				if im, ok := item.(map[string]interface{}); ok {
+					replacePlaceholdersInMap(im, data)
+					vv[i] = im
+				}
+			}
+		}
+	}
+}
+
+// extractFieldsFromMap 从 JSON payload 里提取 fields 数组
+func extractFieldsFromMap(m map[string]interface{}) []NotifyField {
+	raw, ok := m["fields"].([]interface{})
+	if !ok {
+		return nil
+	}
+	var result []NotifyField
+	for _, item := range raw {
+		if im, ok := item.(map[string]interface{}); ok {
+			label, _ := im["label"].(string)
+			value, _ := im["value"].(string)
+			if label != "" || value != "" {
+				result = append(result, NotifyField{Label: label, Value: value})
+			}
+		}
+	}
+	return result
+}
+
+// extractItemsFromMap 从 JSON payload 里提取 news_list 的 items 数组
+func extractItemsFromMap(m map[string]interface{}) []NewsItem {
+	raw, ok := m["items"].([]interface{})
+	if !ok {
+		return nil
+	}
+	var result []NewsItem
+	for _, item := range raw {
+		if im, ok := item.(map[string]interface{}); ok {
+			it := NewsItem{}
+			if v, ok := im["image"].(string); ok {
+				it.Image = v
+			}
+			if v, ok := im["title"].(string); ok {
+				it.Title = v
+			}
+			if v, ok := im["summary"].(string); ok {
+				it.Summary = v
+			}
+			if v, ok := im["url"].(string); ok {
+				it.URL = v
+			}
+			result = append(result, it)
+		}
+	}
+	return result
 }
 
 // ============= 审核 → 发送 桥接（P5 预留，骨架已完整可读） =============

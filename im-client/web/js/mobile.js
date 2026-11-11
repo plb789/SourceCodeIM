@@ -60,12 +60,12 @@
         if (!inMobile()) return;
         if (document.body.classList.contains('in-chat')) return;
         var item = e.target.closest(
-            '#conv-list li, #user-list li.user-item, #ai-agent-list li, #search-panel li, #search-panel .search-item, .ann-cat-entry'
+            '#conv-list li, #user-list li.user-item, #ai-agent-list li, #search-panel li, #search-panel .search-item, .ann-cat-entry, #off-search-list li.official-item'
         );
-        // .ann-cat-entry（阶段二百零八）：公告/动态/红头文件分类卡牌——公告流显示在
-        // main-chat 内，移动布局下须切入聊天视图才能看见（否则点击"无反应"）
-        // 排除"新的朋友"等非聊天入口（div 结构天然不匹配上面的 li 选择器）
+        // 排除操作按钮：用户点的是关注/取消按钮（[data-off-action]）或其他带 stopPropagation 的操作按钮，
+        // 只处理点整条目的情况；capture 阶段先于 btn 自身的 stopPropagation 执行，需主动排除
         if (!item) return;
+        if (e.target.closest('[data-off-action]')) return;
         enterChat();
     }, true);
 
@@ -816,7 +816,16 @@
                         item.className = 'chat-more-item';
                         var label = btn.getAttribute('title') || I18N.t('功能');
                         item.setAttribute('data-target', btn.id);
-                        item.innerHTML = btn.querySelector('svg') ? btn.querySelector('svg').outerHTML : '';
+                        // 图标：优先取按钮内 SVG；文字按钮（如关注/已关注）用内置 SVG 图标兜底
+                        var svgHtml = btn.querySelector('svg') ? btn.querySelector('svg').outerHTML : '';
+                        if (!svgHtml && btn.id === 'official-sub-header-btn') {
+                            // subscribed 态时按钮有 class official-sub-btn + data-off-action="unsubscribe"
+                            var isSubscribed = btn.getAttribute('data-off-action') === 'unsubscribe';
+                            svgHtml = isSubscribed
+                                ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="8 12 11 15 16 9"/></svg>'
+                                : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>';
+                        }
+                        item.innerHTML = svgHtml;
                         var txt = document.createElement('span');
                         txt.textContent = label;
                         item.appendChild(txt);

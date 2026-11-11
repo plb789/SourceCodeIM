@@ -230,29 +230,28 @@ func (s *Server) doUnsubscribe(username string, acc *model.OfficialAccount) erro
 	return nil
 }
 
-// handleOfficialSearch 双向：搜索服务号（P2 实现）
-// 上行 content 为关键词字符串；下行 JSON 数组 [{app_id, display_name, avatar, description, subscribed}]
-// 搜索范围：display_name LIKE 关键词 或 description LIKE 关键词
+// handleOfficialSearch 双向：搜索服务号 + 列出全部（P2 实现，扩展后支持 keyword 为空=列全部）
+// 上行 content 为关键词字符串（空字符串=列出全部已启用服务号）
+// 下行 JSON 数组 [{app_id, display_name, avatar, description, subscribed, subscribe_count}]
 func (s *Server) handleOfficialSearch(c *Client, msg *protocol.Message) {
 	keyword := strings.TrimSpace(msg.Content)
-	if keyword == "" {
-		return
+	db := store.DB.Model(&model.OfficialAccount{}).Where("status = 0")
+	if keyword != "" {
+		db = db.Where("display_name LIKE ? OR description LIKE ?", "%"+keyword+"%", "%"+keyword+"%").Limit(50)
+	} else {
+		db = db.Limit(100) // 列全部时上限 100，防止服务号爆炸式增长
 	}
 	var list []model.OfficialAccount
-	if err := store.DB.Where("status = 0 AND (display_name LIKE ? OR description LIKE ?)",
-		"%"+keyword+"%", "%"+keyword+"%").
-		Order("id DESC").
-		Limit(20).Find(&list).Error; err != nil {
-		logger.Error("服务号搜索失败 kw=%s err=%s", keyword, err.Error())
+	if err := db.Order("id DESC").Find(&list).Error; err != nil {
+		logger.Error("服务号查询失败 kw=%s err=%s", keyword, err.Error())
 		return
 	}
-	if len(list) == 0 {
-		return
-	}
-	// 批量查 subscribed 状态
+	// 批量查 subscribed 状态 + 订阅数
 	appIDs := make([]string, 0, len(list))
+	accIDs := make([]uint, 0, len(list))
 	for _, a := range list {
 		appIDs = append(appIDs, a.AppID)
+		accIDs = append(accIDs, a.ID)
 	}
 	subSet := map[string]struct{}{}
 	var subs []model.OfficialSubscribe
@@ -260,15 +259,31 @@ func (s *Server) handleOfficialSearch(c *Client, msg *protocol.Message) {
 	for _, sub := range subs {
 		subSet[sub.AppID] = struct{}{}
 	}
+	// 订阅数聚合
+	subCountMap := map[uint]int64{}
+	if len(accIDs) > 0 {
+		var rows []struct {
+			AccountID uint
+			Cnt       int64
+		}
+		store.DB.Model(&model.OfficialSubscribe{}).
+			Select("account_id, COUNT(*) as cnt").
+			Where("account_id IN ? AND unsubscribed = false", accIDs).
+			Group("account_id").Scan(&rows)
+		for _, r := range rows {
+			subCountMap[r.AccountID] = r.Cnt
+		}
+	}
 	items := make([]map[string]interface{}, 0, len(list))
 	for _, a := range list {
 		_, sub := subSet[a.AppID]
 		items = append(items, map[string]interface{}{
-			"app_id":       a.AppID,
-			"display_name": a.DisplayName,
-			"avatar":       a.Avatar,
-			"description":  a.Description,
-			"subscribed":   sub,
+			"app_id":         a.AppID,
+			"display_name":   a.DisplayName,
+			"avatar":         a.Avatar,
+			"description":    a.Description,
+			"subscribed":     sub,
+			"subscribe_count": subCountMap[a.ID],
 		})
 	}
 	chatMsg := protocol.Message{
@@ -444,14 +459,13 @@ func (s *Server) pushToConvTarget(toUser, target string, msgType int8, fromUser,
 	}
 	data, _ := json.Marshal(chatMsg)
 
-	// 落库
-	store.DB.Create(&struct {
-		MsgType    int8      `gorm:"column:msg_type"`
-		FromUser   string    `gorm:"column:from_user"`
-		ToUser     string    `gorm:"column:to_user"`
-		Content    string    `gorm:"column:content;type:text"`
-		CreateTime time.Time `gorm:"column:create_time"`
-	}{msgType, fromUser, toUser, content, time.Now()})
+	// 落库（使用 model.Message，GORM 能正确推导出 TableName()="im_message"）
+	store.DB.Create(&model.Message{
+		MsgType:  msgType,
+		FromUser: fromUser,
+		ToUser:   toUser,
+		Content:  content,
+	})
 
 	// touch + 推
 	s.touchConversationDebounced(toUser, target, content, 0)
