@@ -168,39 +168,39 @@ func (s *Server) handleOfficialSubAction(c *Client, msg *protocol.Message) {
 	s.sendToUser(c.username, data)
 }
 
-// doSubscribe 关注核心（事务：upsert subscribe + upsert conversation）
+// doSubscribe 关注核心（独立事务：subscribe 和 conversation 表引擎可能不同，MySQL GTID 禁止混用）
 func (s *Server) doSubscribe(username string, acc *model.OfficialAccount, source string) error {
-	tx := store.DB.Begin()
-	// upsert subscribe（已有关注行直接返回；取消关注行置为 false）
-	var sub model.OfficialSubscribe
-	res := tx.Where("username = ? AND app_id = ?", username, acc.AppID).First(&sub)
 	now := time.Now()
+	// 1) upsert subscribe（独立 DB 操作，subscribe 可能 InnoDB）
+	var sub model.OfficialSubscribe
+	res := store.DB.Where("username = ? AND app_id = ?", username, acc.AppID).First(&sub)
 	if res.Error == nil {
 		if sub.Unsubscribed {
 			sub.Unsubscribed = false
 			sub.Source = source
 			sub.UnsubscribeTime = nil
 			sub.SubscribeTime = now
-			tx.Save(&sub)
+			if err := store.DB.Save(&sub).Error; err != nil {
+				return fmt.Errorf("更新关注关系失败: %s", err.Error())
+			}
 		}
 	} else {
 		sub = model.OfficialSubscribe{
-			AccountID:    acc.ID,
-			AppID:        acc.AppID,
-			Username:     username,
-			Source:       source,
-			Unsubscribed: false,
+			AccountID:     acc.ID,
+			AppID:         acc.AppID,
+			Username:      username,
+			Source:        source,
+			Unsubscribed:  false,
 			SubscribeTime: now,
 		}
-		if err := tx.Create(&sub).Error; err != nil {
-			tx.Rollback()
+		if err := store.DB.Create(&sub).Error; err != nil {
 			return fmt.Errorf("写入关注关系失败: %s", err.Error())
 		}
 	}
-	// upsert im_conversation（target='o_'+appid）
+	// 2) upsert im_conversation（独立 DB 操作，conversation 可能 MyISAM）
 	target := "o_" + acc.AppID
 	var conv model.Conversation
-	cres := tx.Where("user_id = ? AND target = ?", username, target).First(&conv)
+	cres := store.DB.Where("user_id = ? AND target = ?", username, target).First(&conv)
 	if cres.Error != nil {
 		conv = model.Conversation{
 			UserID:   username,
@@ -208,25 +208,23 @@ func (s *Server) doSubscribe(username string, acc *model.OfficialAccount, source
 			LastMsg:  "您已关注「" + acc.DisplayName + "」",
 			LastTime: now,
 		}
-		if err := tx.Create(&conv).Error; err != nil {
-			tx.Rollback()
+		if err := store.DB.Create(&conv).Error; err != nil {
 			return fmt.Errorf("创建会话失败: %s", err.Error())
 		}
 	}
-	tx.Commit()
 	return nil
 }
 
-// doUnsubscribe 取消关注核心（事务：UPDATE unsubscribed + DELETE conversation）
+// doUnsubscribe 取消关注核心（独立操作：subscribe 和 conversation 表引擎可能不同，MySQL GTID 禁止混用事务）
 func (s *Server) doUnsubscribe(username string, acc *model.OfficialAccount) error {
-	tx := store.DB.Begin()
 	now := time.Now()
-	tx.Model(&model.OfficialSubscribe{}).
+	// 1) 标为已取消关注（subscribe 表）
+	store.DB.Model(&model.OfficialSubscribe{}).
 		Where("username = ? AND app_id = ?", username, acc.AppID).
 		Updates(map[string]interface{}{"unsubscribed": true, "unsubscribe_time": now})
+	// 2) 删除服务号会话（conversation 表）
 	target := "o_" + acc.AppID
-	tx.Where("user_id = ? AND target = ?", username, target).Delete(&model.Conversation{})
-	tx.Commit()
+	store.DB.Where("user_id = ? AND target = ?", username, target).Delete(&model.Conversation{})
 	return nil
 }
 

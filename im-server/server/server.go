@@ -182,9 +182,14 @@ func (s *Server) sendToUserBlock(username string, data []byte, timeout time.Dura
 
 // unregister 连接断开后的清理（按连接移除，同账号其他设备仍在线时不判定离线）
 func (s *Server) unregister(c *Client) {
-	// 阶段一百九十八：连接断开即吊销其网盘 API token（按 token 吊销，其他端 token 不受影响；
-	// 未登录连接 token 为空串，Revoke 内部判空安全）
-	DriveTokenRevoke(c.driveToken)
+	// 阶段三百二十：drive_token 断开宽限期（原 unregister 里立即 DEL 导致用户 APP 扫码/息屏切后台
+	// 重进后 token 失效，subscribe API 401"请先登录"）。现改为缩期到 5 分钟：
+	//   1) 正常使用（扫码/息屏/闪断）：5 分钟内 Redis 仍存在，subscribe 正常
+	//   2) 真被盗用/设备遗失：5 分钟后自动过期（原 7 天 TTL 兜底，缩期加速失效）
+	//   3) 其他端同账号 drive_token 互不影响（按 token 缩期，不按 username）
+	if c.driveToken != "" {
+		store.RDB.Expire(context.Background(), store.KeyDriveToken+c.driveToken, 5*time.Minute)
+	}
 	if c.username == "" {
 		return
 	}

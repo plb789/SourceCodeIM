@@ -988,12 +988,22 @@ func (s *Server) resolvePublicUser(r *http.Request) string {
 	// 1. Bearer Token
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
-		return resolveTokenUsername(strings.TrimPrefix(auth, "Bearer "))
+		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		user := resolveTokenUsername(token)
+		if user == "" {
+			logger.Warn("订阅接口 Bearer Token 无法解析: token_len=%d path=%s ip=%s",
+				len(token), r.URL.Path, r.RemoteAddr)
+		}
+		return user
 	}
 	// 2. Cookie
 	cookie, err := r.Cookie("im_user_token")
 	if err == nil {
-		return resolveTokenUsername(cookie.Value)
+		user := resolveTokenUsername(cookie.Value)
+		if user == "" {
+			logger.Warn("订阅接口 Cookie Token 无法解析: path=%s ip=%s", r.URL.Path, r.RemoteAddr)
+		}
+		return user
 	}
 	return ""
 }

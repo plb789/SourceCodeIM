@@ -1189,6 +1189,20 @@
             // 仅允许本站 subscribe.html 相对路径（带可选 query），禁止外部域名跳转
             if (rd && /^\/subscribe\.html(\?.*)?$/.test(rd)) {
                 setTimeout(function () { location.href = rd; }, 300);
+                return;
+            }
+        } catch (e) {}
+        // 扫码关注后自动打开服务号会话（subscribe.html goChat 传入 open_conversation=o_xxx）
+        try {
+            var oc = new URLSearchParams(location.search).get('open_conversation');
+            if (oc && oc.startsWith('o_')) {
+                setTimeout(function () {
+                    // 清 URL 参数避免刷新时重复触发
+                    history.replaceState(null, '', location.pathname);
+                    if (typeof openConversation === 'function') {
+                        openConversation(oc);
+                    }
+                }, 400);
             }
         } catch (e) {}
     });

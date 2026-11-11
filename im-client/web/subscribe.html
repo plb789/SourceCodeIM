@@ -177,7 +177,7 @@
             <div style="font-size:48px;margin-bottom:12px">😕</div>
             <div id="error-msg" style="color:var(--text);font-size:15px;margin-bottom:20px"></div>
             <div class="btn-group">
-                <button class="btn btn-secondary" onclick="goHome()">返回首页</button>
+                <button class="btn btn-secondary" onclick="goHome()">返回</button>
             </div>
         </div>
 
@@ -190,7 +190,7 @@
             <div class="login-tip">请先登录你的 IM 账号以关注此服务号</div>
             <div class="btn-group">
                 <button id="btn-go-login" class="btn btn-primary">前往登录并关注</button>
-                <button class="btn btn-secondary" onclick="goHome()">返回首页</button>
+                <button class="btn btn-secondary" onclick="goHome()">返回</button>
             </div>
         </div>
 
@@ -251,12 +251,36 @@
 
             function showView(el) { hideAll(); el.classList.remove('hidden'); }
 
-            function goHome() {
-                location.href = 'index.html';
-            }
+            window.goHome = function () {
+                // 彻底关闭 subscribe 页面 → 替换成 APP 主界面
+                try { location.replace('index.html'); } catch(e) {}
+                setTimeout(function(){ location.href = 'index.html'; }, 150);
+            };
+
+            window.goChat = function () {
+                // 关注成功后自动跳回 APP 聊天视图并打开这个服务号会话
+                var chatUrl = 'index.html?open_conversation=' + encodeURIComponent(appId);
+                try { location.replace(chatUrl); } catch(e) {}
+                setTimeout(function () { if (location.pathname.endsWith('/subscribe.html')) location.href = chatUrl; }, 150);
+            };
 
             function getToken() {
-                try { return localStorage.getItem('drive_token') || ''; } catch (e) { return ''; }
+                try {
+                    // 多源兜底：WS 登录签发的 drive_token（主）→ localStorage im_user_token → Cookie im_user_token
+                    var t = localStorage.getItem('drive_token');
+                    if (t) return t;
+                    t = localStorage.getItem('im_user_token');
+                    if (t) return t;
+                    var m = document.cookie.match(/(?:^|;\s*)im_user_token=([^;]+)/);
+                    if (m) return decodeURIComponent(m[1]);
+                } catch (e) {}
+                return '';
+            }
+            function errMsg(res, fallback) {
+                // adminFail 返回 {"ok":false,"msg":"xxx"}；后端 handler 成功返回 {"ok":true,"message":"xxx"}
+                // 前端两个字段都兼容
+                if (!res) return fallback;
+                return res.message || res.msg || fallback;
             }
 
             function showError(msg) {
@@ -296,7 +320,7 @@
                     } else {
                         $mBtns.innerHTML =
                             '<button class="btn btn-primary" id="btn-sub">立即关注</button>' +
-                            '<button class="btn btn-secondary" onclick="goHome()">返回首页</button>';
+                            '<button class="btn btn-secondary" onclick="goHome()">返回</button>';
                         document.getElementById('btn-sub').addEventListener('click', doSubscribe);
                     }
                     showView($main);
@@ -323,7 +347,7 @@
                     .then(function (res) {
                         var data = res && res.data ? res.data : res;
                         if (!data || !data.app_id) {
-                            showError(res && res.message ? res.message : '服务号不存在');
+                            showError(errMsg(res, '服务号不存在'));
                             return;
                         }
                         renderAccount(data, token);
@@ -347,13 +371,10 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
                     if (res && res.ok) {
-                        showToast('✓ 关注成功');
-                        setTimeout(function () {
-                            // 刷新页面状态
-                            loadAccount();
-                        }, 800);
+                        showToast('✓ 关注成功，正在打开聊天…');
+                        setTimeout(window.goChat, 600);
                     } else {
-                        showToast((res && res.message) || '关注失败');
+                        showToast(errMsg(res, '关注失败'));
                         btn.disabled = false;
                         btn.textContent = '立即关注';
                     }
@@ -380,15 +401,11 @@
                         showToast('已取消关注');
                         setTimeout(loadAccount, 800);
                     } else {
-                        showToast((res && res.message) || '取消失败');
+                        showToast(errMsg(res, '取消失败'));
                     }
                 })
                 .catch(function () { showToast('网络错误'); });
             }
-
-            window.goChat = function () {
-                location.href = 'index.html';
-            };
 
             // ========= 跳转到首页登录 =========
             var $goLoginBtn = document.getElementById('btn-go-login');

@@ -184,6 +184,13 @@
             handleQRLoginScan(qid);
             return;
         }
+        // 阶段三百一十：服务号扫码关注——识别 subscribe.html?app_id=xxx 链接，
+        // 命中后自动打开 subscribe.html 落地页（已登录则一键关注）
+        var subAppId = parseSubscribeUrl(data);
+        if (subAppId) {
+            handleSubscribeScan(data);
+            return;
+        }
         if (data.indexOf(PROTOCOL) !== 0) {
             toast(I18N.t('未识别的二维码'));
             return;
@@ -212,6 +219,29 @@
             }
         } catch (e) { /* 非标准 URL（协议串等）按非登录码处理 */ }
         return '';
+    }
+
+    // parseSubscribeUrl 识别服务号订阅二维码链接（http(s)://<同域名>/subscribe.html?app_id=xxx）
+    // 返回 app_id；非订阅码或跨域钓鱼返回空串
+    function parseSubscribeUrl(data) {
+        try {
+            var u = new URL(data);
+            // 1) 只接受 http(s) 协议（拦 javascript:/data:/file: 等危险协议）
+            if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+            // 2) 必须同 hostname（防跨域钓鱼，端口不严格限制因为 https 默认 443 / http 默认 80 都不显式出现在 URL 里）
+            if (u.hostname !== window.location.hostname) return '';
+            // 3) 路径锚定结尾（防 /subscribe.html.evil.com 绕过）
+            if (u.pathname && !/\/subscribe\.html$/i.test(u.pathname)) return '';
+            return (u.searchParams.get('app_id') || '').trim();
+        } catch (e) { return ''; }
+    }
+
+    // handleSubscribeScan 手机扫到服务号二维码后直接跳转 subscribe.html 落地页
+    // （已登录则自动显示「立即关注」按钮，未登录会自动跳登录）
+    function handleSubscribeScan(url) {
+        toast('正在打开服务号…');
+        // APP 端（Capacitor WebView）：直接 location.assign 即可在当前 WebView 打开 subscribe.html
+        window.location.assign(url);
     }
 
     // handleQRLoginScan 发起扫描上报（97 scan）——回执 ok 后弹确认授权卡
