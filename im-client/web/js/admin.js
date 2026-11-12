@@ -6077,6 +6077,19 @@
             var op = document.createElement('td');
             var bE = document.createElement('button'); bE.className = 'admin-btn small'; bE.textContent = '编辑';
             bE.addEventListener('click', function () { gwOpenEditor(g); });
+            var bR = document.createElement('button'); bR.className = 'admin-btn small'; bR.textContent = '重置同步';
+            bR.title = '清空该网关的账号同步回执，强制网关全量重拉（商户清档后账号丢了点这个）';
+            bR.addEventListener('click', function () {
+                confirmBox('确认重置网关「' + g.name + '」的账号同步？\n将清空服务端侧该网关的所有已同步回执，网关下一轮（30秒内）全量重拉账号写入商户游戏库。', function () {
+                    api('POST', '/admin/api/game/gateways/' + g.name + '/reset-sync').then(function (r) {
+                        if (r.ok) {
+                            showToast('重置成功：清掉 ' + (r.data && r.data.reset_acked || 0) + ' 条回执，队列共 ' + (r.data && r.data.queue_total || 0) + ' 条待同步，网关下一轮自动重拉');
+                        } else {
+                            showToast(r.msg || '重置失败');
+                        }
+                    }).catch(function () { showToast('重置失败'); });
+                });
+            });
             var bD = document.createElement('button'); bD.className = 'admin-btn small'; bD.textContent = '删除';
             bD.addEventListener('click', function () {
                 confirmBox('确认删除网关「' + g.name + '」？引用了 @' + g.name + ' 的游戏转发规则将无法启用。', function () {
@@ -6086,6 +6099,8 @@
                 });
             });
             op.appendChild(bE);
+            op.appendChild(document.createTextNode(' '));
+            op.appendChild(bR);
             op.appendChild(document.createTextNode(' '));
             op.appendChild(bD);
             tr.appendChild(op);

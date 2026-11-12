@@ -164,6 +164,13 @@ type dbwriteEntry struct {
 // dbwriteRunner 拉取器 + 写库执行器（独立 goroutine，绝不阻塞游戏数据转发）。
 // 热重载语义：每次配置变更由 dbwriteReload 构建全新 runner（新连接池/新模板）原子替换，
 // 旧 runner 收到 stop 后退出并关闭旧池——替换边界内进行中的写库失败不回执自动重试，无损
+const dbwriteLastTTL = 5 * time.Minute // last 摘要跳过 TTL：5 分钟内同一条目密码不变才跳过写库，过了 TTL 强制重写
+
+type lastRec struct {
+	pw string
+	t  time.Time
+}
+
 type dbwriteRunner struct {
 	cfg    DbwriteConfig
 	secret string // 与 im-server 共享的 token_secret（签名 + 响应解密同源）
@@ -173,7 +180,7 @@ type dbwriteRunner struct {
 	db     *sql.DB
 	ins    *dbwriteTemplate
 	upd    *dbwriteTemplate
-	last   map[string]string // username → 最近成功写入 password（同内容跳过，防重复写）
+	last   map[uint64]lastRec // dbwrite 条目 ID → 最近成功写入密码+时间（TTL 内同内容跳过写库）
 }
 
 // dbwriteMgr 管理器：当前活跃 runner（nil=未启用）；Web 后台热更经 dbwriteReload 原子替换
@@ -252,7 +259,7 @@ func newDbwriteRunner(cfg *Config) (*dbwriteRunner, error) {
 		d.PollSec = 600
 	}
 	r := &dbwriteRunner{cfg: d, secret: cfg.TokenSecret,
-		client: &http.Client{Timeout: 15 * time.Second}, stop: make(chan struct{}), last: map[string]string{}}
+		client: &http.Client{Timeout: 15 * time.Second}, stop: make(chan struct{}), last: map[uint64]lastRec{}}
 	// 模板编译（非法即拒绝，绝不带非法模板进运行期）
 	if d.Strategy != "update" {
 		t, err := compileDbwriteTemplate(d.SQLInsert, d.Type)
@@ -359,84 +366,136 @@ func (r *dbwriteRunner) loop() {
 	}
 }
 
-// poll 单轮：拉取 → 逐条写库 → 成功条目回执
+// poll 单轮：游标分页拉取 → 逐条写库 → 成功条目回执
+// 注意：因 TTL 摘要跳过时**不回执**（让服务端继续下发，过 TTL 后自然真写并回执）。
+// 这是「重置同步能自愈」的关键保证——如果跳过时回执，服务端会认为"已同步"不再下发，商户清档永远无法自愈
 func (r *dbwriteRunner) poll() {
 	defer func() {
 		if e := recover(); e != nil {
 			log.Printf("[dbwrite] 单轮异常（下轮重试）：%v\n%s", e, debug.Stack())
 		}
 	}()
-	items, err := r.fetch()
-	if err != nil {
-		log.Printf("[dbwrite] 拉取失败（不回执，im-server 侧保持待写）：%v", err)
+	// 游标分页拉取：服务端 after_id + NOT IN 过滤 + LIMIT limit+1 判 has_more，
+	// 循环直到 has_more=false（不会死循环，因为 SQL 层 NOT IN 过滤已回执条目）
+	var (
+		allItems []dbwriteEntry
+		afterID  uint64
+		more     = true
+		batches  int
+	)
+	for more {
+		items, hasMore, nextAfter, err := r.fetch(afterID)
+		if err != nil {
+			log.Printf("[dbwrite] 拉取失败（不回执，im-server 侧保持待写）：%v", err)
+			return
+		}
+		if len(items) == 0 {
+			more = false
+			break
+		}
+		batches++
+		allItems = append(allItems, items...)
+		if !hasMore {
+			break // 本批已取完，无需继续翻页
+		}
+		afterID = nextAfter // 下一批游标
+	}
+	if batches > 1 {
+		log.Printf("[dbwrite] 分页拉取 %d 批，共 %d 条待写", batches, len(allItems))
+	}
+	if len(allItems) == 0 {
 		return
 	}
-	if len(items) == 0 {
-		return
-	}
-	acked := make([]uint64, 0, len(items))
-	for _, it := range items {
+	acked := make([]uint64, 0, len(allItems))
+	for _, it := range allItems {
 		if it.Username == "" || it.Password == "" || it.ID == 0 {
 			continue
 		}
-		// 摘要跳过：同账号同密码已在库（重复登录/多游戏共库场景不重复写）
+		// 摘要跳过：同一条目密码不变且距上次写入 < TTL 分钟
+		// 【关键】跳过时**不回执** → 服务端会继续下发，过 TTL 后网关自然真写并回执
 		r.mu.Lock()
-		same := r.last[it.Username] == it.Password
+		rec, hit := r.last[it.ID]
+		same := hit && rec.pw == it.Password && time.Since(rec.t) < dbwriteLastTTL
 		r.mu.Unlock()
 		if same {
-			acked = append(acked, it.ID)
-			continue
+			continue // 不回执！让服务端继续下发
 		}
 		if err := r.execOne(it); err != nil {
 			log.Printf("[dbwrite] 写库失败 username=%s id=%d：%v", it.Username, it.ID, err)
 			continue // 不回执 → im-server 下次仍返回，天然重试
 		}
 		r.mu.Lock()
-		r.last[it.Username] = it.Password
+		r.last[it.ID] = lastRec{pw: it.Password, t: time.Now()}
 		r.mu.Unlock()
 		acked = append(acked, it.ID)
 	}
+	// last map TTL 淘汰：清理过期条目防止长跑网关内存单调增长
+	r.gcLastLocked()
 	if len(acked) > 0 {
 		if err := r.ack(acked); err != nil {
 			log.Printf("[dbwrite] 回执失败（已写入将随下轮重复执行，幂等模板无害）：%v", err)
-		} else {
-			log.Printf("[dbwrite] 本轮写入成功 %d 条", len(acked))
 		}
 	}
 }
 
-// fetch 拉取待写条目（HMAC 签名请求 + 强制解密响应）
-func (r *dbwriteRunner) fetch() ([]dbwriteEntry, error) {
+// fetch 拉取待写条目（HMAC 签名请求 + 强制解密响应），返回 (条目列表, 是否还有后续, 下一批游标, error)
+// afterID=0 时从头拉；hasMore=true 时网关用 nextAfter 继续翻页，配合服务端 NOT IN 过滤 + 游标分页
+func (r *dbwriteRunner) fetch(afterID uint64) ([]dbwriteEntry, bool, uint64, error) {
 	name := strings.ToLower(strings.TrimSpace(r.cfg.GatewayName))
 	uri := "/internal/gateway/dbwrite?gw=" + url.QueryEscape(name)
+	if afterID > 0 {
+		uri += "&after_id=" + strconv.FormatUint(afterID, 10)
+	}
 	req, err := http.NewRequest(http.MethodGet, r.cfg.IMAddr+uri, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, 0, err
 	}
 	req.Header.Set(gwproto.AuthHeader, gwproto.SignAuth(r.secret, time.Now(), "GET", uri, nil))
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, 0, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return nil, false, 0, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("im-server 返回 %d：%s", resp.StatusCode, truncate(string(body), 120))
+		return nil, false, 0, fmt.Errorf("im-server 返回 %d：%s", resp.StatusCode, truncate(string(body), 120))
 	}
 	plain, err := gwproto.OpenResp(r.secret, string(body), resp.Header.Get(gwproto.RespEncHeader))
 	if err != nil {
-		return nil, fmt.Errorf("响应解密拒绝（%v）", err)
+		return nil, false, 0, fmt.Errorf("响应解密拒绝（%v）", err)
 	}
 	var out struct {
-		Items []dbwriteEntry `json:"items"`
+		Items     []dbwriteEntry `json:"items"`
+		HasMore   bool           `json:"has_more"`
+		NextAfter uint64         `json:"next_after"`
 	}
 	if err := json.Unmarshal(plain, &out); err != nil {
-		return nil, fmt.Errorf("响应 JSON 解析失败：%v", err)
+		return nil, false, 0, fmt.Errorf("响应 JSON 解析失败：%v", err)
 	}
-	return out.Items, nil
+	return out.Items, out.HasMore, out.NextAfter, nil
+}
+
+// gcLastLocked last map TTL 淘汰（poll 末尾每次调用；清理已过期条目防止长跑网关内存单调增长）
+func (r *dbwriteRunner) gcLastLocked() {
+	if len(r.last) == 0 {
+		return
+	}
+	cutoff := time.Now().Add(-dbwriteLastTTL)
+	r.mu.Lock()
+	deleted := 0
+	for id, rec := range r.last {
+		if rec.t.Before(cutoff) {
+			delete(r.last, id)
+			deleted++
+		}
+	}
+	r.mu.Unlock()
+	if deleted >= 100 {
+		log.Printf("[dbwrite] last map TTL 淘汰 %d 条（当前剩余 %d）", deleted, len(r.last))
+	}
 }
 
 // ack 成功条目回执（body 纳入签名：中间人篡改 ids 即验签失败）

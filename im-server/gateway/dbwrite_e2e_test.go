@@ -55,10 +55,10 @@ func TestDbwriteEndToEnd(t *testing.T) {
 	defer srv.Close()
 
 	r := &dbwriteRunner{cfg: DbwriteConfig{Enabled: true, GatewayName: "GW-E2E", IMAddr: srv.URL,
-		Type: "mysql", Strategy: "upsert"}, secret: e2eSecret, client: srv.Client(), last: map[string]string{}}
+		Type: "mysql", Strategy: "upsert"}, secret: e2eSecret, client: srv.Client(), last: map[uint64]lastRec{}}
 
-	// 1. fetch：签名请求 → 密文解密 → 条目解析
-	items, err := r.fetch()
+	// 1. fetch：签名请求 → 密文解密 → 条目解析（afterID=0 从头拉）
+	items, _, _, err := r.fetch(0)
 	if err != nil {
 		t.Fatalf("fetch 失败：%v", err)
 	}
@@ -147,7 +147,7 @@ func TestDbwriteSqliteExec(t *testing.T) {
 		t.Fatalf("update 模板编译失败：%v", err)
 	}
 	r := &dbwriteRunner{cfg: DbwriteConfig{Type: "sqlite", Strategy: "upsert"},
-		db: db, ins: ins, upd: upd, last: map[string]string{}}
+		db: db, ins: ins, upd: upd, last: map[uint64]lastRec{}}
 	// upsert 首次：UPDATE 零命中 → INSERT 兜底
 	if err := r.execOne(dbwriteEntry{ID: 1, Username: "pg_user", Password: "1111222233334444"}); err != nil {
 		t.Fatalf("upsert 写入失败：%v", err)

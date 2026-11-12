@@ -41,7 +41,16 @@ ALTER TABLE im_game_save_rev ENGINE=InnoDB;
 ALTER TABLE im_game_section ENGINE=InnoDB;
 ALTER TABLE im_game_version ENGINE=InnoDB;
 ALTER TABLE im_gateway_dbwrite ENGINE=InnoDB;
+-- im_gateway_dbwrite 补 game_id 单列索引（支撑拉取接口 game_id IN ? 查询 + LIMIT 分页）
+-- 幂等：索引已存在则跳过（MySQL 8.0.0+ 支持 IF NOT EXISTS；5.7 上 CREATE INDEX 无 IF NOT EXISTS，
+-- 靠 GORM AutoMigrate HasIndex 预先判断后 ADD INDEX 兜底——本文件仅供手动新部署执行一次）
+CREATE INDEX idx_game ON im_gateway_dbwrite (game_id);
 ALTER TABLE im_gateway_dbwrite_ack ENGINE=InnoDB;
+-- im_gateway_dbwrite_ack 补 (gateway_name, dbwrite_id) 复合索引（支撑 WHERE gateway_name=? 查询：
+-- NOT IN 子查询、重置同步清 ack、拉取接口 Pluck 已回执集合；唯一索引 uq_id_gw 左前缀是 dbwrite_id，
+-- 无法覆盖 gateway_name 前导查询，此索引补正这个缺口）
+-- 注意列顺序：(gateway_name, dbwrite_id) 保证 gateway_name 最左前缀可走索引
+CREATE INDEX idx_gw ON im_gateway_dbwrite_ack (gateway_name, dbwrite_id);
 ALTER TABLE im_group ENGINE=InnoDB;
 ALTER TABLE im_group_invite ENGINE=InnoDB;
 ALTER TABLE im_group_member ENGINE=InnoDB;

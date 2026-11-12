@@ -47,6 +47,7 @@
     var curPage = '';        // home / mine / connect / records
     var codeTimer = 0;       // 动态码倒计时定时器（页面关闭/刷新即清）
     var connecting = false;  // 连接发起中（防重复点击）
+    var lastAutoRefreshAt = 0; // 验证码过期自动刷新的防抖时间戳（防时钟漂移导致死循环）
 
     function isMobile() { return document.documentElement.classList.contains('m'); }
 
@@ -208,6 +209,16 @@
             card.className = 'rc-device-card';
             var left = d.dyn_code ? (d.dyn_expire - now) : 0;
             var onlineTxt = d.online ? T('在线') : T('离线');
+            // 验证码剩余时间：已过期直接显示"已过期"（离线设备刷新也没用，不参与倒计时自动刷新）
+            // 在线未过期：.rc-code-left[data-online="1"] 由定时器管理；离线未过期：纯展示不参与自动刷新
+            var codeLeftHtml = '';
+            if (d.dyn_code) {
+                if (left <= 0) {
+                    codeLeftHtml = ' <span class="rc-code-left">' + T('已过期') + '</span>';
+                } else {
+                    codeLeftHtml = ' <span class="rc-code-left" data-expire="' + (d.dyn_expire || 0) + '"' + (d.online ? ' data-online="1"' : '') + '>' + T('剩余') + ' ' + fmtLeft(left) + '</span>';
+                }
+            }
             card.innerHTML =
                 '<div class="rc-dev-head">' +
                 '<span class="rc-dev-name">' + esc(d.device_name || T('未命名设备')) + '</span>' +
@@ -217,8 +228,7 @@
                 '<div class="rc-dev-row"><span class="rc-dev-label">' + T('设备ID') + '</span>' +
                 '<span class="rc-dev-id" data-copy="' + esc(d.device_id) + '">' + esc(d.device_id) + '<span class="rc-copy-ico" title="' + T('复制') + '">⧉</span></span></div>' +
                 '<div class="rc-dev-row"><span class="rc-dev-label">' + T('验证码') + '</span>' +
-                '<span class="rc-dev-code">' + esc(d.dyn_code || '—') +
-                (d.dyn_code ? ' <span class="rc-code-left" data-expire="' + (d.dyn_expire || 0) + '">' + T('剩余') + ' ' + fmtLeft(left) + '</span>' : '') +
+                '<span class="rc-dev-code">' + esc(d.dyn_code || '—') + codeLeftHtml +
                 '</span></div>' +
                 '<div class="rc-dev-actions">' +
                 // 阶段二百六十二：一键直连——携带当前动态码/过期时间，点击即连免手输
@@ -244,16 +254,30 @@
         if (!isPC()) {
             mineWrap.querySelectorAll('.rc-btn-refresh,.rc-btn-pw,.rc-btn-del,.rc-pw-form').forEach(function (el) { el.remove(); });
         }
-        // 倒计时归零静默刷新（换新码）
+        // 倒计时更新剩余时间文本；只有在线设备的码过期才触发 fetchMy 换新码（离线设备服务端不刷新码，刷新也白刷）
+        // 10s 防抖防时钟漂移死循环；在线码过期后移除 data-online 标记，后续不再参与自动刷新，直到用户手动刷新/切页
         codeTimer = setInterval(function () {
             var n = Math.floor(Date.now() / 1000);
-            var expired = false;
-            mineWrap.querySelectorAll('.rc-code-left').forEach(function (el) {
-                var l = parseInt(el.getAttribute('data-expire'), 10) - n;
-                if (l <= 0) { expired = true; return; }
+            var onlineExpired = false;
+            mineWrap.querySelectorAll('.rc-code-left[data-expire]').forEach(function (el) {
+                var expire = parseInt(el.getAttribute('data-expire'), 10);
+                var l = expire - n;
+                if (l <= 0) {
+                    el.textContent = T('已过期');
+                    el.removeAttribute('data-expire');   // 过期后不再参与倒计时
+                    if (el.getAttribute('data-online')) {
+                        onlineExpired = true;
+                        el.removeAttribute('data-online'); // 过期后不再触发自动刷新
+                    }
+                    return;
+                }
                 el.textContent = T('剩余') + ' ' + fmtLeft(l);
             });
-            if (expired && curPage === 'mine') fetchMy(myInstallUuid);
+            // 条件：在线设备有码过期 + 在 mine 页 + 有 install_uuid + 10s 防抖
+            if (onlineExpired && curPage === 'mine' && myInstallUuid && (n - lastAutoRefreshAt >= 10)) {
+                lastAutoRefreshAt = n;
+                fetchMy(myInstallUuid);
+            }
         }, 1000);
         bindMineEvents(myInstallUuid);
     }
@@ -414,17 +438,23 @@
         });
         bindHomeCountdown();
     }
-    // 首页设备码倒计时归零静默刷新（换新码；与 PC mine 页同口径，仅 curPage=home 时触发）
+    // 首页设备码倒计时：过期自动 loadHome 换新码（10s 防抖防时钟漂移死循环）
     function bindHomeCountdown() {
         codeTimer = setInterval(function () {
             if (curPage !== 'home') return;
             var n = Math.floor(Date.now() / 1000);
-            var expired = false;
+            var anyExpired = false;
             homeDevices.querySelectorAll('.rc-home-connect-btn').forEach(function (b) {
                 var exp = parseInt(b.getAttribute('data-expire'), 10) || 0;
-                if (exp && exp - n <= 0) expired = true;
+                if (exp && exp - n <= 0) {
+                    anyExpired = true;
+                    if (!b.disabled) { b.disabled = true; b.textContent = T('已过期'); }
+                }
             });
-            if (expired) loadHome();
+            if (anyExpired && (n - lastAutoRefreshAt >= 10)) {
+                lastAutoRefreshAt = n;
+                loadHome();
+            }
         }, 1000);
     }
     function bindHomeEvents() {

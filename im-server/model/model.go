@@ -1095,11 +1095,11 @@ type Game struct {
 
 // 商户游戏审核状态常量（服务端与商户/管理端同口径）
 const (
-	GameAuditOfficial     = 0 // 官方免审（存量游戏与管理员创建的默认态）
-	GameAuditPending      = 1 // 待审核（商户新增/编辑对外字段后）
-	GameAuditApproved     = 2 // 已通过（玩家侧可见的唯一商户态）
-	GameAuditRejected     = 3 // 已驳回（附理由，商户改后可重新提交）
-	GameAuditQuarantined  = 4 // 已隔离（病毒扫描检出，等待管理员人工确认；玩家侧不可见，文件保留不丢失）
+	GameAuditOfficial    = 0 // 官方免审（存量游戏与管理员创建的默认态）
+	GameAuditPending     = 1 // 待审核（商户新增/编辑对外字段后）
+	GameAuditApproved    = 2 // 已通过（玩家侧可见的唯一商户态）
+	GameAuditRejected    = 3 // 已驳回（附理由，商户改后可重新提交）
+	GameAuditQuarantined = 4 // 已隔离（病毒扫描检出，等待管理员人工确认；玩家侧不可见，文件保留不丢失）
 )
 
 // Merchant 商户资料/配置表 im_merchant（商户独立后台）：
@@ -1119,10 +1119,10 @@ type Merchant struct {
 	StorageQuotaBytes int64 `gorm:"column:storage_quota_bytes;type:bigint;default:0" json:"storage_quota_bytes"`
 	// MaxFilesPerVersion 商户专属单版本文件清单条数上限：0=跟随全局
 	// game.max_files_per_version（默认 5000），-1=不限，>0=专属条数
-	MaxFilesPerVersion int `gorm:"column:max_files_per_version;type:int;default:0" json:"max_files_per_version"`
-	Remark            string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
-	CreateTime        time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
-	UpdateTime        time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+	MaxFilesPerVersion int       `gorm:"column:max_files_per_version;type:int;default:0" json:"max_files_per_version"`
+	Remark             string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
+	CreateTime         time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime         time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 表名沿用 im_ 前缀约定
@@ -1151,11 +1151,12 @@ type GatewayBook struct {
 // 仅收"带网关模式转发规则的游戏"（纯单机/直连游戏无写库意义，入队前过滤防队列膨胀）；
 // 拉取侧按网关过滤：game.port_forwards 里 @网关名 决定哪台网关可见该条目。
 // credential 游戏凭证列 P1 不建（已拍板预留；将来启用时 AutoMigrate 自动加列）
+// idx_game 单列索引支撑 handleInternalGatewayDbwrite 的 game_id IN ? 查询（NOT IN 子查询 + LIMIT 分页）
 type GatewayDbwrite struct {
 	ID         uint64    `gorm:"primaryKey" json:"id"`
-	Username   string    `gorm:"column:username;size:64;uniqueIndex:uq_user_game" json:"username"` // IM 账号
-	GameID     uint      `gorm:"column:game_id;uniqueIndex:uq_user_game" json:"game_id"`           // 游戏 ID（按网关过滤的关联键）
-	Password   string    `gorm:"column:password;size:32" json:"password"`                          // 启动密码（launch_secret HMAC 派生 16 位数字，可轮换自愈）
+	Username   string    `gorm:"column:username;size:64;uniqueIndex:uq_user_game" json:"username"`      // IM 账号
+	GameID     uint      `gorm:"column:game_id;uniqueIndex:uq_user_game;index:idx_game" json:"game_id"` // 游戏 ID（按网关过滤的关联键 + 单列索引加速 IN 查询）
+	Password   string    `gorm:"column:password;size:32" json:"password"`                               // 启动密码（launch_secret HMAC 派生 16 位数字，可轮换自愈）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
@@ -1165,11 +1166,15 @@ func (GatewayDbwrite) TableName() string { return "im_gateway_dbwrite" }
 
 // GatewayDbwriteAck 网关写库回执表 im_gateway_dbwrite_ack：唯一索引(dbwrite_id, gateway_name)——
 // 每台启用写库的网关各自写各自的库、各自回执；"待写"判定 = 该网关对此条目无回执行。
-// 网关写库失败不回执 → im-server 侧保持待写 → 下次拉取仍返回，天然重试
+// 网关写库失败不回执 → im-server 侧保持待写 → 下次拉取仍返回，天然重试。
+// idx_gw(gateway_name, dbwrite_id) 覆盖查询场景：WHERE gateway_name=?（NOT IN 子查询、重置同步清 ack、
+// 拉取接口 Pluck 已回执集合）、WHERE dbwrite_id IN ?（按条目批量清 ack）。
+// 注意：GORM 按字段声明顺序生成复合索引，但 DbwriteID 在 GatewayName 前面 → 生成 (dbwrite_id, gateway_name)，
+// 无法支撑 gateway_name 前导查询。用 priority 强制列顺序：GatewayName priority:1（最左前缀）、DbwriteID priority:2
 type GatewayDbwriteAck struct {
 	ID          uint64    `gorm:"primaryKey" json:"id"`
-	DbwriteID   uint64    `gorm:"column:dbwrite_id;uniqueIndex:uq_id_gw" json:"dbwrite_id"`
-	GatewayName string    `gorm:"column:gateway_name;size:64;uniqueIndex:uq_id_gw" json:"gateway_name"`
+	DbwriteID   uint64    `gorm:"column:dbwrite_id;uniqueIndex:uq_id_gw;index:idx_gw,priority:2" json:"dbwrite_id"`
+	GatewayName string    `gorm:"column:gateway_name;size:64;uniqueIndex:uq_id_gw;index:idx_gw,priority:1" json:"gateway_name"`
 	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
@@ -1506,7 +1511,7 @@ func (GameReviewReply) TableName() string { return "im_game_review_reply" }
 // 每个服务号独立 AppID/AppSecret，归属商户（owner）管理；空 owner 为系统级由管理员维护。
 // API 签名鉴权、会话路由、用户订阅、消息推送均以 app_id 为唯一锚点。
 type OfficialAccount struct {
-	ID   uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 	// Owner 归属商户用户名（空=系统级；非空=商户自有）
 	Owner string `gorm:"column:owner;type:varchar(32);index" json:"owner"`
 	// AppID 全局唯一标识（会话 target = 'o_' + app_id）
@@ -1539,14 +1544,14 @@ func (OfficialAccount) TableName() string { return "im_official_account" }
 // OfficialSubscribe 服务号-用户订阅关系表 im_official_subscribe
 // 每个用户每个服务号一条记录；取消关注不删行仅置 unsubscribed=1，保留历史审计。
 type OfficialSubscribe struct {
-	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	AccountID    uint      `gorm:"column:account_id;not null;index:idx_sub_pair" json:"account_id"`
-	AppID        string    `gorm:"column:app_id;type:varchar(32);index" json:"app_id"`
-	Username     string    `gorm:"column:username;type:varchar(32);index:idx_sub_pair" json:"username"`
-	Source       string    `gorm:"column:source;type:varchar(16);default:'search'" json:"source"` // scan/search/api
-	Unsubscribed bool      `gorm:"column:unsubscribed;default:false;index" json:"unsubscribed"`
-	SubscribeTime    time.Time  `gorm:"column:subscribe_time;autoCreateTime" json:"subscribe_time"`
-	UnsubscribeTime  *time.Time `gorm:"column:unsubscribe_time" json:"unsubscribe_time,omitempty"`
+	ID              uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID       uint       `gorm:"column:account_id;not null;index:idx_sub_pair" json:"account_id"`
+	AppID           string     `gorm:"column:app_id;type:varchar(32);index" json:"app_id"`
+	Username        string     `gorm:"column:username;type:varchar(32);index:idx_sub_pair" json:"username"`
+	Source          string     `gorm:"column:source;type:varchar(16);default:'search'" json:"source"` // scan/search/api
+	Unsubscribed    bool       `gorm:"column:unsubscribed;default:false;index" json:"unsubscribed"`
+	SubscribeTime   time.Time  `gorm:"column:subscribe_time;autoCreateTime" json:"subscribe_time"`
+	UnsubscribeTime *time.Time `gorm:"column:unsubscribe_time" json:"unsubscribe_time,omitempty"`
 }
 
 // TableName 表名沿用 im_ 前缀约定
@@ -1573,8 +1578,8 @@ func (OfficialMenu) TableName() string { return "im_official_menu" }
 type OfficialKeyword struct {
 	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
 	AccountID uint   `gorm:"column:account_id;not null;index" json:"account_id"`
-	Keyword   string `gorm:"column:keyword;type:varchar(64);not null;index" json:"keyword"` // 触发词
-	ReplyText string `gorm:"column:reply_text;type:text;not null" json:"reply_text"`        // 回复内容
+	Keyword   string `gorm:"column:keyword;type:varchar(64);not null;index" json:"keyword"`       // 触发词
+	ReplyText string `gorm:"column:reply_text;type:text;not null" json:"reply_text"`              // 回复内容
 	MatchType string `gorm:"column:match_type;type:varchar(8);default:'fuzzy'" json:"match_type"` // exact / fuzzy
 	Enabled   bool   `gorm:"column:enabled;default:true" json:"enabled"`
 	SortOrder int    `gorm:"column:sort_order;default:0" json:"sort_order"`
@@ -1586,10 +1591,10 @@ func (OfficialKeyword) TableName() string { return "im_official_keyword" }
 // OfficialTemplate 服务号模板消息 im_official_template
 // content 支持 {{key}} 占位符；API 对接时传 template_id + template_data 即可。
 type OfficialTemplate struct {
-	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	AccountID   uint      `gorm:"column:account_id;not null;index" json:"account_id"`
-	TemplateID  string    `gorm:"column:template_id;type:varchar(64);uniqueIndex;not null" json:"template_id"`
-	Name        string    `gorm:"column:name;type:varchar(64);not null" json:"name"`
+	ID         uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID  uint   `gorm:"column:account_id;not null;index" json:"account_id"`
+	TemplateID string `gorm:"column:template_id;type:varchar(64);uniqueIndex;not null" json:"template_id"`
+	Name       string `gorm:"column:name;type:varchar(64);not null" json:"name"`
 	// ContentType 模板渲染类型：text 纯文本 / notify 通知卡片 / news 图文卡片 / news_list 多图文 / miniapp 小程序入口
 	// 缺省 text（纯文本消息模板），与 OfficialMessage.content_type 同口径
 	ContentType string    `gorm:"column:content_type;type:varchar(16);default:'text'" json:"content_type"`
@@ -1604,9 +1609,9 @@ func (OfficialTemplate) TableName() string { return "im_official_template" }
 // OfficialMessage 服务号消息推送记录 im_official_message
 // 入库后触发审核（need_audit=true）或直接发送；支持单推/多推/群发。
 type OfficialMessage struct {
-	ID         uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	AccountID  uint   `gorm:"column:account_id;not null;index" json:"account_id"`
-	AppID      string `gorm:"column:app_id;type:varchar(32);index" json:"app_id"`
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	AccountID uint   `gorm:"column:account_id;not null;index" json:"account_id"`
+	AppID     string `gorm:"column:app_id;type:varchar(32);index" json:"app_id"`
 	// Recipient 接收人用户名；空=群发
 	Recipient string `gorm:"column:recipient;type:varchar(32);default:'';index" json:"recipient"`
 	Title     string `gorm:"column:title;type:varchar(128);default:''" json:"title"`
@@ -1614,17 +1619,17 @@ type OfficialMessage struct {
 	ContentType string `gorm:"column:content_type;type:varchar(16);default:'text'" json:"content_type"`
 	Content     string `gorm:"column:content;type:text" json:"content"`
 	// AuditStatus none / pending / approved / rejected
-	AuditStatus string `gorm:"column:audit_status;type:varchar(16);default:'none';index" json:"audit_status"`
-	AuditBy     string `gorm:"column:audit_by;type:varchar(32);default:''" json:"audit_by"`
+	AuditStatus string     `gorm:"column:audit_status;type:varchar(16);default:'none';index" json:"audit_status"`
+	AuditBy     string     `gorm:"column:audit_by;type:varchar(32);default:''" json:"audit_by"`
 	AuditTime   *time.Time `gorm:"column:audit_time" json:"audit_time"`
-	AuditRemark string `gorm:"column:audit_remark;type:varchar(255);default:''" json:"audit_remark"`
+	AuditRemark string     `gorm:"column:audit_remark;type:varchar(255);default:''" json:"audit_remark"`
 	// SendStatus pending / sending / sent / failed
 	SendStatus string `gorm:"column:send_status;type:varchar(16);default:'pending';index" json:"send_status"`
 	SentCount  int    `gorm:"column:sent_count;default:0" json:"sent_count"`
 	FailCount  int    `gorm:"column:fail_count;default:0" json:"fail_count"`
 	// TriggerType api / manual / menu / event
-	TriggerType string `gorm:"column:trigger_type;type:varchar(16);default:'api';index" json:"trigger_type"`
-	MsgID       uint   `gorm:"column:msg_id;default:0;index" json:"msg_id"` // 关联 im_message 落库 ID
+	TriggerType string    `gorm:"column:trigger_type;type:varchar(16);default:'api';index" json:"trigger_type"`
+	MsgID       uint      `gorm:"column:msg_id;default:0;index" json:"msg_id"` // 关联 im_message 落库 ID
 	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
 }
 
@@ -1677,14 +1682,14 @@ func (ClamavQuarantine) TableName() string { return "im_clamav_quarantine" }
 // 命中白名单的文件跳过 ClamAV 扫描（已知安全的文件，如签名启动器、官方 DLL 等）。
 // scope=0 全局生效 / scope=1 指定游戏生效。file_pattern 使用 Glob 风格匹配 filepath.Match。
 type ClamavWhitelist struct {
-	ID         uint       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Scope      int8       `gorm:"column:scope;type:tinyint;default:0;index" json:"scope"` // 0=全局 / 1=指定游戏
-	TargetID   uint       `gorm:"column:target_id;default:0;index" json:"target_id"`       // scope=1 时为 game_id
-	FilePattern string    `gorm:"column:file_pattern;type:varchar(255)" json:"file_pattern"`
-	Reason     string     `gorm:"column:reason;type:varchar(255);default:''" json:"reason"`
-	Enabled    int8       `gorm:"column:enabled;type:tinyint;default:1" json:"enabled"`
-	CreatedBy  string     `gorm:"column:created_by;type:varchar(32);default:''" json:"created_by"`
-	CreatedAt  *time.Time `gorm:"column:created_at" json:"created_at"`
+	ID          uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Scope       int8       `gorm:"column:scope;type:tinyint;default:0;index" json:"scope"` // 0=全局 / 1=指定游戏
+	TargetID    uint       `gorm:"column:target_id;default:0;index" json:"target_id"`      // scope=1 时为 game_id
+	FilePattern string     `gorm:"column:file_pattern;type:varchar(255)" json:"file_pattern"`
+	Reason      string     `gorm:"column:reason;type:varchar(255);default:''" json:"reason"`
+	Enabled     int8       `gorm:"column:enabled;type:tinyint;default:1" json:"enabled"`
+	CreatedBy   string     `gorm:"column:created_by;type:varchar(32);default:''" json:"created_by"`
+	CreatedAt   *time.Time `gorm:"column:created_at" json:"created_at"`
 }
 
 func (ClamavWhitelist) TableName() string { return "im_clamav_whitelist" }

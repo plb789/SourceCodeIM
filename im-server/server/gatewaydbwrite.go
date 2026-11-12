@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm/clause"
+
 	"im-server/gwproto"
 	"im-server/logger"
 	"im-server/model"
@@ -85,11 +87,16 @@ func gwGamesForGateway(games []model.Game, name, defaultGW string) map[uint]bool
 	return set
 }
 
-// gwDbwriteEnqueue 入队归口（幂等 upsert）：候选游戏过滤"带网关规则 或 指定写库网关"后
-// 派生启动密码入队，同账号同游戏仅一行、密码变化才更新；失败仅记日志——写库链路绝不阻塞
+// gwDbwriteEnqueue 入队归口（幂等 upsert + 密码变化才清回执）：候选游戏过滤"带网关规则 或 指定写库网关"后
+// 派生启动密码入队，同账号同游戏仅一行、密码变化才更新。
+// 回执清除策略：
+//   - 新建条目：Create 后清回执 → 网关立即可见（新账号注册首次入队）
+//   - 已存在条目：**只有密码变化才清回执**——心跳每 60s 也会走这个函数（game.go action=start），
+//     如果每次都清会导致回执表抖动 + 网关每 30s 重拉一次但被 last map 跳过白忙活；自愈路径靠
+//     管理端「重置同步」按钮 + 网关 last map 的 5 分钟 TTL（过 TTL 强制重写），足够覆盖"商户清档"场景
+//
+// 写库模板是幂等的（insert/upsert 重复执行无副作用），重拉无害。失败仅记日志——写库链路绝不阻塞
 // 登录/心跳主链路。纯游戏（无网关规则且 dbwrite_gw 空）不入队。
-// launchSecret 仅作游戏专属密钥缺失时的兜底材料（config.Load 保证非空），空不再整体阻断——
-// 有专属密钥的游戏主路径不受兜底缺省影响
 func gwDbwriteEnqueue(username, launchSecret string, gameIDs []uint) {
 	if username == "" || len(gameIDs) == 0 {
 		return
@@ -114,13 +121,19 @@ func gwDbwriteEnqueue(username, launchSecret string, gameIDs []uint) {
 		pw := gameLaunchPassword(sec, username, g.ID)
 		var row model.GatewayDbwrite
 		if err := store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&row).Error; err != nil {
+			// 新建条目：Create 后取回填的 row.ID（AutoMigrate 主键自增会回填），清回执让网关立即可见
 			if err := store.DB.Create(&model.GatewayDbwrite{Username: username, GameID: g.ID, Password: pw}).Error; err != nil {
 				logger.Error("网关写库入队失败（%s 游戏#%d）：%v", username, g.ID, err)
+				continue
 			}
+			store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&row) // 回填 row.ID
+			store.DB.Where("dbwrite_id = ?", row.ID).Delete(&model.GatewayDbwriteAck{})
 		} else if row.Password != pw {
-			// 启动密码派生密钥变更（launch_secret 轮换）场景：刷新队列，网关拉取后重写游戏库自愈
+			// 密码变化：更新 + 清回执 → 网关立即重写新密码（密钥轮换自愈场景）
 			store.DB.Model(&row).Update("password", pw)
+			store.DB.Where("dbwrite_id = ?", row.ID).Delete(&model.GatewayDbwriteAck{})
 		}
+		// else: 已存在且密码未变，不清回执，避免心跳每 60s 触发无效抖动
 	}
 }
 
@@ -210,8 +223,11 @@ func (s *Server) gwDbwriteGatewayChecked(gwName string) (bool, bool) {
 	return false, false
 }
 
-// handleInternalGatewayDbwrite GET /internal/gateway/dbwrite?gw={name}
-// 网关自报身份拉取待写条目（按网关过滤 + 已回执剔除），响应体 AES-256-GCM 加密下发
+// handleInternalGatewayDbwrite GET /internal/gateway/dbwrite?gw={name}&limit=N&after_id=M
+// 网关自报身份拉取待写条目（按网关过滤 + 已回执剔除 + 游标分页），响应体 AES-256-GCM 加密下发。
+// - limit 默认/上限 500；after_id 为上一批最后条目的 ID（首次拉取不传=0）
+// - SQL 层 NOT IN 子查询过滤已回执 + LIMIT limit+1（多取 1 条判 has_more），避免全量拉取 acked 集合
+// - has_more=true 时网关用 next_after（=本批最后一条 ID）继续翻页；否则下轮 poll 从 0 重新拉
 func (s *Server) handleInternalGatewayDbwrite(w http.ResponseWriter, r *http.Request) {
 	gwName := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("gw")))
 	// 鉴权密钥按自报名定位条目专属密钥（验签通过=身份证明）；响应加密用同一密钥（网关解密一致）
@@ -228,8 +244,21 @@ func (s *Server) handleInternalGatewayDbwrite(w http.ResponseWriter, r *http.Req
 		adminFail(w, http.StatusForbidden, "网关不在地址簿")
 		return
 	}
-	// 该网关关联游戏集（全量游戏逐个解析 port_forwards；游戏量级=管理员上架数，一次内存解析零压力）。
-	// 缺省规则（gw 空）仅在请求网关=地址簿第一条启用网关时归它：defaultGW 置为自身即命中 gw=="" 分支
+	// LIMIT 分页：默认 500，上限 500（防滥用），下限 1
+	limit := 500
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 500 {
+			limit = n
+		}
+	}
+	// 游标：上一批最后条目的 ID（首次不传或 ≤0 即从头开始）
+	afterID := uint64(0)
+	if v := strings.TrimSpace(r.URL.Query().Get("after_id")); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			afterID = n
+		}
+	}
+	// 该网关关联游戏集（缺省规则 gw=="" 仅在地址簿第一条启用网关时归自己）
 	var games []model.Game
 	if err := store.DB.Select("id, port_forwards, dbwrite_gw").Find(&games).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "查询游戏失败")
@@ -240,32 +269,43 @@ func (s *Server) handleInternalGatewayDbwrite(w http.ResponseWriter, r *http.Req
 		defaultGW = gwName
 	}
 	gset := gwGamesForGateway(games, gwName, defaultGW)
+
 	items := []map[string]interface{}{}
+	hasMore := false
+	nextAfter := uint64(0)
 	if len(gset) > 0 {
 		ids := make([]uint, 0, len(gset))
 		for id := range gset {
 			ids = append(ids, id)
 		}
-		var rows []model.GatewayDbwrite
-		store.DB.Where("game_id IN ?", ids).Order("id ASC").Find(&rows)
-		// 已回执剔除（该网关维度；其他网关的回执互不影响）
-		var acked []uint64
-		store.DB.Model(&model.GatewayDbwriteAck{}).Where("gateway_name = ?", gwName).Pluck("dbwrite_id", &acked)
-		aset := make(map[uint64]bool, len(acked))
-		for _, a := range acked {
-			aset[a] = true
+		// SQL 层过滤：game_id IN 归属集 AND (id > afterID OR afterID=0) AND id NOT IN 已回执 ——
+		// 避免 Go 内存全量拉 acked 再全量拉 rows 的双重全表扫描（之前每轮 poll 扫两次 acked 表）
+		q := store.DB.Where("game_id IN ?", ids)
+		if afterID > 0 {
+			q = q.Where("id > ?", afterID)
 		}
-		for _, row := range rows {
-			if aset[row.ID] {
-				continue
+		q = q.Where("id NOT IN (SELECT dbwrite_id FROM im_gateway_dbwrite_ack WHERE gateway_name = ?)", gwName)
+		// LIMIT limit+1：多取 1 条判 has_more（比额外 COUNT 查询高效）
+		var rows []model.GatewayDbwrite
+		if err := q.Order("id ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
+			logger.Error("网关写库拉取 SQL 失败（网关 %s）：%v", gwName, err)
+			adminFail(w, http.StatusInternalServerError, "拉取待写条目失败")
+			return
+		}
+		for i, row := range rows {
+			if i >= limit {
+				hasMore = true
+				break
 			}
 			items = append(items, map[string]interface{}{"id": row.ID, "username": row.Username, "password": row.Password})
+			nextAfter = row.ID // 最后一条的 ID 作为下一批游标
 		}
 	}
-	if len(items) > 0 {
-		logger.Info("网关写库拉取：网关 %s 取待写条目 %d 条", gwName, len(items))
+	if len(items) > 0 && hasMore {
+		logger.Info("网关写库拉取：网关 %s 取待写条目 %d 条（has_more=true，next_after=%d）", gwName, len(items), nextAfter)
 	}
-	plain, _ := json.Marshal(map[string]interface{}{"items": items})
+	// has_more=false 时静默（避免心跳每 30s 重复打相同日志）
+	plain, _ := json.Marshal(map[string]interface{}{"items": items, "has_more": hasMore, "next_after": nextAfter})
 	enc, err := gwproto.SealResp(sec, plain)
 	if err != nil {
 		adminFail(w, http.StatusInternalServerError, "响应加密失败")
@@ -309,15 +349,27 @@ func (s *Server) handleInternalGatewayDbwriteAck(w http.ResponseWriter, r *http.
 		adminFail(w, http.StatusForbidden, "网关不在地址簿")
 		return
 	}
-	n := 0
+	// 批量 INSERT IGNORE：一次 SQL 写入，唯一索引冲突（重复回执）自动忽略。
+	// GORM OnConflict DoNothing 跨 MySQL/SQLite 生效，CreateInBatches 每 100 条一批避免超长 SQL
+	ackRows := make([]model.GatewayDbwriteAck, 0, len(req.IDs))
 	for _, id := range req.IDs {
 		if id == 0 {
 			continue
 		}
-		if err := store.DB.Create(&model.GatewayDbwriteAck{DbwriteID: id, GatewayName: gwName}).Error; err == nil {
-			n++
-		} // 唯一索引冲突=重复回执，幂等忽略；其余异常静默（下次拉取重试写库无害）
+		ackRows = append(ackRows, model.GatewayDbwriteAck{DbwriteID: id, GatewayName: gwName})
 	}
-	logger.Info("网关写库回执：网关 %s 确认 %d 条（新落回执 %d）", gwName, len(req.IDs), n)
+	n := int64(0)
+	if len(ackRows) > 0 {
+		res := store.DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(ackRows, 100)
+		if res.Error != nil {
+			logger.Warn("网关写库回执批量写入失败（%s）：%v", gwName, res.Error)
+		} else {
+			n = res.RowsAffected
+		}
+	}
+	// Info 仅在有新回执落库时打，否则静默（心跳清 ack 后网关每 30s 回执 → 0 行受影响 = 幂等重复，不打日志）
+	if n > 0 {
+		logger.Info("网关写库回执：网关 %s 新增 %d 条回执（总上报 %d）", gwName, n, len(ackRows))
+	}
 	adminJSON(w, map[string]interface{}{"ok": true, "acked": n})
 }

@@ -349,11 +349,10 @@ const rcDeviceOnlineTTL = 10 * time.Minute
 // rcMinSharerVer 被控端引擎能力最低版本（客户端 register 上报 rc_ver；0=旧客户端未上报）
 const rcMinSharerVer = 1
 
-// rcDeviceOnline 设备级在线：账号有 PC 端连接且该设备行心跳新鲜（区别于旧的账号级在线判定）
+// rcDeviceOnline 设备级在线：仅按心跳新鲜度判定（区别于旧的账号级在线判定）。
+// 不再依赖 HasPC WS 连接检查——WS 瞬断会误判在线状态，而 last_seen 由 PC 端 rcRegister 上报，
+// 10 分钟内有心跳即代表设备进程活着。跨账号卡片/历史访问场景同样适用。
 func (s *Server) rcDeviceOnline(d *model.Device) bool {
-	if !s.hub.HasPC(d.Username) {
-		return false
-	}
 	return time.Since(d.LastSeen) <= rcDeviceOnlineTTL
 }
 
@@ -394,8 +393,8 @@ func (s *Server) handleRCDeviceRegister(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleRCDeviceMy 我的设备列表 GET /api/rc/device/my?username=xxx
-// 返回本账号全部已注册设备；在线按设备行判定（账号 PC 在线 + 该设备心跳新鲜），
-// 重装/换机遗留的历史重复设备ID因此显示离线，避免被误选后连接空等
+// 返回本账号全部已注册设备；在线按设备心跳新鲜度判定（last_seen ≤ 10min），
+// 重装/换机遗留的历史重复设备ID（无心跳）因此显示离线，避免被误选后连接空等
 func (s *Server) handleRCDeviceMy(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	var devs []model.Device
@@ -665,7 +664,7 @@ func (s *Server) handleRCTrustRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRCCardList 我的远程卡片 GET /api/rc/card/list?username=xxx
-// 返回卡片+目标设备实时信息（设备名/账号级在线/是否已信任），点击卡片直连或引导输码
+// 返回卡片+目标设备实时信息（设备名/心跳在线/是否已信任），点击卡片直连或引导输码
 func (s *Server) handleRCCardList(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	var cards []model.RemoteCard
@@ -763,7 +762,7 @@ func (s *Server) handleRCCardRemove(w http.ResponseWriter, r *http.Request) {
 
 // handleRCVisits 历史访问 GET /api/rc/visits?username=xxx
 // 派生查询无新表：im_remote_log 中我作为控制方成功接通的 rc 会话按设备去重（最后时间倒序
-// 最多 50 台），补设备名/账号级在线/信任标记——面板"历史访问"区块一键重连数据源
+// 最多 50 台），补设备名/心跳在线/信任标记——面板"历史访问"区块一键重连数据源
 func (s *Server) handleRCVisits(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	type visitRow struct {

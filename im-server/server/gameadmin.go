@@ -432,6 +432,8 @@ func registerGameAdminRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/game/gateways/{id}", s.adminGuard(s.handleAdminGameGatewayDelete))
 	// 指纹自动探测（添加/编辑弹窗「从网关获取」按钮：TLS 连公网地址取对端证书算 SHA256）
 	http.HandleFunc("POST /admin/api/game/gateway/probe", s.adminGuard(s.handleAdminGameGatewayProbe))
+	// 重置网关账号同步（清 im_gateway_dbwrite_ack 中该网关的所有回执，强制全量重拉）
+	http.HandleFunc("POST /admin/api/game/gateways/{name}/reset-sync", s.adminGuard(s.handleAdminGatewayResetSync))
 	// 积分兑换充值订单审计页（gamerecharge.go 归口；管理端只读）
 	http.HandleFunc("GET /admin/api/game/recharge/orders", s.adminGuard(s.HandleAdminGameRechargeOrders))
 	// 充值卡（gamecard.go 归口）：生成/列表/作废/导出
@@ -577,16 +579,27 @@ func (s *Server) handleAdminGameGatewayUpdate(w http.ResponseWriter, r *http.Req
 	adminJSON(w, map[string]interface{}{"gateway": g})
 }
 
-// handleAdminGameGatewayDelete 删除网关条目（引用了该 @名 的游戏规则将在客户端启动时报"未在地址簿中配置"）
+// handleAdminGameGatewayDelete 删除网关条目（引用了该 @名 的游戏规则将在客户端启动时报"未在地址簿中配置"）。
+// 级联清该网关的 dbwrite_ack 行——若重建同名网关会拿到旧 ack 导致"已同步"假阳性，
+// 网关重置同步需手动按网关清 ack，但删地址簿时一并清理更安全
 func (s *Server) handleAdminGameGatewayDelete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil || id == 0 {
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
-	if err := store.DB.Delete(&model.GatewayBook{}, id).Error; err != nil {
+	var b model.GatewayBook
+	if err := store.DB.First(&b, id).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "网关不存在")
+		return
+	}
+	if err := store.DB.Delete(&b).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "删除失败")
 		return
+	}
+	// 级联清该网关的回执行（重建同名网关会拿到旧 ack，导致"已同步"假阳性）
+	if res := store.DB.Where("gateway_name = ?", b.Name).Delete(&model.GatewayDbwriteAck{}); res.RowsAffected > 0 {
+		logger.Info("删除网关级联清 ack: gw=%s, 删除 %d 条回执", b.Name, res.RowsAffected)
 	}
 	adminJSON(w, map[string]interface{}{"ok": true})
 }
@@ -631,6 +644,56 @@ func (s *Server) handleAdminGameGatewayProbe(w http.ResponseWriter, r *http.Requ
 		"not_before":  crt.NotBefore.Format("2006-01-02"),
 		"not_after":   crt.NotAfter.Format("2006-01-02"),
 		"self_signed": selfSigned,
+	})
+}
+
+// handleAdminGatewayResetSync POST /admin/api/game/gateways/{name}/reset-sync
+// 管理端「重置同步」按钮归口：按网关引用名清掉 im_gateway_dbwrite_ack 中该网关的所有回执，
+// 强制网关下一轮 poll 把全部归属该网关的 dbwrite 队列条目重新拉取写入商户自己的游戏库。
+// 网关侧 last map 有 5 分钟 TTL（过 TTL 强制重写），配合清 ack 保证最多等 5 分钟自愈完成。
+// 典型场景：商户清档后删了自己游戏库的账号表，但 im_server 侧的 dbwrite_ack 还在导致网关不再拉取，
+// 这时登录也没用户触发密码变更 → 管理员按网关重置回执 → 30s 内网关可见待写条目 → 最多 5 分钟内重写完成。
+func (s *Server) handleAdminGatewayResetSync(w http.ResponseWriter, r *http.Request) {
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	if name == "" {
+		adminFail(w, http.StatusBadRequest, "缺少网关名")
+		return
+	}
+	// 校验该网关在地址簿中存在（避免误清已删除条目的孤儿回执）
+	var b model.GatewayBook
+	if err := store.DB.Where("name = ?", name).First(&b).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "网关「"+name+"」不在地址簿")
+		return
+	}
+	res := store.DB.Where("gateway_name = ?", name).Delete(&model.GatewayDbwriteAck{})
+	if res.Error != nil {
+		adminFail(w, http.StatusInternalServerError, "重置失败："+res.Error.Error())
+		return
+	}
+	// 返回该网关归属的待同步条目数（按 port_forwards/dbwrite_gw 过滤，给管理员参考）
+	// 注意：defaultGW 只有在该网关是地址簿第一条启用网关（isDefault=true）时才设自身，
+	// 否则为空字符串（gw="" 缺省规则只归第一条启用网关，其他网关不沾边）
+	var games []model.Game
+	store.DB.Select("id, port_forwards, dbwrite_gw").Find(&games)
+	_, isDefault := s.gwDbwriteGatewayChecked(name)
+	defaultGW := ""
+	if isDefault {
+		defaultGW = name
+	}
+	gset := gwGamesForGateway(games, name, defaultGW)
+	ids := make([]uint, 0, len(gset))
+	for id := range gset {
+		ids = append(ids, id)
+	}
+	var queueCount int64
+	if len(ids) > 0 {
+		store.DB.Model(&model.GatewayDbwrite{}).Where("game_id IN ?", ids).Count(&queueCount)
+	}
+	adminJSON(w, map[string]interface{}{
+		"ok":           true,
+		"reset_acked":  res.RowsAffected, // 清掉的回执条数
+		"queue_total":  queueCount,       // 该网关归属游戏的队列总条数
+		"gateway_name": name,
 	})
 }
 
@@ -1138,6 +1201,25 @@ func (s *Server) handleAdminGameDelete(w http.ResponseWriter, r *http.Request) {
 		store.DB.Where("review_id IN ?", revIDs).Delete(&model.GameReviewLike{})
 	}
 	store.DB.Where("game_id = ?", g.ID).Delete(&model.GameReview{})
+	// P2：网关写库队列 + 回执级联清理——删游戏后 gateway_dbwrite 行成为永久孤儿（gwGamesForGateway 不再覆盖该 game_id），
+	// ack 行也成孤儿。若不清：① 重置同步按 gateway_name 清 ack 无法定位；② 队列表随历史游戏单调增长。
+	// 顺序：先取本游戏的 dbwrite ID 清 ack（ack 依赖 dbwrite_id），再清 dbwrite 行自身。
+	// 包 Transaction：ack + dbwrite 必须一起清，中间失败会残留孤儿 → 下次重置同步或删游戏兜底
+	if err := store.DB.Transaction(func(tx *gorm.DB) error {
+		var dbwIDs []uint64
+		if err := tx.Model(&model.GatewayDbwrite{}).Where("game_id = ?", g.ID).Pluck("id", &dbwIDs).Error; err != nil {
+			return err
+		}
+		if len(dbwIDs) > 0 {
+			if err := tx.Where("dbwrite_id IN ?", dbwIDs).Delete(&model.GatewayDbwriteAck{}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("game_id = ?", g.ID).Delete(&model.GatewayDbwrite{}).Error
+	}); err != nil {
+		logger.Error("删除游戏级联清 dbwrite/ack 失败（game=%s）：%v", g.Name, err)
+		// 不 return，继续删主游戏 + 其他级联——清 dbwrite/ack 失败不阻塞主流程，残留孤儿下次兜底
+	}
 	// 云存档级联清理：删游戏后存档不可再访问，清行 + 清 game_saves/ 对象（防孤儿数据累积）
 	if n := s.gameSaveCascadePurge(g.ID, ""); n > 0 {
 		logger.Info("删除游戏级联清理云存档: %s (%s), 存档组=%d", g.Name, g.Slug, n)
@@ -1646,11 +1728,11 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	}
 	direct := g.DownloadMethod == 3
 	var req struct {
-		Version   string `json:"version"`
-		Changelog string `json:"changelog"`
-		MinReq    string `json:"min_req"`
-		PackType  int8   `json:"pack_type"`
-		PackSize  int64  `json:"pack_size"`
+		Version     string `json:"version"`
+		Changelog   string `json:"changelog"`
+		MinReq      string `json:"min_req"`
+		PackType    int8   `json:"pack_type"`
+		PackSize    int64  `json:"pack_size"`
 		BaseVersion string `json:"base_version"`
 		Files       []struct {
 			RelPath  string `json:"rel_path"`
@@ -1825,13 +1907,13 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 
 	// Phase 1 完成：Create GameVersion（register_state=1 登记中）
 	v := model.GameVersion{
-		GameID:     g.ID,
-		Version:    version,
-		PackType:   packType,
-		PackSize:   packSize,
-		BaseVersion: baseVer,
-		Changelog:  req.Changelog,
-		MinReq:     req.MinReq,
+		GameID:        g.ID,
+		Version:       version,
+		PackType:      packType,
+		PackSize:      packSize,
+		BaseVersion:   baseVer,
+		Changelog:     req.Changelog,
+		MinReq:        req.MinReq,
 		RegisterState: 1, // 登记中
 	}
 	if err := store.DB.Create(&v).Error; err != nil {
@@ -1850,9 +1932,9 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		"version":        version,
 		"register_state": 1,
 		// Phase 1 预估值（直连模式精准，非直连含分片 overhead；Phase 2 完成后版本行/游戏行会有精确值）
-		"file_count":     previewFileCount,
-		"size_bytes":     previewSize,
-		"msg":            "版本登记请求已接收，正在后台处理中，完成后将自动推送",
+		"file_count": previewFileCount,
+		"size_bytes": previewSize,
+		"msg":        "版本登记请求已接收，正在后台处理中，完成后将自动推送",
 	})
 
 	// 启动 Phase 2 后台 goroutine（重活：分片合并 + 清单写入 + manifest + 病毒扫描）
@@ -2204,13 +2286,13 @@ func (s *Server) gameVersionAsyncProcess(
 
 	// 更新 GameVersion（填写完整元信息 + register_state=0 完成）
 	if err := store.DB.Model(&model.GameVersion{}).Where("id = ?", v.ID).Updates(map[string]interface{}{
-		"manifest_hash":   manifestHash,
-		"size_bytes":      totalSize,
-		"file_count":      len(finalItems),
-		"pack_size":       packSize,
-		"patch_delete":    patchDelJSON,
-		"register_state":  0,
-		"register_error":  "",
+		"manifest_hash":  manifestHash,
+		"size_bytes":     totalSize,
+		"file_count":     len(finalItems),
+		"pack_size":      packSize,
+		"patch_delete":   patchDelJSON,
+		"register_state": 0,
+		"register_error": "",
 	}).Error; err != nil {
 		fail("版本信息更新失败: " + err.Error())
 		return
@@ -2230,7 +2312,7 @@ func (s *Server) gameVersionAsyncProcess(
 			RelPath:     it.relPath,
 			SizeBytes:   it.size,
 			SHA256:      it.sha,
-			StoragePath:  storageRel,
+			StoragePath: storageRel,
 		})
 	}
 	if err := store.DB.CreateInBatches(&fileRows, 500).Error; err != nil {
@@ -2346,7 +2428,7 @@ func (s *Server) RecoverRegisteringVersions() {
 		// 标记失败 + 原因（分片会话因服务重启已丢失，无法继续处理）
 		store.DB.Model(&model.GameVersion{}).Where("id = ?", v.ID).Updates(map[string]interface{}{
 			"register_state": 2,
-			"register_error":  "服务重启中断后台处理，分片会话已丢失，请重新提交版本登记",
+			"register_error": "服务重启中断后台处理，分片会话已丢失，请重新提交版本登记",
 		})
 		// WS 通知（此时刚启动，商户还没连上——推送会被 hub 丢弃，只记日志；商户下次登录看不到未读 WS）
 		logger.Error("[启动恢复] 版本登记已中断需重提: game_id=%d v%s version_id=%d", v.GameID, v.Version, v.ID)
