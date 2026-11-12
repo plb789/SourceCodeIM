@@ -1,0 +1,5 @@
+# 完整链路：CMake 编译 → 组装 → 打包（首次或改了源码后）
+powershell -ExecutionPolicy Bypass -File e:\SourceCodeIM\sdk\package-sdk.ps1
+
+# 跳过编译（只重新组装 + 打包，DLL 已经是最新的）
+powershell -ExecutionPolicy Bypass -File e:\SourceCodeIM\sdk\package-sdk.ps1 -SkipBuild

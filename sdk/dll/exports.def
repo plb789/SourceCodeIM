@@ -1,0 +1,34 @@
+; IMOverlay.dll — 导出符号表（显式指定，避免 C++ name mangling）
+; 所有导出函数在 IMOverlay.cpp 的 extern "C" 块里定义
+
+LIBRARY IMOverlay
+EXPORTS
+    ; —— 生命周期 ——
+    IMOVERLAY_Init
+    IMOVERLAY_Start
+    IMOVERLAY_Stop
+    IMOVERLAY_IsRunning
+
+    ; —— 帧内渲染 ——
+    IMOVERLAY_RenderPresent
+    IMOVERLAY_RenderPresentVulkan
+    IMOVERLAY_RenderPresentGL
+
+    ; —— 悬浮窗控制 ——
+    IMOVERLAY_SetOverlayOpen
+    IMOVERLAY_ShowPanel
+    IMOVERLAY_SetOverlayRect
+
+    ; —— 上行帧 ——
+    IMOVERLAY_SendChat
+    IMOVERLAY_SendRoomReady
+    IMOVERLAY_SendRoomLeave
+    IMOVERLAY_SendRoomChat
+    IMOVERLAY_SendPanelOpen
+
+    ; —— 样式定制 ——
+    IMOVERLAY_SetThemeColor
+    IMOVERLAY_SetFont
+
+    ; —— 工具 ——
+    IMOVERLAY_GetVersion

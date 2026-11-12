@@ -1,0 +1,10 @@
+^E:\SOURCECODEIM\SDK\DLL\BUILD\WIN32\CMAKEFILES\E4BA3F6F3439D8D91D69E30ACB7A8265\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SE:/SourceCodeIM/sdk/dll -BE:/SourceCodeIM/sdk/dll/build/Win32 --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file E:/SourceCodeIM/sdk/dll/build/Win32/IMOverlay.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

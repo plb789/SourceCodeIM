@@ -1,0 +1,11 @@
+E:\SourceCodeIM\sdk\dll\IMOverlay.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\IMOverlay.obj
+E:\SourceCodeIM\sdk\dll\renderer\render_engine.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\render_engine.obj
+E:\SourceCodeIM\sdk\dll\ui\ui_panels.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\ui_panels.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\imgui.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\imgui_draw.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui_draw.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\imgui_tables.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui_tables.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\imgui_widgets.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui_widgets.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\backends\imgui_impl_win32.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui_impl_win32.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\backends\imgui_impl_dx11.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui_impl_dx11.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\backends\imgui_impl_dx12.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui_impl_dx12.obj
+E:\SourceCodeIM\im-client\pc\overlay-native\third_party\imgui\backends\imgui_impl_opengl3.cpp;E:\SourceCodeIM\sdk\dll\build\Win32\IMOverlay.dir\Release\imgui_impl_opengl3.obj

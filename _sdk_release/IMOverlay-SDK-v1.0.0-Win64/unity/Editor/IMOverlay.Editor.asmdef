@@ -1,0 +1,14 @@
+{
+    "name": "IMOverlay.Editor",
+    "rootNamespace": "IMOverlay.Editor",
+    "references": ["IMOverlay.Runtime"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

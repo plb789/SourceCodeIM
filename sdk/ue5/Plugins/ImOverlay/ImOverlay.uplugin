@@ -1,0 +1,22 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0.0",
+    "FriendlyName": "IM Overlay",
+    "Description": "游戏内 IM 聊天 / 好友 / 房间 Overlay — 帧内渲染 + 悬浮窗兜底（D3D11/D3D12/Vulkan/OpenGL3 五后端）",
+    "Category": "Gameplay",
+    "CanContainContent": false,
+    "IsBetaVersion": false,
+    "Installed": true,
+    "Modules": [
+        {
+            "Name": "ImOverlay",
+            "Type": "Runtime",
+            "LoadingPhase": "Default",
+            "PlatformAllowList": [
+                "Win64",
+                "Win32"
+            ]
+        }
+    ]
+}

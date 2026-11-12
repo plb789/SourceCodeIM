@@ -1,0 +1,13 @@
+﻿IM Overlay SDK v1.0.0
+==========================
+Build Time  : 2026-11-12 20:51:44
+
+Contents:
+  dll/          Core SDK
+  unity/        Unity wrapper
+  ue5/          UE 5 plugin
+  docs/         6 Markdown docs
+
+Architectures built:
+  [OK] x64  : 666.5 KB
+  [OK] Win32: 541.5 KB
