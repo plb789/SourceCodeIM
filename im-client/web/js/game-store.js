@@ -1662,11 +1662,13 @@
     // silent=true（轮询/切页静默刷新）：不渲染骨架屏、无变化跳过重绘（防列表滚动位置重置与按钮
     // 闪烁）——管理端换种子/上架新版本后，常驻页面自动感知按钮变"更新"（此前仅登录/点库
     // 才拉库，用户须重新登录才能看到更新态）
+    // 拉取游戏库全量（静默=true 时签名无变化跳过重绘，仅徽标保守刷新）。
+    // 返回 Promise（供启动前静默刷新等调用方 await / race 超时）。
     function loadLibrary(silent) {
-        if (!username) { renderLibrary(); return; }
+        if (!username) { renderLibrary(); return Promise.resolve(false); }
         if (!silent) renderLibSkeleton();
-        api('GET', '/api/game/library').then(function (res) {
-            if (!res.ok) { if (!silent) toast(res.msg || T('游戏库加载失败')); return; }
+        return api('GET', '/api/game/library').then(function (res) {
+            if (!res.ok) { if (!silent) toast(res.msg || T('游戏库加载失败')); return false; }
             // 服务端同源库状态签名：轮询端点对比基线（变化才拉全量，两处格式由服务端单点保证一致）；
             // 静默拉取时对比前后签名——服务端无变化则跳过重绘（仅徽标保守刷新）
             var prevSig = state.libSig;
@@ -1683,11 +1685,55 @@
                 state.lib[gid] = item;
                 if (item.game) state.games[gid] = item.game;
             });
-            if (silent && state.libSig === prevSig) { updateBadges(); return; } // 无变化：仅徽标保守刷新
+            if (silent && state.libSig === prevSig) { updateBadges(); return false; } // 无变化：仅徽标保守刷新
             renderLibrary();
             updateBadges();
             if (state.detailId) updateInstallBox();
+            return true;
+        }).catch(function () { return false; });
+    }
+
+    // 启动前静默刷新单游戏元数据：短超时（默认 800ms）+ 每 gid 防重入 + 失败不阻断。
+    // 走 /api/game/{id} 单游戏详情而非全量库（/api/game/library）：
+    //   1. 带宽：单游戏 ~2KB gzip vs 全量库 45-75KB（25x 节省）
+    //   2. DB：每次请求 2-3 次 SQL（单游戏 + 库状态）vs 全量库 4-6 次 + N 次 HMAC + 签名重算
+    //   3. 1000 并发场景：客户端总带宽 ~2MB（100Mbps 轻松扛），服务端 MySQL 连接池 2000 容量够
+    // 保证 gameLaunchMeta 读到最新的 steam_emu / steam_app_id / net_mode / launch_exe / launch_args 等管理端配置。
+    // 超时或网络失败 → 直接用缓存继续启动（优雅降级，避免用户等白屏）。
+    var _launchRefreshInflight = {}; // key = gid，同游戏共享一次刷新，不同游戏各刷各的
+    var _launchRefreshTimer = {};
+    function refreshForLaunch(gid, timeoutMs) {
+        gid = String(gid);
+        timeoutMs = timeoutMs || 800;
+        if (_launchRefreshInflight[gid]) return _launchRefreshInflight[gid]; // 同游戏正在刷新 → 共享
+        _launchRefreshInflight[gid] = new Promise(function (resolve) {
+            var settled = false;
+            var done = function () {
+                if (settled) return;
+                settled = true;
+                _launchRefreshInflight[gid] = null;
+                if (_launchRefreshTimer[gid]) { clearTimeout(_launchRefreshTimer[gid]); _launchRefreshTimer[gid] = null; }
+                resolve();
+            };
+            _launchRefreshTimer[gid] = setTimeout(done, timeoutMs);
+            api('GET', '/api/game/' + gid).then(function (res) {
+                if (!res.ok) { done(); return; }
+                var d = res.data || {};
+                // 更新最新的游戏元数据（含 steam_emu / steam_app_id / launch_exe / launch_args / net_mode）
+                state.games[gid] = d;
+                if (state.lib[gid]) {
+                    state.lib[gid].game = d;
+                    // 同步 install_path（详情接口 item.lib.install_path 可能比库接口更新）
+                    if (d.lib && d.lib.install_path) {
+                        state.lib[gid].lib.install_path = d.lib.install_path;
+                    }
+                } else if (d.lib) {
+                    state.lib[gid] = { lib: d.lib, game: d };
+                }
+                done();
+            }).catch(done);
         });
+        return _launchRefreshInflight[gid];
     }
 
     // ==================== 本地游戏（用户手动添加的非商店游戏；本机 localStorage 持久化，不同步服务端） ====================
@@ -3638,24 +3684,29 @@
     }
 
     // 取游戏启动元数据：管理端默认（相对主程序 exe/参数模板）+ 本账号对该游戏派生的专属密码
+    // 数据源优先级：state.games[gid]（最新详情/摘要）→ state.lib[gid].game（库快照）→ 空对象
+    // 选定后统一从 g 取值，不再混合多个来源（避免退化后字段值互相 || 回旧快照）
+    // password 单独处理：库接口无条件下发，详情接口客户端请求时（带 X-Drive-Token）也下发
     function gameLaunchMeta(gid) {
-        var g = state.games[gid] || {};
-        var lib = state.lib[gid] && state.lib[gid].lib;
-        if (!g.launch_args && lib && lib.game) g = lib.game; // 详情未加载时退化用库内快照
+        var libEntry = state.lib[gid];                    // { lib: {...}, game: {...} }
+        var libState = libEntry && libEntry.lib;          // 库状态（含 install_path, launch_password）
+        var libGame = libEntry && libEntry.game;          // 库快照里的 gameSummary
+        var g = state.games[gid] || libGame || {};        // 选定数据源：最新详情优先，退化库快照
         return {
             exe: g.launch_exe || '',
             // 启动程序名称：管理端「启动程序路径」留空时，按 <名称>.exe 在安装根匹配同名主程序
             // （如 名称=War3 → War3.exe），使只填名称也能启动（匹配归口在主进程 gameResolveLaunchExe）
             name: g.launch_name || '',
             args: g.launch_args || '',
-            password: g.launch_password || (lib && lib.launch_password) || '',
-            // 启动方式与 Steam AppId（管理端上架配置，随摘要/详情下发）：steam_emu=1 时主进程
-            // 写 SmartSteamEmu.ini 后经内置 Steam.exe 拉起；g 兼容摘要/详情/库内旧快照三来源
-            steamEmu: (g.steam_emu === 1 || (state.games[gid] && state.games[gid].steam_emu === 1)) ? 1 : 0,
-            steamAppId: String(g.steam_app_id || (state.games[gid] && state.games[gid].steam_app_id) || ''),
-            // 联机方式（supernode/tunnel 随摘要下发）：主进程据此决定是否建立联机防火墙放行规则
-            netMode: String(g.net_mode || (state.games[gid] && state.games[gid].net_mode) || ''),
-            // 端口透传转发规则（管理端 port_forwards 字段；空=不开启转发零开销直通）
+            // 启动参数 {1} 专属密码：库接口总是在 lib.launch_password 返回（已入库就有）；
+            // 详情接口 token 匹配时也下发 g.launch_password（优先级低于库，因为库是每次刷新的最新值）
+            password: (libState && libState.launch_password) || g.launch_password || '',
+            // 启动方式（0=直接启动[默认] 1=SmartSteamEmu 模拟器）与 Steam AppId
+            steamEmu: (g.steam_emu === 1) ? 1 : 0,
+            steamAppId: String(g.steam_app_id || ''),
+            // 联机方式（supernode/tunnel 随摘要下发）
+            netMode: String(g.net_mode || ''),
+            // 端口透传转发规则（空=不开启转发）
             portForwards: parsePortForwards(g.port_forwards)
         };
     }
@@ -4472,62 +4523,67 @@
         if (state.launching[gid]) { toast(T('游戏正在启动，请稍候…')); return; } // 详情/库页/右键多入口防重复 spawn
         state.launching[gid] = Date.now();
         scheduleRefresh();
-        var meta = gameLaunchMeta(gid);
-        var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
-        // 启动前拉取云端存档（P1：仅本地无存档且云端有才下载；P2：两侧都改过则弹冲突裁决后再启动；失败不阻断启动）
-        var pullP = (DESKTOP.gameSaveSync && libDir)
-            ? DESKTOP.gameSaveSync(saveSyncPayload(gid, 'pull')).catch(function () { return null; })
-            : Promise.resolve(null);
-        pullP.then(function (sv) {
-            if (sv && sv.conflict) { if (onResult) onResult(false, T('云存档冲突待裁决')); return handleSaveConflict(gid, sv, 'pull'); }
-            return sv;
-        }).then(function (sv) {
-            if (sv && sv.conflict) { clearLaunching(gid); return null; } // 冲突未裁决：中止本次启动（结果已回调，弹窗交由用户处理）
-            if (sv && sv.downloaded) toast(T('已从云端同步存档（') + sv.downloaded + T(' 个文件）'));
-            else if (sv && sv.error) toast(T('云存档下载失败：') + sv.error);
-            var optsP = DESKTOP.gameGetLaunchOptions ? DESKTOP.gameGetLaunchOptions(gid) : Promise.resolve(null);
-            return optsP.then(function (opts) {
-                var tpl = (opts && opts.args) ? opts.args : meta.args; // 用户自定义覆盖 > 管理端默认
-                var payload = {
-                    gameId: gid, username: username, installDir: libDir,
-                    launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid),
-                    portForwards: meta.portForwards, // 端口透传转发规则（主进程 spawn 前开启、游戏退出自动关闭）
-                    gateway: state.gateway, // 远程加密网关配置（gw 规则经网关加密透传；未配置时 gw 规则拒绝）
-                    // SmartSteamEmu 启动（steam_emu=1 生效）：steamAppId 写 ini 的 AppId（空=0 读
-                    // steam_appid.txt）、credential 写 ManualSteamId（与 {1} 占位符同源的账号专属16位
-                    // 凭证，每账号唯一保证联机 SteamID 不冲突）、persona 写 PersonaName（昵称回退账号）
-                    steamEmu: meta.steamEmu,
-                    steamAppId: meta.steamAppId,
-                    credential: meta.password,
-                    persona: myNickname || username,
-                    netMode: meta.netMode // 联机方式（主进程按 supernode/tunnel/steamEmu 决定防火墙放行范围）
-                };
-                if (exePath) payload.exePath = exePath;
-                return DESKTOP.gameLaunch(payload);
-            });
-        }).then(function (r) {
-            if (r && r.ok) {
-                // spawn 成功：保持"正在启动"，窗口可见后 game-start 广播切"运行中"并登记 presence/时长会话
-                // （窗口秒出时 game-start 已先到，此时已在"运行中"，免提示）
-                if (state.launching[gid]) toast(T('正在启动游戏…'));
-                if (onResult) onResult(true, '');
-                return;
-            }
-            if (r && r.needExe) {
-                clearLaunching(gid); // 主程序待人工选择：先回"启动"态（选择文件后重试会重新进入"正在启动"）
-                if (onResult) onResult(false, 'need_exe');
-                showConfirm(T('选择游戏主程序'), T('未能找到游戏主程序（exe），请手动选择，选择后将开始游戏。'), T('选择文件'), function () {
-                    DESKTOP.gameChooseGameExe().then(function (rr) {
-                        if (!rr || rr.canceled || !rr.filePath) { if (onResult) onResult(false, 'canceled'); return; }
-                        launchGame(gid, rr.filePath, onResult); // 带 exePath 重试（结果继续回调）
-                    });
+        // 启动前静默刷新单游戏元数据：保证 steam_emu / steam_app_id / net_mode 等管理端配置读到最新值。
+        // 800ms 超时兜底，网络抖动或服务器无响应时继续用缓存启动（优雅降级，不白屏）。
+        // 多个启动同一游戏的请求共享同一次 fetch（每 gid 防重入 _launchRefreshInflight）。
+        refreshForLaunch(gid).then(function () {
+            var meta = gameLaunchMeta(gid);
+            var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
+            // 启动前拉取云端存档（P1：仅本地无存档且云端有才下载；P2：两侧都改过则弹冲突裁决后再启动；失败不阻断启动）
+            var pullP = (DESKTOP.gameSaveSync && libDir)
+                ? DESKTOP.gameSaveSync(saveSyncPayload(gid, 'pull')).catch(function () { return null; })
+                : Promise.resolve(null);
+            pullP.then(function (sv) {
+                if (sv && sv.conflict) { if (onResult) onResult(false, T('云存档冲突待裁决')); return handleSaveConflict(gid, sv, 'pull'); }
+                return sv;
+            }).then(function (sv) {
+                if (sv && sv.conflict) { clearLaunching(gid); return null; } // 冲突未裁决：中止本次启动（结果已回调，弹窗交由用户处理）
+                if (sv && sv.downloaded) toast(T('已从云端同步存档（') + sv.downloaded + T(' 个文件）'));
+                else if (sv && sv.error) toast(T('云存档下载失败：') + sv.error);
+                var optsP = DESKTOP.gameGetLaunchOptions ? DESKTOP.gameGetLaunchOptions(gid) : Promise.resolve(null);
+                return optsP.then(function (opts) {
+                    var tpl = (opts && opts.args) ? opts.args : meta.args; // 用户自定义覆盖 > 管理端默认
+                    var payload = {
+                        gameId: gid, username: username, installDir: libDir,
+                        launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid),
+                        portForwards: meta.portForwards, // 端口透传转发规则（主进程 spawn 前开启、游戏退出自动关闭）
+                        gateway: state.gateway, // 远程加密网关配置（gw 规则经网关加密透传；未配置时 gw 规则拒绝）
+                        // SmartSteamEmu 启动（steam_emu=1 生效）：steamAppId 写 ini 的 AppId（空=0 读
+                        // steam_appid.txt）、credential 写 ManualSteamId（与 {1} 占位符同源的账号专属16位
+                        // 凭证，每账号唯一保证联机 SteamID 不冲突）、persona 写 PersonaName（昵称回退账号）
+                        steamEmu: meta.steamEmu,
+                        steamAppId: meta.steamAppId,
+                        credential: meta.password,
+                        persona: myNickname || username,
+                        netMode: meta.netMode // 联机方式（主进程按 supernode/tunnel/steamEmu 决定防火墙放行范围）
+                    };
+                    if (exePath) payload.exePath = exePath;
+                    return DESKTOP.gameLaunch(payload);
                 });
-                return;
-            }
-            clearLaunching(gid);
-            if (onResult) onResult(false, (r && r.error) || T('启动失败'));
-            toast((r && r.error) || T('启动失败'));
-        }).catch(function (e) { clearLaunching(gid); if (onResult) onResult(false, (e && e.message) || T('启动失败')); toast(T('启动失败')); });
+            }).then(function (r) {
+                if (r && r.ok) {
+                    // spawn 成功：保持"正在启动"，窗口可见后 game-start 广播切"运行中"并登记 presence/时长会话
+                    // （窗口秒出时 game-start 已先到，此时已在"运行中"，免提示）
+                    if (state.launching[gid]) toast(T('正在启动游戏…'));
+                    if (onResult) onResult(true, '');
+                    return;
+                }
+                if (r && r.needExe) {
+                    clearLaunching(gid); // 主程序待人工选择：先回"启动"态（选择文件后重试会重新进入"正在启动"）
+                    if (onResult) onResult(false, 'need_exe');
+                    showConfirm(T('选择游戏主程序'), T('未能找到游戏主程序（exe），请手动选择，选择后将开始游戏。'), T('选择文件'), function () {
+                        DESKTOP.gameChooseGameExe().then(function (rr) {
+                            if (!rr || rr.canceled || !rr.filePath) { if (onResult) onResult(false, 'canceled'); return; }
+                            launchGame(gid, rr.filePath, onResult); // 带 exePath 重试（结果继续回调）
+                        });
+                    });
+                    return;
+                }
+                clearLaunching(gid);
+                if (onResult) onResult(false, (r && r.error) || T('启动失败'));
+                toast((r && r.error) || T('启动失败'));
+            }).catch(function (e) { clearLaunching(gid); if (onResult) onResult(false, (e && e.message) || T('启动失败')); toast(T('启动失败')); });
+        }).catch(function () { /* refreshForLaunch 内部已吞掉异常，这层兜底永不触发 */ });
     }
 
     // 清除"正在启动"态并刷新按钮（启动中止/失败路径归口；game-start/error/exit 广播另有各自清理）
@@ -4614,7 +4670,15 @@
             }
             var d = res.data || {};
             state.games[id] = d;
-            if (d.lib) state.lib[id] = { lib: d.lib, game: d };
+            // 详情接口没有 .lib 字段（库状态只有 /api/game/library 返回），所以这里：
+            // 1) 如果 state.lib[id] 已存在（之前 loadLibrary 过），只更新 .game 部分，保留 .lib 库状态
+            //    这样 state.lib[id].game 和 state.games[id] 永远一致，避免退化时取到旧快照
+            // 2) 如果 state.lib[id] 不存在且 d.lib 存在（理论上不会），创建完整条目
+            if (state.lib[id]) {
+                state.lib[id].game = d;
+            } else if (d.lib) {
+                state.lib[id] = { lib: d.lib, game: d };
+            }
             renderDetail(d);
             // 锚点定位（游戏库页签"评测"跳转用）：评测区滚动到视口顶部
             if (anchor === 'reviews') {

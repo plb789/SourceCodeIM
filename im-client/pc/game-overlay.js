@@ -16,13 +16,12 @@
 //
 // 焦点归还策略（文档 §4.1.4）：
 //   主路径 = hide() 后 Windows 依 Z 序自动把焦点还给游戏；兜底 = 按游戏 PID 枚举顶层窗口
-//   SetForegroundWindow（PowerShell user32，进程内一次性查询，失败静默）。
+//   SetForegroundWindow（koffi FFI 调 user32.dll，进程内零 shell 依赖，失败静默）。
 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const net = require('net'); // 二期 M1：Named Pipe 服务端（DLL 注入式 Overlay 下行通道）
-const { execFile } = require('child_process');
 const { app, BrowserWindow, globalShortcut, screen, ipcMain, nativeImage } = require('electron');
 
 // Win7（os.release 6.1.x）硬性禁用：win7 壳强制 disableHardwareAcceleration + Electron 22/Chromium 108，
@@ -235,69 +234,74 @@ function resolveGameDisplay() {
     attempt(6000);
 }
 
-// ===== PowerShell user32 助手（窗口矩形探测 / 焦点归还）=====
-// 项目已有 PowerShell spawn 先例（game:disk-list）；脚本进程级一次性编译，串行化防叠加
-var psBusy = false;
-function runPs(script, cb) {
-    if (psBusy) { cb(null); return; } // 串行窗口期直接放弃（探测/归还均为尽力而为，不排队）
-    psBusy = true;
-    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        { timeout: 5000, windowsHide: true },
-        function (err, stdout) {
-            psBusy = false;
-            if (err) { cb(null); return; }
-            cb(String(stdout || '').trim());
-        });
+// ===== user32.dll 窗口查询（koffi FFI，替代原 PowerShell spawn）=====
+// 原方案：execFile('powershell.exe', ['Add-Type -DllImport user32.dll', ...]) 调 EnumWindows/
+// GetWindowRect/SetForegroundWindow 等——火绒"敏感动作防护"把任何程序调 PowerShell + Add-Type
+// 标记为可疑并拦截，导致 Overlay 弹出/关闭时被系统加固弹窗阻断。
+// 新方案：koffi 3.3.3 FFI 直接 load user32.dll 调 C 导出函数（无 shell/无脚本/无 Add-Type），
+// 和下方热键轮询的 GetAsyncKeyState 同款模式——杀软零拦截。
+// koffi 缺失（极少见）时 psFn 降级为 null → psGameRect 返回 null / psForeground 静默 no-op，
+// 主路径（Z 序自动归还焦点 + Electron screen 定位）不受影响。
+var koffiMod = null;
+try { koffiMod = require('koffi'); } catch (e) { }
+var user32Lib = null;
+var psEnumWindows = null, psIsWindowVisible = null;
+var psGetWtpi = null, psGetWindowRect = null, psSetForegroundWindow = null;
+if (koffiMod) {
+    try {
+        user32Lib = koffiMod.load('user32.dll');
+        // EnumWindowsProc = bool(*)(HWND hWnd, LPARAM lParam)
+        var EnumProc = koffiMod.callback('bool', ['pointer', 'pointer']);
+        psEnumWindows = user32Lib.func('EnumWindows', 'bool', [EnumProc, 'pointer']);
+        psIsWindowVisible = user32Lib.func('IsWindowVisible', 'bool', ['pointer']);
+        // GetWindowThreadProcessId 的第二个参数是 LPDWORD（out 指针），用 Buffer 分配 4 字节写入
+        psGetWtpi = user32Lib.func('GetWindowThreadProcessId', 'uint32', ['pointer', 'pointer']);
+        // GetWindowRect 的第二个参数是 LPRECT（out 结构体指针），用 Buffer 分配 16 字节（4×int32）
+        psGetWindowRect = user32Lib.func('GetWindowRect', 'bool', ['pointer', 'pointer']);
+        psSetForegroundWindow = user32Lib.func('SetForegroundWindow', 'bool', ['pointer']);
+    } catch (e) { /* 加载失败 → 全部 null，走降级路径 */ }
 }
+
 // PID → 最大可见顶层窗口矩形 {x,y,w,h} | null（EnumWindows 按 PID 过滤取面积最大者）
 function psGameRect(pid, cb) {
-    var script = [
-        'Add-Type -Namespace Win -Name U -MemberDefinition \'',
-        '[DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);',
-        '[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);',
-        '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);',
-        '[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);',
-        'public delegate bool EnumProc(IntPtr h, IntPtr lp);',
-        '[StructLayout(LayoutKind.Sequential)] public struct RECT { public int L; public int T; public int R; public int B; }\'',
-        '$best = $null; $area = 0',
-        '$cb = { param($h, $lp)',
-        '  $p = 0; [Win.U]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null',
-        '  if ($p -eq ' + Number(pid) + ' -and [Win.U]::IsWindowVisible($h)) {',
-        '    $r = New-Object Win.U+RECT; [Win.U]::GetWindowRect($h, [ref]$r) | Out-Null',
-        '    $a = ($r.R - $r.L) * ($r.B - $r.T)',
-        '    if ($a -gt $area) { $area = $a; $best = "$($r.L),$($r.T),$($r.R - $r.L),$($r.B - $r.T)" }',
-        '  }',
-        '  return $true }',
-        '[Win.U]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null',
-        'if ($best) { Write-Output $best }'
-    ].join('; ');
-    runPs(script, function (out) {
-        if (!out) { cb(null); return; }
-        var m = out.split(',');
-        if (m.length !== 4) { cb(null); return; }
-        var r = { x: parseInt(m[0], 10), y: parseInt(m[1], 10), w: parseInt(m[2], 10), h: parseInt(m[3], 10) };
-        cb((r.w > 0 && r.h > 0) ? r : null);
+    if (!psEnumWindows || !psIsWindowVisible || !psGetWtpi || !psGetWindowRect || !pid) { cb(null); return; }
+    var targetPid = Number(pid) >>> 0; // 转 uint32
+    var best = null, bestArea = 0;
+    var pidBuf = Buffer.alloc(4);    // GetWindowThreadProcessId out 缓冲
+    var rectBuf = Buffer.alloc(16);  // RECT = { int32 L,T,R,B } → 16 字节
+    var cbFn = koffiMod.callback('bool', ['pointer', 'pointer'], function (hWnd, lParam) {
+        // 过滤不可见窗口 / PID 不匹配
+        if (!psIsWindowVisible(hWnd)) return true;
+        psGetWtpi(hWnd, pidBuf);
+        var hPid = pidBuf.readUInt32LE(0);
+        if (hPid !== targetPid) return true;
+        // 取矩形算面积（面积最大者胜出——同名进程可能有子窗口）
+        if (!psGetWindowRect(hWnd, rectBuf)) return true;
+        var L = rectBuf.readInt32LE(0), T = rectBuf.readInt32LE(4);
+        var R = rectBuf.readInt32LE(8), B = rectBuf.readInt32LE(12);
+        var w = R - L, h = B - T;
+        var a = w * h;
+        if (a > bestArea) { bestArea = a; best = { x: L, y: T, w: w, h: h }; }
+        return true; // 继续枚举
     });
+    try { psEnumWindows(cbFn, null); } catch (e) { cb(null); return; }
+    cb(best && best.w > 0 && best.h > 0 ? best : null);
 }
 // 焦点归还兜底：把 PID 的最大可见顶层窗口调到前台（失败静默——主路径 Z 序归还通常已生效）
 function psForeground(pid) {
-    if (!pid) return;
-    var script = [
-        'Add-Type -Namespace Win2 -Name U -MemberDefinition \'',
-        '[DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);',
-        '[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);',
-        '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);',
-        '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);',
-        'public delegate bool EnumProc(IntPtr h, IntPtr lp);\'',
-        '$hit = [IntPtr]::Zero',
-        '$cb = { param($h, $lp)',
-        '  $p = 0; [Win2.U]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null',
-        '  if ($p -eq ' + Number(pid) + ' -and [Win2.U]::IsWindowVisible($h)) { $script:hit = $h; return $false }',
-        '  return $true }',
-        '[Win2.U]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null',
-        'if ($hit -ne [IntPtr]::Zero) { [Win2.U]::SetForegroundWindow($hit) | Out-Null }'
-    ].join('; ');
-    runPs(script, function () { });
+    if (!psEnumWindows || !psIsWindowVisible || !psGetWtpi || !psSetForegroundWindow || !pid) return;
+    var targetPid = Number(pid) >>> 0;
+    var hitHwnd = null;
+    var pidBuf = Buffer.alloc(4);
+    var cbFn = koffiMod.callback('bool', ['pointer', 'pointer'], function (hWnd, lParam) {
+        if (!psIsWindowVisible(hWnd)) return true;
+        psGetWtpi(hWnd, pidBuf);
+        if (pidBuf.readUInt32LE(0) !== targetPid) return true;
+        hitHwnd = hWnd;
+        return false; // 找到第一个就停
+    });
+    try { psEnumWindows(cbFn, null); } catch (e) { return; }
+    if (hitHwnd) { try { psSetForegroundWindow(hitHwnd); } catch (e) { } }
 }
 
 // ===== 二期注入式 Overlay：Named Pipe 服务端（docs/游戏内Overlay二期注入式设计.md M1）=====
@@ -763,14 +767,10 @@ function registerHotkey() {
 // 兜底：koffi FFI 调 GetAsyncKeyState 50ms 轮询——钩子层拦不住轮询（不走消息分发）。
 // 按下沿检测 + 250ms 去抖（与 RegisterHotKey 回调双触发防护：正常场景热键回调先跑，
 // 轮询沿落在去抖窗内被忽略；钩子吞键场景仅轮询触发）。游戏运行态才轮询（平时零开销）。
-var koffiMod = null;
-try { koffiMod = require('koffi'); } catch (e) { }
+// 注意：koffiMod / user32Lib 已在上方 user32 FFI 区加载（模块级变量），这里直接复用。
 var gaksFn = null;
-if (koffiMod) {
-    try {
-        var user32Lib = koffiMod.load('user32.dll');
-        gaksFn = user32Lib.func('GetAsyncKeyState', 'int16', ['int']);
-    } catch (e) { gaksFn = null; }
+if (user32Lib) {
+    try { gaksFn = user32Lib.func('GetAsyncKeyState', 'int16', ['int']); } catch (e) { gaksFn = null; }
 }
 var keyPollTimer = null, keyPollPrev = false, keyPollLast = 0;
 function startKeyPoll() {
