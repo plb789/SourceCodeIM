@@ -1,20 +1,24 @@
-// ===== 阶段二百六十：客户端版本管理数据模型（APP/PC 自动更新，服务端归口） =====
-// 职责：记录各平台（android=APK / win=PC 安装包）的发布版本，供客户端版本检查接口比对，
+// ===== 阶段二百六十：客户端版本管理数据模型（APP/PC 自动更新 + 阶段三百增量热更新共用） =====
+// 职责：记录各平台（android=APK / win=PC 安装包 / pc-code=增量热更新 app.asar）的发布版本，
 //
 //	admin 后台上传安装包后落库；安装包本体静态托管于 <WebDir>/static/download/<platform>/，
 //	URL 可直接访问（复用服务端静态服务，零新增下载路由）。PC 端 electron-updater 依赖的
 //	latest.yml 由上传/启停时按当前生效版本动态生成（见 server/appversion.go writeWinLatestYml）。
+//	阶段三百增量热更新（platform=pc-code）：独立的代码构建号体系（buildId 替代语义化版本），
+//	产物为 app.asar + unpacked.zip（可选），Extra JSON 扩展字段存储 unpacked 的 url/size/hash。
 package model
 
-import "time"
+import (
+	"time"
+)
 
 // AppVersion 客户端发布版本记录（一个平台可存多条历史，enabled 标记当前对外生效版本）
 type AppVersion struct {
 	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Platform string `gorm:"column:platform;type:varchar(16);index;not null" json:"platform"` // android / win
-	// VersionName 语义化版本展示名（如 1.2.0）；win 端比对以此为准（semver），electron-updater latest.yml 同用
+	Platform string `gorm:"column:platform;type:varchar(16);index;not null" json:"platform"` // android / win / pc-code
+	// VersionName 语义化版本展示名（如 1.2.0）或 pc-code 平台的代码构建号（如 "20261114-5"）
 	VersionName string `gorm:"column:version_name;type:varchar(32);not null" json:"version_name"`
-	// VersionCode Android 整型版本号（与 build.gradle versionCode 对应，APP 端比对以此为准）；win 端可留 0
+	// VersionCode Android 整型版本号（与 build.gradle versionCode 对应，APP 端比对以此为准）；win/pc-code 端可留 0
 	VersionCode  int    `gorm:"column:version_code;default:0" json:"version_code"`
 	FileName     string `gorm:"column:file_name;type:varchar(255);default:''" json:"file_name"`   // 落盘文件名
 	URL          string `gorm:"column:url;type:varchar(512);default:''" json:"url"`               // 下载相对 URL（/static/download/...）
@@ -29,6 +33,11 @@ type AppVersion struct {
 	Creator    string    `gorm:"column:creator;type:varchar(64);default:''" json:"creator"` // 发布管理员
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+
+	// Extra JSON 扩展字段（阶段三百增量热更新 pc-code 专用，其他平台忽略）
+	// 使用 TEXT 而非 JSON 类型以兼容 MySQL 5.6 / MariaDB 等不支持原生 JSON 的版本
+	// pc-code 存储 unpacked.zip 的 url/size/sha512_b64/b64 是否为十六进制等
+	Extra string `gorm:"column:extra;type:text" json:"extra,omitempty"`
 }
 
 // TableName 指定表名

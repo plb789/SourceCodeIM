@@ -285,6 +285,21 @@ async function main() {
         kb(blobStat.encBytes) + '，含索引 ' + kb(blobStat.indexLen) + '）→ web-snapshot.enc；密钥已扰乱注入 secure-key.js');
     console.log('[混淆] 主进程模块加密: ' + mainStat.count + ' 个（' + kb(mainStat.srcBytes) + ' → ' +
         kb(mainStat.encBytes) + '）→ loader.js 薄启动器配套；启动器压缩 ' + kb(loaderLen) + ' → loader.min.js');
+
+    // ===== 阶段三百：代码构建号 code-build.json（增量热更新版本识别，进 asar）=====
+    var buildDate = new Date();
+    var dateStr = buildDate.getFullYear()
+        + String(buildDate.getMonth() + 1).padStart(2, '0')
+        + String(buildDate.getDate()).padStart(2, '0');
+    var buildId = dateStr + '-' + String(Math.floor(Date.now() / 1000)).slice(-4);
+    var pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+    var buildJson = {
+        buildId: buildId,
+        buildTime: buildDate.toLocaleString('zh-CN'),
+        productVersion: pkgJson.version
+    };
+    fs.writeFileSync(path.join(__dirname, 'code-build.json'), JSON.stringify(buildJson, null, 2));
+    console.log('[混淆] 代码构建号 code-build.json: ' + buildId + ' (产品版本 ' + pkgJson.version + ')');
 }
 
 main().catch(function (e) {

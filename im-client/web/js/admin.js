@@ -5481,8 +5481,8 @@
     });
     $('wb-icon').addEventListener('change', function () { wbRenderIconPreview(this.value.trim()); });
 
-    // ===== 阶段二百六十：客户端更新管理（APP/PC 安装包上传 + 版本启停） =====
-    var AV_PLAT_TEXT = { android: 'APP', win: 'PC' };
+    // ===== 阶段二百六十 + 阶段三百：客户端更新管理（APP/PC 安装包 + 增量热更新） =====
+    var AV_PLAT_TEXT = { android: 'APP', win: 'PC', 'pc-code': '代码热更' };
 
     function avLoadList() {
         $('av-status').textContent = '加载中…';
@@ -5639,13 +5639,15 @@
         var urlVal = isUrl ? $('av-up-url').value.trim() : '';
         var sha256 = isUrl ? $('av-up-sha256').value.trim() : '';
         var sha512 = isUrl ? $('av-up-sha512').value.trim() : '';
-        if (!version) { showToast('请填写版本号'); return; }
+        if (!version) { showToast('请填写版本号（代码热更新须为 YYYYMMDD-NNNN 格式，如 20261114-5230）'); return; }
         if (isUrl) {
             if (!urlVal) { showToast('请填写外链 URL'); return; }
             if (!/^https?:\/\//i.test(urlVal)) { showToast('外链须为 http/https 完整地址'); return; }
-            if (platform === 'win' && !sha512 && !sha256) { showToast('PC 外链须填写 sha512 或 sha256 校验和'); return; }
+            if (platform === 'win' && !sha512 && !sha256) { showToast('PC 全量更新外链须填写 sha512 或 sha256 校验和'); return; }
         } else if (!avEditing) {
             if (!file) { showToast('请选择安装包文件'); return; }
+            // pc-code 主文件须为 .asar
+            if (platform === 'pc-code' && !/\.asar$/i.test(file.name)) { showToast('代码热更新主文件须为 .asar'); return; }
         }
         if (platform === 'android' && !(parseInt($('av-up-code').value, 10) > 0)) { showToast('APP 版本须填写 versionCode'); return; }
         var fd = new FormData();

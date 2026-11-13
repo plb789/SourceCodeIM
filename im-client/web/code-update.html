@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>代码热更新</title>
+<style>
+    :root {
+        --bg: #f5f5f5;
+        --card: #ffffff;
+        --text: #1f1f1f;
+        --text-sub: #6b6b6b;
+        --line: rgba(0, 0, 0, 0.08);
+        --primary: #07c160;
+        --primary-press: #06ad55;
+        --track: #e4e4e4;
+        --btn-ghost-text: #575757;
+        --btn-ghost-bg: rgba(0, 0, 0, 0.05);
+        --btn-ghost-press: rgba(0, 0, 0, 0.09);
+        --err: #e64340;
+    }
+    html[data-theme="dark"] {
+        --bg: #1a1a1a;
+        --card: #232323;
+        --text: #e6e6e6;
+        --text-sub: #9a9a9a;
+        --line: rgba(255, 255, 255, 0.08);
+        --primary: #07c160;
+        --primary-press: #06ad55;
+        --track: #333333;
+        --btn-ghost-text: #b5b5b5;
+        --btn-ghost-bg: rgba(255, 255, 255, 0.08);
+        --btn-ghost-press: rgba(255, 255, 255, 0.13);
+        --err: #e64340;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        font-size: 14px;
+        overflow: hidden;
+        user-select: none;
+        display: flex;
+        flex-direction: column;
+    }
+    .titlebar {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        -webkit-app-region: drag;
+        flex: none;
+    }
+    .titlebar .tb-title { font-size: 13px; color: var(--text-sub); }
+    .titlebar .tb-close {
+        margin-left: auto;
+        -webkit-app-region: no-drag;
+        width: 28px; height: 28px;
+        border: none; background: transparent;
+        color: var(--text-sub);
+        font-size: 16px; line-height: 1;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+    .titlebar .tb-close:hover { background: var(--btn-ghost-bg); color: var(--text); }
+    .hidden { display: none !important; }
+    .titlebar .tb-close.hidden { display: none; }
+    .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 6px 22px 18px;
+        min-height: 0;
+    }
+    .ver-line { display: flex; align-items: baseline; gap: 8px; flex: none; }
+    .ver-line .big { font-size: 18px; font-weight: 600; }
+    .ver-line .from { font-size: 12px; color: var(--text-sub); }
+    .ver-line .tag {
+        font-size: 11px;
+        color: var(--text-sub);
+        background: var(--btn-ghost-bg);
+        border-radius: 4px;
+        padding: 1px 6px;
+        margin-left: 6px;
+    }
+    .force-tag {
+        flex: none;
+        align-self: flex-start;
+        display: inline-block;
+        font-size: 11px;
+        color: var(--err);
+        border: 1px solid var(--err);
+        border-radius: 4px;
+        padding: 1px 6px;
+        margin-top: 8px;
+    }
+    .notes-wrap {
+        flex: 1;
+        min-height: 0;
+        margin-top: 10px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        overflow-y: auto;
+        font-size: 13px;
+        color: var(--text-sub);
+        line-height: 1.7;
+        white-space: pre-wrap;
+        user-select: text;
+    }
+    .notes-wrap:empty::before { content: "本次更新内容暂无说明"; }
+    .notes-wrap::-webkit-scrollbar { width: 6px; }
+    .notes-wrap::-webkit-scrollbar-thumb {
+        background: rgba(128, 128, 128, 0.35);
+        border-radius: 3px;
+    }
+    .notes-wrap:hover::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.55); }
+    .notes-wrap::-webkit-scrollbar-track { background: transparent; }
+    .progress-zone { flex: none; margin-top: 12px; display: none; }
+    .progress-zone.show { display: block; }
+    .progress-text { font-size: 12px; color: var(--text-sub); margin-bottom: 6px; display: flex; justify-content: space-between; }
+    .progress-track { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+    .progress-bar { height: 100%; width: 0%; border-radius: 3px; background: var(--primary); transition: width .25s ease; }
+    .err-text { color: var(--err); font-size: 12px; margin-top: 8px; display: none; }
+    .err-text.show { display: block; }
+    .btns { flex: none; display: flex; gap: 10px; margin-top: 16px; }
+    .btn {
+        flex: 1;
+        height: 38px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        cursor: pointer;
+        background: var(--btn-ghost-bg);
+        color: var(--btn-ghost-text);
+    }
+    .btn:hover { background: var(--btn-ghost-press); }
+    .btn.primary { background: var(--primary); color: #fff; }
+    .btn.primary:hover { background: var(--primary-press); }
+    .btn:disabled { opacity: .55; cursor: default; }
+    .btn.hidden { display: none; }
+    .tip {
+        font-size: 11px;
+        color: var(--text-sub);
+        margin-top: 8px;
+        line-height: 1.6;
+    }
+</style>
+</head>
+<body>
+    <div class="titlebar">
+        <span class="tb-title">即时通讯 - 代码热更新（主进程）</span>
+        <button class="tb-close" id="tb-close" title="以后再说">✕</button>
+    </div>
+    <div class="main">
+        <div class="ver-line">
+            <span class="big" id="ver-big">发现新版代码</span>
+            <span class="from" id="ver-from"></span>
+            <span class="tag" id="ver-product">v1.1.2</span>
+        </div>
+        <span class="force-tag hidden" id="force-tag">强制更新 · 必须完成更新才能继续使用</span>
+        <div class="notes-wrap" id="notes"></div>
+        <div class="progress-zone" id="prog-zone">
+            <div class="progress-text"><span id="prog-label">下载中…</span><span id="prog-pct">0%</span></div>
+            <div class="progress-track"><div class="progress-bar" id="prog-bar"></div></div>
+        </div>
+        <div class="err-text" id="err-text"></div>
+        <div class="tip" id="tip">仅更新主进程代码（~40MB），无需重新安装客户端；新版本生效需重启应用。</div>
+        <div class="btns">
+            <button class="btn" id="btn-later">以后再说</button>
+            <button class="btn primary" id="btn-update">立即更新</button>
+        </div>
+    </div>
+<script>
+(function () {
+    var theme = new URLSearchParams(location.search).get('theme');
+    if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+
+    var bridge = window.desktop || null;
+    var $ = function (id) { return document.getElementById(id); };
+    var info = null;
+    var state = { phase: 'idle', percent: 0, msg: '' };
+
+    function fmtSize(n) {
+        if (!n) return '';
+        if (n < 1024) return n + ' B';
+        var units = ['KB', 'MB', 'GB'], v = n, i = -1;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        return v.toFixed(v >= 100 ? 0 : 1) + ' ' + units[i];
+    }
+
+    function totalSize() {
+        if (!info) return 0;
+        var s = info.asarSize || 0;
+        if (info.hasUnpacked) s += info.unpackedSize || 0;
+        return s;
+    }
+
+    function render() {
+        var force = !!(info && info.force);
+        $('tb-close').classList.toggle('hidden', force);
+        $('btn-later').classList.toggle('hidden', force);
+        $('force-tag').classList.toggle('hidden', !force);
+
+        if (info) {
+            $('ver-big').textContent = '新版代码 ' + (info.buildId || '');
+            $('ver-from').textContent = info.current ? ('当前 ' + info.current) : '';
+            $('ver-product').textContent = info.productVersion ? ('产品 v' + info.productVersion) : '';
+            $('ver-product').classList.toggle('hidden', !info.productVersion);
+            $('notes').textContent = info.notes || '';
+        }
+
+        var ph = state.phase;
+        var showProg = (ph === 'downloading' || ph === 'downloaded' || ph === 'installing');
+        $('prog-zone').classList.toggle('show', showProg);
+        $('err-text').classList.toggle('show', ph === 'error');
+        if (ph === 'error') $('err-text').textContent = state.msg || '更新失败，请稍后重试';
+
+        var bu = $('btn-update');
+        var bl = $('btn-later');
+        bu.disabled = false;
+        bl.disabled = false;
+
+        if (ph === 'available' || ph === 'idle') {
+            bu.textContent = '立即更新' + (totalSize() ? '（' + fmtSize(totalSize()) + '）' : '');
+            bu.classList.remove('hidden');
+        } else if (ph === 'downloading') {
+            bu.textContent = '下载中…';
+            bu.disabled = true;
+            bl.disabled = true;
+        } else if (ph === 'downloaded') {
+            bu.textContent = '立即重启生效';
+            bu.classList.remove('hidden');
+            bl.disabled = true;
+        } else if (ph === 'installing') {
+            bu.textContent = '正在重启…';
+            bu.disabled = true;
+            bl.disabled = true;
+        } else if (ph === 'error') {
+            bu.textContent = '重试更新';
+            bu.classList.remove('hidden');
+            bl.disabled = force;
+        }
+
+        if (showProg) {
+            $('prog-bar').style.width = (state.percent || 0) + '%';
+            $('prog-pct').textContent = (state.percent || 0) + '%';
+            if (ph === 'downloaded') $('prog-label').textContent = '下载完成';
+            else if (ph === 'installing') $('prog-label').textContent = '正在替换并重启…';
+            else $('prog-label').textContent = state.msg || '下载中…';
+        }
+    }
+
+    function applyState(s) { state = s || state; render(); }
+    function applyInfo(i) { info = i || info; render(); }
+
+    if (bridge && bridge.codeUpdaterGetInfo) {
+        bridge.codeUpdaterGetInfo().then(function (r) {
+            if (r) { applyInfo(r.info); applyState(r.state); }
+        });
+        bridge.onCodeUpdaterInfo && bridge.onCodeUpdaterInfo(applyInfo);
+        bridge.onCodeUpdaterState && bridge.onCodeUpdaterState(applyState);
+        $('btn-update').addEventListener('click', function () {
+            if (state.phase === 'downloaded' || state.phase === 'installing') {
+                bridge.codeUpdaterInstall && bridge.codeUpdaterInstall();
+            } else {
+                bridge.codeUpdaterDownload && bridge.codeUpdaterDownload();
+            }
+        });
+        $('btn-later').addEventListener('click', function () { bridge.codeUpdaterDismiss && bridge.codeUpdaterDismiss(); });
+        $('tb-close').addEventListener('click', function () { bridge.codeUpdaterDismiss && bridge.codeUpdaterDismiss(); });
+    }
+
+    render();
+})();
+</script>
+</body>
+</html>

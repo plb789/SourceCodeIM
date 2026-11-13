@@ -988,6 +988,33 @@ contextBridge.exposeInMainWorld('desktop', {
             callback(data);
         });
     },
+    // ===== 阶段三百：增量热更新窗（code-update.html 专用桥）=====
+    // 独立于 electron-updater 全量更新，仅更新主进程代码（app.asar）
+    codeUpdaterCheck: function () {
+        ipcRenderer.send('code-updater:check');
+    },
+    codeUpdaterGetInfo: function () {
+        return ipcRenderer.invoke('code-updater:info');
+    },
+    codeUpdaterDownload: function () {
+        ipcRenderer.send('code-updater:download');
+    },
+    codeUpdaterInstall: function () {
+        ipcRenderer.send('code-updater:install');
+    },
+    codeUpdaterDismiss: function () {
+        ipcRenderer.send('code-updater:dismiss');
+    },
+    onCodeUpdaterInfo: function (callback) {
+        ipcRenderer.on('code-updater:info', function (event, data) {
+            callback(data);
+        });
+    },
+    onCodeUpdaterState: function (callback) {
+        ipcRenderer.on('code-updater:state', function (event, data) {
+            callback(data);
+        });
+    },
     // ===== 阶段二百八十一：游戏中心（Steam 同款游戏浏览/下载）桥接 API =====
     // 打开/复用游戏中心独立窗口（主进程单例，close 隐藏复用，下载进行中隐藏不中断任务）
     gameOpenWindow: function () {

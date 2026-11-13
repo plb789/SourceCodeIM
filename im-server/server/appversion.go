@@ -21,6 +21,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -48,12 +49,14 @@ func RegisterAppVersionRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/appversion/{id}", s.adminGuard(s.handleAdminAppVersionDelete))
 	// 客户端公开检查（无用户态，只读）
 	http.HandleFunc("GET /api/app/version", s.handleAppVersionCheck)
+	// 阶段三百：增量热更新（pc-code 平台专用，独立于 electron-updater 全量更新）
+	http.HandleFunc("GET /api/app/code-update", s.handleCodeUpdateCheck)
 	// 启动自愈：按当前生效 win 版本重建 latest.yml（历史部署目录缺失/文件丢失时免人工重启用）
 	s.writeWinLatestYml()
 }
 
-// 平台白名单（固定枚举；android=APK 壳更新，win=PC electron-updater）
-var appVerPlatforms = map[string]bool{"android": true, "win": true}
+// 平台白名单（固定枚举；android=APK 壳更新，win=PC electron-updater，pc-code=阶段三百增量热更新 app.asar）
+var appVerPlatforms = map[string]bool{"android": true, "win": true, "pc-code": true}
 
 // appVerDownloadRoot 安装包存储根目录（<WebDir>/static/download，静态服务天然托管）
 func (s *Server) appVerDownloadRoot() string {
@@ -181,7 +184,7 @@ func (s *Server) handleAdminAppVersionUpload(w http.ResponseWriter, r *http.Requ
 	}
 	platform := strings.TrimSpace(r.FormValue("platform"))
 	if !appVerPlatforms[platform] {
-		adminFail(w, http.StatusBadRequest, "平台参数不合法（仅 android / win）")
+		adminFail(w, http.StatusBadRequest, "平台参数不合法（仅 android / win / pc-code）")
 		return
 	}
 	versionName := appVerSanitizeVersion(r.FormValue("version_name"))
@@ -230,10 +233,23 @@ func (s *Server) appVerUploadFileMode(w http.ResponseWriter, r *http.Request, pl
 		adminFail(w, http.StatusBadRequest, "PC 安装包须为 .exe 文件")
 		return
 	}
+	// 阶段三百：pc-code 增量热更新——主文件须为 .asar
+	if platform == "pc-code" && ext != ".asar" {
+		adminFail(w, http.StatusBadRequest, "增量热更新主文件须为 .asar")
+		return
+	}
+	// pc-code 平台的 buildId 格式校验（版本名即 buildId）
+	if platform == "pc-code" && !codeUpdateBuildIdRe.MatchString(versionName) {
+		adminFail(w, http.StatusBadRequest, "代码构建号格式须为 YYYYMMDD-NNNN（如 20261114-5230）")
+		return
+	}
 	// 落盘文件名服务端归口生成（版本名已净化，防路径穿越；同版本重复上传覆盖旧文件）
 	fileName := fmt.Sprintf("im-client-%s.%s", versionName, strings.TrimPrefix(ext, "."))
 	if platform == "android" {
 		fileName = fmt.Sprintf("imapp-%s-%d.apk", versionName, versionCode)
+	}
+	if platform == "pc-code" {
+		fileName = fmt.Sprintf("app.asar") // 固定文件名，客户端 code-updater.js 按约定名下载
 	}
 	dir := filepath.Join(s.appVerDownloadRoot(), platform)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -298,6 +314,10 @@ func (s *Server) appVerRegisterExternal(w http.ResponseWriter, r *http.Request, 
 	}
 	if platform == "win" && ext != ".exe" {
 		adminFail(w, http.StatusBadRequest, "PC 外链须指向 .exe 文件")
+		return
+	}
+	if platform == "pc-code" && ext != ".asar" {
+		adminFail(w, http.StatusBadRequest, "代码热更新外链须指向 .asar 文件")
 		return
 	}
 	// 校验和选填（格式校验）；PC 强约束：electron-updater resolveFiles 缺 sha512/sha2 直接拒绝更新
@@ -579,4 +599,98 @@ func (s *Server) handleAppVersionCheck(w http.ResponseWriter, r *http.Request) {
 	resp["force"] = v.Force
 	resp["file_name"] = v.FileName
 	adminJSON(w, resp)
+}
+
+// ===== 阶段三百：增量热更新专用 =====
+
+// codeUpdateBuildIdRe pc-code 代码构建号格式：YYYYMMDD-NNNN（日期+时间戳尾号）
+var codeUpdateBuildIdRe = regexp.MustCompile(`^\d{8}-\d{1,6}$`)
+
+// codeUpdateDownloadRoot 增量热更新文件存储根目录（<WebDir>/static/download/pc-code）
+func (s *Server) codeUpdateDownloadRoot() string {
+	return filepath.Join(s.cfg.WebDir, "static", "download", "pc-code")
+}
+
+// handleCodeUpdateCheck pc-code 平台专用检查接口：
+// GET /api/app/code-update?platform=pc&build=<当前buildId>
+// 比对生效版本的 buildId 是否与当前不同（字符串精确比对，不做 semver）
+// 返回格式独立于 /api/app/version，客户端 code-updater.js 专用
+func (s *Server) handleCodeUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	curBuild := strings.TrimSpace(q.Get("build"))
+	if curBuild == "" {
+		adminFail(w, http.StatusBadRequest, "缺少当前代码构建号 build")
+		return
+	}
+
+	v := appVerEnabled("pc-code")
+	if v == nil {
+		// 无生效版本 -> 无更新
+		adminJSON(w, map[string]interface{}{
+			"code": 0,
+			"data": map[string]interface{}{
+				"available": false,
+			},
+		})
+		return
+	}
+
+	// 比对 buildId（VersionName 在 pc-code 平台就是 buildId）
+	available := v.VersionName != curBuild
+
+	// 解析 Extra JSON（unpacked 额外信息）
+	var unpacked struct {
+		URL   string `json:"url"`
+		Size  int64  `json:"size"`
+		SHA512 string `json:"sha512"` // hex 格式，客户端 code-updater.js 期望 sha512:...
+	}
+	hasUnpacked := false
+	if len(v.Extra) > 0 {
+		_ = json.Unmarshal([]byte(v.Extra), &unpacked)
+		if unpacked.URL != "" {
+			hasUnpacked = true
+		}
+	}
+
+	// 判定 asar URL 是否外链
+	asarURL := v.URL
+	isExternal := appVerIsExternal(v)
+
+	// asar hash 格式：客户端 code-updater.js 期望 "sha512:" 前缀 + hex 小写
+	// DB SHA512Base64 是 base64，需要转 hex；SHA256 是 hex 格式但 code-updater 只看 SHA512
+	asarHash := ""
+	if v.SHA512Base64 != "" {
+		if raw, err := base64.StdEncoding.DecodeString(v.SHA512Base64); err == nil && len(raw) == 64 {
+			asarHash = "sha512:" + strings.ToLower(hex.EncodeToString(raw))
+		}
+	}
+	if asarHash == "" && v.SHA256 != "" {
+		// 降级：用 sha256（前缀不同，code-updater 会比对失败但能识别）
+		asarHash = "sha256:" + strings.ToLower(v.SHA256)
+	}
+
+	data := map[string]interface{}{
+		"available": available,
+	}
+	if available {
+		data["buildId"] = v.VersionName
+		data["buildTime"] = v.UpdateTime.Format("2006-01-02 15:04")
+		data["asarUrl"] = asarURL
+		data["asarSize"] = v.Size
+		data["asarHash"] = asarHash
+		data["hasUnpacked"] = hasUnpacked
+		if hasUnpacked {
+			data["unpackedUrl"] = unpacked.URL
+			data["unpackedSize"] = unpacked.Size
+			data["unpackedHash"] = unpacked.SHA512
+		}
+		data["notes"] = v.Notes
+		data["force"] = v.Force
+		data["isExternal"] = isExternal
+	}
+
+	adminJSON(w, map[string]interface{}{
+		"code": 0,
+		"data": data,
+	})
 }

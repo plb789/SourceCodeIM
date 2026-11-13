@@ -26,6 +26,11 @@ const webCache = require('./web-cache.js');
 const remoteInput = require('./remote-input.js');
 // 阶段二百六十：自动更新模块（electron-updater；未安装依赖/未打包形态内部静默降级）
 const updater = require('./updater.js');
+// 阶段三百：增量热更新模块（仅更新主进程 JS 代码，独立于 electron-updater 全量更新；
+// 构建号 buildId 独立于产品版本号 x.y.z，走 /api/app/code-update 专用接口；
+// 守护进程 updater.exe（纯 C /MT 静态 CRT）负责退出后替换 app.asar + 重启）
+let codeUpdater = null;
+try { codeUpdater = require('./code-updater.js'); } catch (e) { /* 新模块加载失败静默降级 */ }
 // 阶段二百八十一：游戏中心下载管理器（Steam 同款游戏浏览/下载——多任务断点续传/SHA256 校验/进度节流）
 const GameDownloadManager = require('./download-manager.js');
 const BtDownloadManager = require('./bt-download-manager.js');
@@ -6573,6 +6578,15 @@ app.whenReady().then(async function () {
         serverUrl: SERVER_URL,
         getThemeDark: resolveBootDark
     });
+
+    // 阶段三百：增量热更新初始化（独立于 electron-updater 全量更新；
+    // 启动后 10s 异步检查，不抢启动资源；开发/未打包形态内部静默跳过）
+    try {
+        if (codeUpdater) codeUpdater.init({
+            serverUrl: SERVER_URL,
+            getThemeDark: resolveBootDark
+        });
+    } catch (e) { /* code-updater 初始化异常静默降级 */ }
 
     // 阶段九十一：内置浏览器管理器初始化（渲染层 IPC 入口注册 + 主窗口引用注入；
     // 需在 createWindow 之后——mainWindow 引用就绪后 agent 工具与面板控制才可用）

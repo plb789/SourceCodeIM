@@ -29,6 +29,8 @@ import (
 	"im-server/logger"
 	"im-server/model"
 	"im-server/store"
+
+	"gorm.io/gorm/clause"
 )
 
 // rcDeviceIDRe 设备ID格式：9-10 位纯数字（向日葵同款对外标识）
@@ -160,13 +162,15 @@ func rcEnsureDevice(username, installUUID, deviceName string, rcVer int) (*model
 			LastSeen:    time.Now(),
 			RCVer:       rcVer,
 		}
-		if derr := store.DB.Create(&dev).Error; derr != nil {
-			// 极端竞态（同 uuid 并发注册）：回读既有行
-			if e2 := store.DB.Where("username = ? AND install_uuid = ?", username, installUUID).First(&dev).Error; e2 != nil {
-				return nil, &rcError{"设备注册失败"}
-			}
-		} else {
-			logger.Info("远程控制设备注册：%s（用户 %s，device_id=%s）", deviceName, username, dev.DeviceID)
+		// OnConflict DoNothing：数据库层面原子消除竞态窗口，
+		// 并发双写时后来的 INSERT 被静默跳过，返回 nil 错误，不再刷 1062 到日志
+		// 之后 First 回读即可拿到既有行或刚插入的行
+		if derr := store.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&dev).Error; derr != nil {
+			logger.Warn("设备注册写入失败（install_uuid=%s）：%v", installUUID, derr)
+		}
+		// 无论 Create 成功还是被 DoNothing 跳过，回读一次拿完整行（dev.ID 需要回填）
+		if e2 := store.DB.Where("username = ? AND install_uuid = ?", username, installUUID).First(&dev).Error; e2 != nil {
+			return nil, &rcError{"设备注册失败"}
 		}
 	} else {
 		upd := map[string]interface{}{"last_seen": time.Now()}
