@@ -1009,6 +1009,9 @@ type Game struct {
 	// LaunchArgs 默认启动参数模板：支持 {0}=登录账号 {1}=账号专属16位密码 占位符（启动时替换；
 	// 用户可在库右键"属性"中覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
 	LaunchArgs string `gorm:"column:launch_args;type:varchar(1024);default:''" json:"launch_args"`
+	// LaunchArgsHidden 启动参数隐藏开关（商户不想让用户看到模板时开启；true=客户端属性弹窗隐藏 textarea，
+	// buildLaunchArgs 强制用商户模板忽略用户覆盖；false[默认]=用户可覆盖编辑）
+	LaunchArgsHidden bool `gorm:"column:launch_args_hidden;default:false" json:"launch_args_hidden"`
 	// SteamEmu 启动方式（0=直接启动[默认] 1=SmartSteamEmu 模拟器启动）——1 时客户端不直接 spawn
 	// 游戏主程序，改为写入客户端内置 SmartSteamEmu.ini（Target=游戏主程序 / StartIn=游戏目录 /
 	// ManualSteamId=账号专属16位凭证 / PersonaName=用户昵称 / AvatarFilename=客户端自带头像）后
@@ -1048,6 +1051,12 @@ type Game struct {
 	// 服务端保存时逐条校验清洗（协议/端口范围/主机字符集/去重，上限16条），客户端启动前二次校验。
 	// AutoMigrate 自动加列，存量游戏默认空串行为不变（无规则=不开启转发，零开销直通）
 	PortForwards string `gorm:"column:port_forwards;type:varchar(2048);default:''" json:"port_forwards"`
+	// AllowMultiInstance 多实例开关（管理端配置；true=客户端可同时启动多个实例，false=单实例）。
+	// AutoMigrate 自动加列，存量游戏默认 false（单实例，零回归）
+	AllowMultiInstance bool `gorm:"column:allow_multi_instance;default:false" json:"allow_multi_instance"`
+	// MaxInstances 最多实例数（仅 AllowMultiInstance=true 时生效；0/1=不限上限，默认 1）。
+	// 服务端更新接口强制范围 [1,100]，防误配过大导致资源耗尽
+	MaxInstances int `gorm:"column:max_instances;default:1" json:"max_instances"`
 	// DownCount 安装次数（加入库时递增）
 	DownCount int64 `gorm:"column:down_count;default:0" json:"down_count"`
 	// GameSecret 游戏专属启动密码派生密钥（32hex，服务端私有 json:"-"：不随任何接口下发、

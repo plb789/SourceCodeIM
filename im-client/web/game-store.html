@@ -2753,6 +2753,8 @@
            同类 .gs-modal-mask 等值 z-index 时 DOM 靠后的元素盖住靠前者，而 #gsModalMask 定义在最前，
            故单独抬高其层级，确保二次确认始终位于所有弹窗之上（仍低于 toast 3000，保证提示可见） */
         #gsModalMask { z-index: 2500; }
+        /* 嵌套弹窗（在属性/设置弹窗里打开的二级弹窗）：高于普通弹窗(2000)，低于确认弹窗(2500) */
+        #gsAcctMask, #gsManualMask { z-index: 2100; }
 
         .gs-modal {
             width: 320px;
@@ -2763,6 +2765,30 @@
         }
 
         .gs-modal-title { font-size: 15px; font-weight: 600; color: var(--text); text-align: center; }
+
+        /* 弹窗内表单字段：标签左对齐 + 深色主题化输入框（跟页面其他输入框统一） */
+        .gs-modal-body { font-size: 13px; }
+        .gs-modal-body .gs-field { display: flex; flex-direction: column; gap: 6px; }
+        .gs-modal-body .gs-field label { font-size: 12px; color: var(--text-secondary); font-weight: 500; line-height: 1.4; }
+        .gs-modal-body .gs-field input[type="text"],
+        .gs-modal-body .gs-field input[type="password"] {
+            width: 100%; box-sizing: border-box;
+            background: var(--panel-bg); color: var(--text);
+            border: 1px solid var(--border); border-radius: 6px;
+            padding: 8px 10px; font-size: 13px; outline: none;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        .gs-modal-body .gs-field input[type="text"]:focus,
+        .gs-modal-body .gs-field input[type="password"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
+        }
+        .gs-modal-body .gs-field input::placeholder { color: var(--text-light); opacity: .7; }
+        /* 复选框行：整行可点击，跟 label 对齐（独立一行不折行挤压） */
+        .gs-modal-body .gs-field.checkbox-row { flex-direction: row; align-items: flex-start; gap: 8px; margin-top: 4px; }
+        .gs-modal-body .gs-field.checkbox-row input[type="checkbox"] { margin-top: 2px; cursor: pointer; accent-color: var(--primary); flex-shrink: 0; }
+        .gs-modal-body .gs-field.checkbox-row label { font-size: 12px; color: var(--text-secondary); cursor: pointer; line-height: 1.4; word-break: break-all; }
+
 
         .gs-modal-text {
             margin-top: 10px;
@@ -3030,7 +3056,8 @@
             background: var(--panel-bg); border: 1px solid var(--border); border-radius: 8px;
             box-shadow: var(--shadow-pop);
         }
-        .gs-ctxmenu-item { padding: 7px 12px; border-radius: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+        .gs-ctxmenu.hidden { display: none !important; }
+        .gs-ctxmenu-item { padding: 7px 12px; border-radius: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; transition: none !important; }
         .gs-ctxmenu-item:hover { background: var(--hover); color: var(--primary); }
         .gs-ctxmenu-item.danger:hover { color: #e5484d; }
 
@@ -3076,6 +3103,65 @@
         }
         .gs-prop-btns { display: flex; gap: 8px; margin-top: 8px; }
         .gs-prop-hint { margin-top: 6px; font-size: 11px; color: var(--text-light); }
+        /* 商户隐藏模式：启动参数不可见占位条 */
+        .gs-prop-args-hidden {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 12px; margin-top: 2px;
+            background: var(--panel-bg); border: 1px dashed var(--border);
+            border-radius: 6px; color: var(--text-muted);
+            font-size: 12px;
+        }
+        .gs-prop-args-hidden .gs-prop-args-lock { font-size: 14px; opacity: .7; }
+        /* —— 启动账号管理区（属性弹窗 → 启动选项分栏） —— */
+        .gs-prop-acct { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider); }
+        .gs-prop-acct-count { font-size: 12px; color: var(--text-light); flex: 1; }
+        .gs-btn-acct-add { padding: 4px 10px; font-size: 12px; }
+        .gs-prop-acct-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+        .gs-prop-acct-item {
+            display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+            border-radius: 6px; background: var(--panel-bg); border: 1px solid var(--divider);
+        }
+        .gs-prop-acct-item.active { border-color: var(--primary); background: var(--hover); }
+        .gs-prop-acct-item .gs-acct-default-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); flex-shrink: 0; }
+        .gs-prop-acct-item .gs-acct-default-dot.empty { background: transparent; border: 1px solid var(--text-light); }
+        .gs-prop-acct-item .gs-acct-label { font-size: 13px; color: var(--text); font-weight: 500; min-width: 50px; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .gs-prop-acct-item .gs-acct-user { font-size: 12px; color: var(--text-light); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .gs-prop-acct-item .gs-acct-actions { display: flex; gap: 4px; flex-shrink: 0; }
+        .gs-prop-acct-item .gs-acct-actions button {
+            padding: 2px 6px; font-size: 11px; border-radius: 4px; border: none; background: transparent;
+            color: var(--text-light); cursor: pointer; display: flex; align-items: center;
+        }
+        .gs-prop-acct-item .gs-acct-actions button:hover { background: var(--hover); color: var(--primary); }
+        .gs-prop-acct-item .gs-acct-actions button.danger:hover { color: #e5484d; }
+        /* —— 启动按钮 caret（库侧栏行 + 详情页）：允许多开时显示 ▾ —— */
+        .gs-launch-wrap {
+            display: inline-flex; align-items: stretch; gap: 0; vertical-align: middle;
+            line-height: 0; /* 消除 inline-flex 基线对齐的空隙 */
+        }
+        .gs-launch-wrap > button { margin: 0; padding: 0; line-height: normal; }
+        .gs-launch-wrap .gs-launch-caret {
+            width: 32px; border: none; outline: none;
+            background: linear-gradient(135deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,.03) 100%);
+            color: rgba(255,255,255,.9); font-size: 15px; font-weight: bold;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            border-left: 1px solid rgba(255,255,255,.15); border-radius: 0 6px 6px 0;
+            transition: none !important;
+            flex-shrink: 0;
+            line-height: 1; padding: 0;
+        }
+        .gs-launch-wrap .gs-launch-caret:hover {
+            background: var(--hover);
+            color: var(--text);
+            border-left: 1px solid var(--divider);
+        }
+        .gs-launch-wrap .gs-launch-caret:active {
+            background: var(--panel-bg);
+            color: var(--text-secondary);
+        }
+        .gs-launch-wrap .gs-launch-caret.hidden { display: none; }
+        /* 启动下拉里的分隔线 */
+        .gs-ctxmenu-sep { height: 1px; background: var(--divider); margin: 4px 8px; }
+        .gs-ctxmenu-item .gs-check { color: var(--primary); margin-right: 6px; }
         /* 底部取消/保存条：与弹窗标题分隔线同款，撑满弹窗宽度 */
         .gs-prop-modal .gs-modal-btns { margin-top: 0; padding: 12px 20px 16px; border-top: 1px solid var(--divider); }
 
@@ -3528,6 +3614,59 @@
     <!-- 库左侧列表右键菜单（自绘，禁系统菜单；主题色，定位到光标） -->
     <div class="gs-ctxmenu hidden" id="gsCtxMenu"></div>
 
+    <!-- 启动按钮下拉（自绘，复用 gs-ctxmenu 风格；JS 动态填充账号项） -->
+    <div class="gs-ctxmenu hidden" id="gsLaunchDrop"></div>
+
+    <!-- 添加/编辑账号小弹窗（属性分栏 → 启动账号 → 添加/编辑） -->
+    <div class="gs-modal-mask hidden" id="gsAcctMask">
+        <div class="gs-modal gs-modal-sm" style="width: 380px;">
+            <div class="gs-modal-title left" id="gsAcctTitle">添加启动账号</div>
+            <div class="gs-modal-body" style="padding: 16px 20px;">
+                <div class="gs-field" style="margin-bottom: 12px;">
+                    <label>标签（可选，启动下拉里显示）</label>
+                    <input type="text" id="gsAcctLabel" maxlength="32" spellcheck="false" placeholder="如：主号 / 小号 / 测试号">
+                </div>
+                <div class="gs-field" style="margin-bottom: 12px;">
+                    <label>账号</label>
+                    <input type="text" id="gsAcctUser" maxlength="64" spellcheck="false" placeholder="游戏登录账号">
+                </div>
+                <div class="gs-field" style="margin-bottom: 14px;">
+                    <label>密码</label>
+                    <input type="password" id="gsAcctPwd" maxlength="128" spellcheck="false" placeholder="游戏登录密码">
+                </div>
+                <div class="gs-field checkbox-row">
+                    <input type="checkbox" id="gsAcctDefault">
+                    <label for="gsAcctDefault">设为默认启动账号（未选时启动按钮主点击用此账号）</label>
+                </div>
+            </div>
+            <div class="gs-modal-btns" style="padding:12px 20px;border-top:1px solid var(--divider);display:flex;justify-content:flex-end;gap:8px;">
+                <button class="gs-btn" id="gsAcctCancel" type="button">取消</button>
+                <button class="gs-btn gs-btn-primary" id="gsAcctOk" type="button">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 手动输入账号弹窗（启动下拉 → 手动输入…） -->
+    <div class="gs-modal-mask hidden" id="gsManualMask">
+        <div class="gs-modal gs-modal-sm" style="width: 340px;">
+            <div class="gs-modal-title left">手动输入账号</div>
+            <div class="gs-modal-body" style="padding: 16px 20px;">
+                <div class="gs-field" style="margin-bottom: 12px;">
+                    <label>账号</label>
+                    <input type="text" id="gsManualUser" maxlength="64" spellcheck="false" placeholder="游戏登录账号">
+                </div>
+                <div class="gs-field" style="margin-bottom: 0;">
+                    <label>密码</label>
+                    <input type="password" id="gsManualPwd" maxlength="128" spellcheck="false" placeholder="游戏登录密码">
+                </div>
+            </div>
+            <div class="gs-modal-btns" style="padding:12px 20px;border-top:1px solid var(--divider);display:flex;justify-content:flex-end;gap:8px;">
+                <button class="gs-btn" id="gsManualCancel" type="button">取消</button>
+                <button class="gs-btn gs-btn-primary" id="gsManualOk" type="button">启动</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 游戏属性弹窗（库右键“属性”，Steam 同款）：左侧分栏导航 + 右侧内容区，点左侧切换右侧内容 -->
     <div class="gs-modal-mask hidden" id="gsPropMask">
         <div class="gs-modal gs-prop-modal">
@@ -3582,13 +3721,32 @@
                         </div>
                         <div class="gs-prop-hint" id="gsPropExeHint">“用默认”=清除自定义主程序，回退游戏默认/自动探测</div>
                     </div>
-                    <!-- 启动选项分栏：自定义启动参数 -->
+                    <!-- 启动选项分栏：自定义启动参数 + 启动账号管理（允许多实例时显示；支持增删改持久化） -->
                     <div class="gs-prop-pane hidden" id="gsPropPaneLaunch">
                         <div class="gs-prop-row gs-prop-row-top">
                             <span class="gs-prop-label">启动参数</span>
                         </div>
-                        <textarea class="gs-rev-input" id="gsPropArgs" maxlength="1024" placeholder="自定义启动参数（留空则用游戏默认）。支持占位符：{0}=登录账号，{1}=账号专属密码"></textarea>
-                        <div class="gs-prop-hint">留空=使用游戏默认参数</div>
+                        <!-- 普通模式：用户可编辑 textarea（launch_args_hidden=false） -->
+                        <div id="gsPropArgsEditWrap">
+                            <textarea class="gs-rev-input" id="gsPropArgs" maxlength="1024" placeholder="自定义启动参数（留空则用游戏默认）。支持占位符：{0}=登录账号，{1}=账号专属密码，{2}=自定义账号，{3}=自定义密码"></textarea>
+                            <div class="gs-prop-hint">占位符 {2}/{3} 需配合下方「启动账号」使用；SmartSteamEmu 游戏仅支持 {0}/{1}</div>
+                        </div>
+                        <!-- 商户隐藏模式：用户看不到模板（launch_args_hidden=true） -->
+                        <div id="gsPropArgsHidden" class="gs-prop-args-hidden hidden">
+                            <span class="gs-prop-args-lock">🔒</span>
+                            <span>由平台统一配置（用户不可见）</span>
+                        </div>
+
+                        <!-- —— 启动账号管理区：仅允许多实例或已有账号时显示 —— -->
+                        <div class="gs-prop-acct hidden" id="gsPropAcctSection">
+                            <div class="gs-prop-row gs-prop-row-top">
+                                <span class="gs-prop-label">启动账号</span>
+                                <span class="gs-prop-acct-count" id="gsPropAcctCount">0/3</span>
+                                <button class="gs-btn gs-btn-acct-add" id="gsPropAcctAdd" type="button" title="添加启动账号（最多 = 服务端 max_instances 上限）">+ 添加账号</button>
+                            </div>
+                            <div class="gs-prop-acct-list" id="gsPropAcctList"><!-- 动态渲染 --></div>
+                            <div class="gs-prop-hint">启动按钮右侧出现 ▾ 时可下拉选择此列表中的账号启动；至少保留一个默认账号</div>
+                        </div>
                     </div>
                     <!-- 云存档分栏（Steam 同款云存档）：仅 PC 端显示，WEB 端整体隐藏 -->
                     <div class="gs-prop-pane hidden" id="gsPropPaneCloud">

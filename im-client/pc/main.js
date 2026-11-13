@@ -2213,7 +2213,8 @@ ipcMain.handle('game:register-exe', function (event, data) {
     }
 });
 
-var runningGames = new Map(); // gameId → { proc, startedAt }（启动/退出均广播全窗口，页面据此切"运行中"并统计游玩时长）
+var runningGames = new Map(); // instanceId → { gameId, instanceId, proc, startedAt, steamEmu, launched, accountLabel, customUsername }
+                              // instanceId 格式 gid_ts_随机，每次 spawn 生成唯一；端口转发 tag 复用 "game:{gameId}"（引用计数）
 // 启动程序解析归口（优先级）：用户在“属性”覆盖/needExe 重试指定 > 管理端默认相对路径 >
 // 管理端名称兜底（<名称>.exe，路径留空时） > 自动探测登记 > needExe 交用户手动选。
 // installDir 取页面传入或注册表旧值（管理端默认相对路径的解析锚点）
@@ -2825,6 +2826,26 @@ ipcMain.handle('game:launch', async function (event, data) {
         var r = gameResolveLaunchExe(reg, gameId, data);
         if (!r) return { ok: false, needExe: true };
         fwEnsureForLaunch(data, r); // 联机防火墙按需放行（fire-and-forget：虚拟局域网/端口隧道/SSE 游戏专用，异步不阻塞启动）
+
+        // —— 多开数量校验（SmartSteamEmu 维持原单实例硬锁 + allow_multi_instance/max_instances 客户端校验）——
+        var isSSE = !!(data && data.steamEmu === 1);
+        var maxInstances = Math.max(1, Math.min(100, parseInt((data && data.maxInstances) || 1, 10) || 1));
+        var allowMulti = !!(data && data.allowMultiInstance);
+        if (isSSE) {
+            var sseBusy = false;
+            runningGames.forEach(function (v) { if (v && v.steamEmu) sseBusy = true; });
+            if (sseBusy) return { ok: false, error: '已有 SmartSteamEmu 游戏在运行（模拟器配置为单份，不可并行），请先退出后再启动' };
+        } else {
+            var count = 0;
+            runningGames.forEach(function (v) { if (v && v.gameId === gameId && !v.steamEmu) count++; });
+            if (!allowMulti && count >= 1) return { ok: false, error: '游戏正在运行中（不允许多开）' };
+            if (count >= maxInstances) return { ok: false, error: '已达最大实例数（' + maxInstances + '）' };
+        }
+
+        // instanceId：前端传则用，主进程兜底生成
+        var instanceId = String((data && data.instanceId) || '').trim();
+        if (!instanceId) instanceId = gameId + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+
         // 启动参数：以页面解析后的数组为准（自定义覆盖 > 管理端默认，占位符已替换）；
         // 兼容仅有注册表原始模板的场景（按空白切分为参数数组）
         var args = [];
@@ -2846,52 +2867,61 @@ ipcMain.handle('game:launch', async function (event, data) {
         // installDir 可能是安装根，而游戏资源相对路径（如 ../System/Resource/*.bin）以 exe 所在目录为基准
         var cwd = path.dirname(r.exe);
         var spawned;
-        if (data && data.steamEmu === 1) {
-            // SmartSteamEmu 分流：单实例限制（ini 单份全局配置，并发启动互相覆盖）→ 写 ini →
-            // Steam.exe loader 拉起（不走 spawnGameChild，注入/劫持链互斥跳过）。
-            // 失败路径必须先收口端口转发（监听已开启，残留会一直占用端口直到进程退出）
-            var sseBusy = false;
-            runningGames.forEach(function (v) { if (v && v.steamEmu) sseBusy = true; });
-            if (sseBusy) {
-                if (pfRules.length) gameForward.stop(pfTag);
-                return { ok: false, error: '已有 SmartSteamEmu 游戏在运行（模拟器配置为单份，不可并行），请先退出后再启动' };
-            }
+        if (isSSE) {
             spawned = spawnSteamEmuGame(r, data);
             if (!spawned.ok) {
                 if (pfRules.length) gameForward.stop(pfTag);
                 return { ok: false, error: spawned.error };
             }
         } else {
-            spawned = spawnGameChild(r.exe, args, cwd); // 二期：native 开启时经注入包装器启动（失败自动回退）
+            spawned = spawnGameChild(r.exe, args, cwd);
         }
         var child = spawned.child;
         var startedAt = Date.now();
-        var info = { gameId: gameId, startedAt: startedAt };
+        var info = { gameId: gameId, instanceId: instanceId, startedAt: startedAt };
         child.once('exit', function () {
-            runningGames.delete(gameId);
-            gameOverlay.onGameExit(gameId); // 游戏内 Overlay：热键联动收口（最后一款游戏退出即注销 Shift+Tab）
-            // 本实例退出才收口转发：同 gameId 竞态重复启动时旧实例 exit 不得误杀新实例的转发
-            var cur = runningGames.get(gameId);
-            if (pfRules.length && (!cur || cur.proc === child)) gameForward.stop(pfTag);
+            runningGames.delete(instanceId);
+            // Overlay 热键：仅当同 gameId 无其他实例在运行时才注销（多实例首个退出不影响其他实例）
+            var remainingRun = 0;
+            runningGames.forEach(function (v) { if (v && v.gameId === gameId) remainingRun++; });
+            if (remainingRun === 0) gameOverlay.onGameExit(gameId);
+            // 本实例退出：端口转发引用计数递减，归零才真关（stop 内部处理）
+            if (pfRules.length) gameForward.stop(pfTag);
             gameExitBroadcast(info);
         });
-        // error（spawn 失败如 exe 权限/架构错误）路径可能不触发 exit：同样联动收口防监听残留；
-        // 且必须广播失败原因到全部窗口——此前无声失败（页面已切"运行中"但游戏未起，用户只见
-        // "点了没反应"，无法定位是 exe 损坏/依赖缺失/权限问题）
         child.once('error', function (err) {
-            runningGames.delete(gameId); // spawn 失败清理表，避免残留
-            gameOverlay.onGameExit(gameId); // 游戏内 Overlay：启动失败路径同样收口热键（与 exit 同口径）
+            runningGames.delete(instanceId);
+            var remainingRun2 = 0;
+            runningGames.forEach(function (v) { if (v && v.gameId === gameId) remainingRun2++; });
+            if (remainingRun2 === 0) gameOverlay.onGameExit(gameId);
             if (pfRules.length) gameForward.stop(pfTag);
             BrowserWindow.getAllWindows().forEach(function (w) {
                 if (!w.isDestroyed()) w.webContents.send('game-launch-error', {
-                    gameId: gameId,
+                    gameId: gameId, instanceId: instanceId,
                     message: (err && err.message) || '游戏进程启动失败'
                 });
             });
         });
         child.unref();
-        runningGames.set(gameId, { proc: child, startedAt: startedAt, steamEmu: !!(data && data.steamEmu === 1), launched: false });
-        gameOverlay.onGameStart(gameId, child.pid); // 游戏内 Overlay：热键联动开启（预注册 Shift+Tab + 悬浮窗预热）
+        runningGames.set(instanceId, {
+            gameId: gameId, instanceId: instanceId,
+            proc: child, startedAt: startedAt,
+            steamEmu: isSSE, launched: false,
+            accountLabel: (data && data.accountLabel) || '',
+            customUsername: (data && data.customUsername) || ''
+        });
+        // Overlay：多实例模式下只对首个实例注册热键（防止 Shift+Tab 冲突）
+        var firstInstance = true;
+        if (!isSSE) {
+            var existingCount = 0;
+            runningGames.forEach(function (v, instId) {
+                if (v.gameId === gameId && instId !== instanceId && !v.steamEmu) existingCount++;
+            });
+            firstInstance = (existingCount === 0);
+        }
+        if (firstInstance) {
+            gameOverlay.onGameStart(gameId, child.pid);
+        }
         if (spawned.native) ovReadGamePid(child, function (pid) { gameOverlay.onGamePid(gameId, pid); }); // 二期：真实游戏 pid 回读校正（pipe 名依赖）
         gameLaunchBroadcast(info); // 全窗口广播"正在启动"：游戏窗口尚未可见，页面按钮先切"正在启动"而非"运行中"
         // 游戏窗口可见后才广播 game-start 切"运行中"（探测覆盖子孙 pid + exe 名兜底：启动器/包装器/存根链）；
@@ -2900,23 +2930,29 @@ ipcMain.handle('game:launch', async function (event, data) {
         // 探测期间进程 exit/error 时条目已被清理，守卫跳过——不与退出广播竞态；
         // 30s 超时兜底切"运行中"（个别游戏无常规可见窗口，不卡"正在启动"）
         waitGameWindowVisible(child.pid, r.exe, function () {
-            var cur = runningGames.get(gameId);
+            var cur = runningGames.get(instanceId);
             if (!cur || cur.proc !== child || cur.launched) return;
             cur.launched = true;
             gameStartBroadcast(info);
-        }, { excludeRoot: !!(data && data.steamEmu === 1) });
-        return { ok: true, startedAt: startedAt };
+        }, { excludeRoot: isSSE });
+        return { ok: true, startedAt: startedAt, instanceId: instanceId };
     } catch (e) {
         return { ok: false, error: (e && e.message) || '启动失败' };
     }
 });
 
-// 当前正在运行/正在启动的游戏（页面加载/刷新/新开窗口后恢复对应按钮态）→ [{gameId, startedAt, launching}]
+// 当前正在运行/正在启动的游戏（页面加载/刷新/新开窗口后恢复对应按钮态）→ [{instanceId, gameId, startedAt, launching, accountLabel}]
 // launching=true：窗口可见探测中（恢复"正在启动"而非"运行中"）
 ipcMain.handle('game:running-list', function () {
     var out = [];
-    runningGames.forEach(function (v, gid) {
-        out.push({ gameId: gid, startedAt: (v && v.startedAt) || 0, launching: !(v && v.launched) });
+    runningGames.forEach(function (v, instId) {
+        out.push({
+            instanceId: instId,
+            gameId: v.gameId,
+            startedAt: (v && v.startedAt) || 0,
+            launching: !(v && v.launched),
+            accountLabel: (v && v.accountLabel) || ''
+        });
     });
     return out;
 });
@@ -3073,6 +3109,142 @@ ipcMain.handle('game:set-launch-options', function (event, data) {
     } catch (e) {
         return { ok: false, error: (e && e.message) || '保存失败' };
     }
+});
+
+// —— 游戏启动账号管理（持久化在 game-launch.json 的 accounts 数组；密码用 DPAPI 加密存）——
+// 账号列表：返回 [{id,label,username,isDefault}]（密码不下发，已在本地加密存）
+ipcMain.handle('game:list-accounts', function (event, data) {
+    var gameId = String((data && data.gameId) || '').trim();
+    if (!gameId) return { ok: false, error: '参数缺失' };
+    var reg = gameLaunchRegLoad();
+    var item = reg[gameId] || {};
+    var accts = Array.isArray(item.accounts) ? item.accounts : [];
+    var out = accts.map(function (a) {
+        return { id: a.id, label: a.label || '', username: a.username || '', isDefault: !!a.isDefault };
+    });
+    return { ok: true, accounts: out };
+});
+
+// 保存账号（新增或编辑）：密码用 DPAPI 加密后存；isDefault=true 时清除其他账号的默认标记
+ipcMain.handle('game:save-account', function (event, data) {
+    try {
+        var gameId = String((data && data.gameId) || '').trim();
+        var acct = data && data.account;
+        if (!gameId || !acct) return { ok: false, error: '参数缺失' };
+        var label = String(acct.label || '').trim();
+        var username = String(acct.username || '').trim();
+        var password = String(acct.password || '');
+        if (!username) return { ok: false, error: '账号不能为空' };
+        if (!password) return { ok: false, error: '密码不能为空' };
+        // 密码 DPAPI 加密：复用现有 credential-encrypt 通道（同步 sendSync，返回 enc:<base64>）
+        var encryptedPwd = password;
+        try {
+            if (event.sender && event.sender.sendSync) {
+                encryptedPwd = event.sender.sendSync('im:credential-encrypt', password);
+                if (!encryptedPwd) encryptedPwd = password; // 加密失败降级明文（浏览器端）
+            }
+        } catch (e) { encryptedPwd = password; }
+        var reg = gameLaunchRegLoad();
+        var item = reg[gameId] || {};
+        var accts = Array.isArray(item.accounts) ? item.accounts.slice() : [];
+        var isEdit = !!acct.id;
+        if (isEdit) {
+            // 编辑已有账号
+            var found = false;
+            for (var i = 0; i < accts.length; i++) {
+                if (accts[i].id === acct.id) {
+                    accts[i].label = label;
+                    accts[i].username = username;
+                    accts[i].password = encryptedPwd;
+                    accts[i].isDefault = !!acct.isDefault;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return { ok: false, error: '账号不存在' };
+        } else {
+            // 新增账号
+            var newId = 'acc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+            accts.push({
+                id: newId, label: label || ('账号 ' + accts.length + 1),
+                username: username, password: encryptedPwd, isDefault: !!acct.isDefault
+            });
+        }
+        // isDefault=true 时清除其他账号的默认标记（保证只有一个默认）
+        if (acct.isDefault) {
+            for (var j = 0; j < accts.length; j++) {
+                accts[j].isDefault = (accts[j].id === (isEdit ? acct.id : accts[accts.length - 1].id));
+            }
+        }
+        item.accounts = accts;
+        reg[gameId] = item;
+        gameLaunchRegSave(reg);
+        return { ok: true, id: isEdit ? acct.id : (accts[accts.length - 1].id) };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '保存失败' };
+    }
+});
+
+// 删除账号：删除后自动选中剩余账号中的第一个作为默认
+ipcMain.handle('game:delete-account', function (event, data) {
+    try {
+        var gameId = String((data && data.gameId) || '').trim();
+        var acctId = String((data && data.accountId) || '').trim();
+        if (!gameId || !acctId) return { ok: false, error: '参数缺失' };
+        var reg = gameLaunchRegLoad();
+        var item = reg[gameId] || {};
+        var accts = Array.isArray(item.accounts) ? item.accounts.slice() : [];
+        if (accts.length <= 1) return { ok: false, error: '必须至少保留一个账号' };
+        var removedDefault = false;
+        var newAccts = [];
+        for (var i = 0; i < accts.length; i++) {
+            if (accts[i].id === acctId) {
+                if (accts[i].isDefault) removedDefault = true;
+                continue;
+            }
+            newAccts.push(accts[i]);
+        }
+        if (newAccts.length === 0) return { ok: false, error: '必须至少保留一个账号' };
+        // 被删的是默认 → 第一个剩余的设为默认
+        if (removedDefault) newAccts[0].isDefault = true;
+        item.accounts = newAccts;
+        reg[gameId] = item;
+        gameLaunchRegSave(reg);
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '删除失败' };
+    }
+});
+
+// 读取指定游戏的账号（含解密后的密码）：
+//   accountId 传 → 返回该账号（不存在则报错）
+//   accountId 不传 → 返回默认账号（isDefault=true 的，否则第一个）
+// 返回：{ok, id, label, username, password, error?}
+ipcMain.handle('game:get-account', function (event, data) {
+    var gameId = String((data && data.gameId) || '').trim();
+    var accountId = String((data && data.accountId) || '').trim();
+    if (!gameId) return { ok: false, error: '参数缺失' };
+    var reg = gameLaunchRegLoad();
+    var item = reg[gameId] || {};
+    var accts = Array.isArray(item.accounts) ? item.accounts : [];
+    if (accts.length === 0) return { ok: false, error: '无配置账号' };
+    var target = null;
+    if (accountId) {
+        for (var i = 0; i < accts.length; i++) { if (accts[i].id === accountId) { target = accts[i]; break; } }
+        if (!target) return { ok: false, error: '账号不存在' };
+    } else {
+        for (var j = 0; j < accts.length; j++) { if (accts[j].isDefault) { target = accts[j]; break; } }
+        if (!target) target = accts[0];
+    }
+    // 解密密码
+    var decryptedPwd = target.password || '';
+    try {
+        if (event.sender && event.sender.sendSync && decryptedPwd) {
+            var r = event.sender.sendSync('im:credential-decrypt', decryptedPwd);
+            if (r !== null && r !== undefined && r !== '') decryptedPwd = r;
+        }
+    } catch (e) { /* 解密失败则用存的原值 */ }
+    return { ok: true, id: target.id, label: target.label || '', username: target.username || '', password: decryptedPwd };
 });
 // 游戏进程"正在启动"事件广播全部窗口（spawn 成功但游戏窗口未可见：页面按钮先切"正在启动"，
 // 窗口可见后 game-start 才切"运行中"；与 game-start/game-exit 全窗口广播同口径）

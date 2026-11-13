@@ -333,6 +333,7 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"launch_exe":  g.LaunchExe,
 		"launch_name": g.LaunchName,
 		"launch_args": g.LaunchArgs,
+		"launch_args_hidden": g.LaunchArgsHidden,
 		// 启动方式（0=直接启动[默认] 1=SmartSteamEmu 模拟器）与 Steam AppId（联机大厅匹配，
 		// 空=读游戏目录 steam_appid.txt）——客户端启动时按 steam_emu 分流并写入 SmartSteamEmu.ini
 		"steam_emu":    g.SteamEmu,
@@ -340,6 +341,10 @@ func gameSummary(g model.Game) map[string]interface{} {
 		// 端口透传转发规则（JSON 数组串原样下发，客户端启动游戏时自动开启本机监听透传到远端服务器；
 		// 非敏感路由标记，空串=无规则不开启转发）
 		"port_forwards": g.PortForwards,
+		// 多实例控制（管理端配置；allow_multi_instance=true 时客户端可多开，max_instances 上限 1~100）
+		// 非敏感路由标记，随摘要下发客户端启动前校验
+		"allow_multi_instance": g.AllowMultiInstance,
+		"max_instances":        g.MaxInstances,
 		// 功能二期：联机端口登记（逗号分隔串原样下发，客户端自行解析；建房选游戏自动预填 +
 		// 开局实测发现新端口自动累加，管理端手工登记为准）
 		"online_ports_tcp": g.OnlinePortsTCP,

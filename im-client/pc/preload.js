@@ -1108,6 +1108,20 @@ contextBridge.exposeInMainWorld('desktop', {
     gameSetLaunchOptions: function (gameId, exe, args) {
         return ipcRenderer.invoke('game:set-launch-options', { gameId: gameId, exe: exe, args: args });
     },
+    // ===== 游戏启动账号管理（game-launch.json 的 accounts 数组；密码 DPAPI 加密存）=====
+    gameListAccounts: function (gameId) {
+        return ipcRenderer.invoke('game:list-accounts', { gameId: gameId });
+    },
+    gameSaveAccount: function (gameId, account) {
+        return ipcRenderer.invoke('game:save-account', { gameId: gameId, account: account });
+    },
+    gameDeleteAccount: function (gameId, accountId) {
+        return ipcRenderer.invoke('game:delete-account', { gameId: gameId, accountId: accountId });
+    },
+    // 读取指定游戏的账号（含解密后密码；accountId 可选，不传返回默认账号）
+    gameGetAccount: function (gameId, accountId) {
+        return ipcRenderer.invoke('game:get-account', { gameId: gameId, accountId: accountId || '' });
+    },
     // 游戏中心窗最大化/还原切换（无边框窗自绘标题栏按钮，sender 窗口归口）→ Promise<boolean> 切换后是否最大化
     gameWinToggleMaximize: function () {
         return ipcRenderer.invoke('game:win-toggle-maximize');

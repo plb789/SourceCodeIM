@@ -43,8 +43,10 @@
         tasks: {},         // taskId → 下载任务 {taskId,gameId,name,version,installDir,prevInstalled,received,total,speed,state,fileRelPath,error}
         taskByGame: {},    // gameId → 进行中的 taskId（详情/库按钮态联动）
         sessions: {},      // gameId → 本次启动时间戳（onGameExit 结算游玩时长）
-        running: {},       // gameId → 运行中（Steam 同款）：进程已启动未退出，侧栏行/启动按钮显示"运行中"
-        launching: {},     // gameId → 正在启动：进程已拉起但游戏窗口未可见（窗口可见后 game-start 广播切"运行中"）
+        running: {},       // gameId → 运行中（聚合：任一实例运行即标记；值=最早启动时间戳）
+        runningInsts: {},  // gameId → { instanceId: timestamp }：多实例明细（逐实例追踪退出）
+        launching: {},     // gameId → 正在启动（聚合；值=启动时间戳）
+        launchingInsts: {},// gameId → { instanceId: timestamp }：多实例启动明细
         localLib: {},      // localId('local_xx') → {id,name,exe,addedAt,lastPlayAt}：本机添加的本地游戏（localStorage 持久化，不同步服务端）
         localRunning: {},  // localId → 启动时间戳（本地游戏运行中；local-game-start/exit 全窗广播维护）
         localLaunching: {}, // localId → 正在启动（本地游戏窗口未可见；与 launching 同口径）
@@ -194,6 +196,10 @@
         clearTimeout(toastTimer);
         toastTimer = setTimeout(function () { toastEl.classList.add('hidden'); }, 2500);
     }
+
+    // 简单的 mask 显示/隐藏辅助函数（账号弹窗、手动输入弹窗共用）
+    function showMask(id) { var el = $(id); if (el) el.classList.remove('hidden'); }
+    function hideMask(id) { var el = $(id); if (el) el.classList.add('hidden'); }
 
     var modalMask = $('gsModalMask');
     var modalOkCb = null;
@@ -2122,7 +2128,7 @@
         var sig = libBtnSig(gid, acts);
         if (btns._sig !== sig) {
             btns.innerHTML = '';
-            acts.forEach(function (a) { btns.appendChild(mkBtn(a.text, a.cls, a.fn)); });
+            acts.forEach(function (a) { btns.appendChild(mkAct(a)); });
             btns._sig = sig;
         }
         var meta = page.querySelector('.gs-lib-meta');
@@ -2273,7 +2279,7 @@
         libBarFill(gid, g, acts[0] || null);
         var toprow = el('div', 'gs-lib-toprow');
         var btns = el('div', 'gs-lib-actions-row');
-        acts.forEach(function (a) { btns.appendChild(mkBtn(a.text, a.cls, a.fn)); });
+        acts.forEach(function (a) { btns.appendChild(mkAct(a)); });
         btns._sig = libBtnSig(gid, acts); // 记录构建签名，避免首次 syncLibGamePage 无谓重建
         toprow.appendChild(btns);
         var meta = el('div', 'gs-lib-meta');
@@ -2885,18 +2891,29 @@
         Promise.resolve(DESKTOP.gameRunningList()).then(function (list) {
             if (!Array.isArray(list)) return;
             state.running = {};
+            state.runningInsts = {};
             state.launching = {};
+            state.launchingInsts = {};
             list.forEach(function (x) {
                 if (!x || x.gameId === undefined || x.gameId === null) return;
-                if (x.launching) { state.launching[x.gameId] = x.startedAt || Date.now(); return; } // 窗口可见探测中：恢复"正在启动"
-                state.running[x.gameId] = x.startedAt || Date.now();
-                // 重启/刷新后重新申明"正在玩"（客户端断开时服务端已摘除 presence，此处补登记）
+                var gid = x.gameId, iid = x.instanceId || '';
+                if (x.launching) {
+                    state.launching[gid] = state.launching[gid] || (x.startedAt || Date.now());
+                    if (iid) { if (!state.launchingInsts[gid]) state.launchingInsts[gid] = {}; state.launchingInsts[gid][iid] = x.startedAt || Date.now(); }
+                    return;
+                }
+                state.running[gid] = state.running[gid] || (x.startedAt || Date.now());
+                if (iid) { if (!state.runningInsts[gid]) state.runningInsts[gid] = {}; state.runningInsts[gid][iid] = x.startedAt || Date.now(); }
                 api('POST', '/api/game/play/' + x.gameId, { action: 'start' });
             });
             if (list.length) ensurePlayHeartbeat();
             refreshViews();
-        }).catch(function () { /* 查询失败静默：下次启动/退出事件仍会校正 */ });
+        }).catch(function () { /* 查询失败静默 */ });
     }
+
+    function isRunning(gid) { return !!state.running[gid]; }
+    function runningCount(gid) { return state.runningInsts[gid] ? Object.keys(state.runningInsts[gid]).length : 0; }
+    function isLaunching(gid) { return !!state.launching[gid]; }
 
     // 恢复主进程侧本地游戏运行态（页面刷新/新开窗口场景；gn_room=联机房间启动的本机游戏不归属库条目）
     function pullLocalRunning() {
@@ -2950,6 +2967,248 @@
         return b;
     }
 
+    // mkAct：渲染 acts 数组中的一个条目；若 act.caret=true 且游戏允许多开，
+    // 则在按钮旁插入三角 caret（无论是否已配置账号 — 没账号时下拉里只有"默认+手动输入"）
+    function mkAct(act) {
+        var btn = mkBtn(act.text, act.cls, act.fn);
+        if (!act.caret || !act.gid) return btn;
+        // 检查是否需要显示 caret：只要允许多开就显示（有账号下拉里多出账号列表，没账号只有默认+手动输入）
+        var g = state.games[act.gid] || {};
+        var allowMulti = !!g.allow_multi_instance;
+        if (!allowMulti) return btn;
+        // 账号列表（异步加载到 state.gameAccounts，加载完刷新 caret 内的账号项）
+        var accts = state.gameAccounts && state.gameAccounts[act.gid] ? state.gameAccounts[act.gid] : null;
+        if (!accts) {
+            DESKTOP && DESKTOP.gameListAccounts && DESKTOP.gameListAccounts(act.gid).then(function (r) {
+                if (r && r.ok && Array.isArray(r.accounts)) {
+                    if (!state.gameAccounts) state.gameAccounts = {};
+                    state.gameAccounts[act.gid] = r.accounts;
+                    // 账号列表变化：刷新按钮区让下拉内容更新（caret 本身一直可见，只是下拉内容不同）
+                    refreshViews();
+                }
+            }).catch(function () {});
+            accts = []; // 没加载到时先按空数组处理（caret 仍可见）
+        }
+        // 渲染 caret 按钮（只要 allowMulti=true 就渲染）
+        var wrap = el('span', 'gs-launch-wrap');
+        wrap.appendChild(btn);
+        var caret = el('button', 'gs-launch-caret hidden', '▾');
+        caret.title = T('选择账号启动');
+        caret.setAttribute('data-gid', act.gid);
+        caret.addEventListener('click', function (e) {
+            e.stopPropagation(); e.preventDefault();
+            closeLaunchDrop();
+            openLaunchDrop(act.gid, e.clientX, e.clientY);
+        });
+        wrap.appendChild(caret);
+        // 切半圆角：主按钮右边无圆角 → 与 caret 左边无缝衔接（CSS flex stretch 自动撑满高度）
+        btn.style.borderTopRightRadius = '0'; btn.style.borderBottomRightRadius = '0';
+        caret.classList.remove('hidden');
+        return wrap;
+    }
+
+    // 启动下拉菜单渲染 + 定位（复用 gs-ctxmenu 定位逻辑）
+    function openLaunchDrop(gid, x, y) {
+        var g = state.games[gid] || {};
+        var accts = state.gameAccounts && state.gameAccounts[gid] ? state.gameAccounts[gid] : [];
+        var menu = $('gsLaunchDrop');
+        menu.innerHTML = '';
+        // 头：游戏图标 + 名称（跟右键菜单头同款）
+        var header = el('div', 'gs-ctxmenu-head', '');
+        if (g.cover) {
+            var himg = document.createElement('img');
+            himg.src = assetUrl(g.cover); himg.draggable = false; himg.alt = '';
+            header.appendChild(himg);
+        }
+        header.appendChild(el('span', '', (g.name || '')));
+        menu.appendChild(header);
+        // 默认（平台账号）
+        var defItem = el('div', 'gs-ctxmenu-item', T('默认（平台账号）'));
+        defItem.addEventListener('click', function () { closeLaunchDrop(); launchGame(gid); });
+        menu.appendChild(defItem);
+        menu.appendChild(el('div', 'gs-ctxmenu-sep', ''));
+        // 账号列表
+        accts.forEach(function (a) {
+            var label = (a.label || a.username);
+            if (a.isDefault) label = '● ' + label + ' ';
+            label += '(' + a.username + ')';
+            var item = el('div', 'gs-ctxmenu-item', label);
+            item.addEventListener('click', function () {
+                closeLaunchDrop();
+                launchWithAccountId(gid, a.id);
+            });
+            menu.appendChild(item);
+        });
+        menu.appendChild(el('div', 'gs-ctxmenu-sep', ''));
+        // 手动输入…
+        var manualItem = el('div', 'gs-ctxmenu-item', T('手动输入…'));
+        manualItem.addEventListener('click', function () { closeLaunchDrop(); openManualDialog(gid); });
+        menu.appendChild(manualItem);
+        // 定位（边界钳制）
+        menu.classList.remove('hidden');
+        var rect = menu.getBoundingClientRect();
+        var maxX = window.innerWidth - rect.width - 8;
+        var maxY = window.innerHeight - rect.height - 8;
+        menu.style.left = Math.max(8, Math.min(x, maxX)) + 'px';
+        menu.style.top = Math.max(8, Math.min(y, maxY)) + 'px';
+    }
+    function closeLaunchDrop() { var m = $('gsLaunchDrop'); if (m) m.classList.add('hidden'); }
+    document.addEventListener('mousedown', function (e) {
+        var m = $('gsLaunchDrop');
+        if (m && !m.classList.contains('hidden') && !m.contains(e.target) && !e.target.classList.contains('gs-launch-caret')) closeLaunchDrop();
+    });
+    window.addEventListener('blur', closeLaunchDrop);
+
+    // 用指定账号启动：从主进程读取该账号密码（DPAPI 解密）后调 launchGame
+    function launchWithAccountId(gid, accountId) {
+        if (!DESKTOP || !DESKTOP.gameGetAccount) return;
+        DESKTOP.gameGetAccount(gid, accountId).then(function (r) {
+            if (!r || !r.ok) { toast(T('读取账号密码失败：') + (r && r.error || T('未知错误'))); return; }
+            launchGame(gid, '', {
+                customUsername: r.username,
+                customPassword: r.password,
+                accountLabel: r.label || r.username
+            });
+        }).catch(function () { toast(T('读取账号密码失败')); });
+    }
+
+    // 手动输入账号弹窗：下拉菜单 → "手动输入…"
+    var manualGid = null;
+    function openManualDialog(gid) {
+        manualGid = gid;
+        $('gsManualUser').value = ''; $('gsManualPwd').value = '';
+        showMask('gsManualMask');
+        setTimeout(function () { $('gsManualUser').focus(); }, 50);
+    }
+    // 手动输入弹窗按钮
+    $('gsManualCancel') && $('gsManualCancel').addEventListener('click', function () { hideMask('gsManualMask'); manualGid = null; });
+    $('gsManualOk') && $('gsManualOk').addEventListener('click', function () {
+        if (!manualGid) { hideMask('gsManualMask'); return; }
+        var u = $('gsManualUser').value.trim();
+        var p = $('gsManualPwd').value;
+        if (!u) { toast(T('请输入账号')); return; }
+        if (!p) { toast(T('请输入密码')); return; }
+        hideMask('gsManualMask');
+        launchGame(manualGid, '', { customUsername: u, customPassword: p, accountLabel: u });
+        manualGid = null;
+    });
+
+    // 账号添加/编辑弹窗（属性弹窗 → 启动账号管理区 → + 添加 / 编辑行）
+    var acctEditGid = null;
+    var acctEditId = null;
+    function openAcctDialog(gid, editId) {
+        acctEditGid = gid;
+        acctEditId = editId || null;
+        $('gsAcctTitle').textContent = editId ? T('编辑启动账号') : T('添加启动账号');
+        $('gsAcctLabel').value = '';
+        $('gsAcctUser').value = '';
+        $('gsAcctPwd').value = '';
+        $('gsAcctDefault').checked = false;
+        if (editId && state.gameAccounts && state.gameAccounts[gid]) {
+            var accts = state.gameAccounts[gid];
+            for (var i = 0; i < accts.length; i++) {
+                if (accts[i].id === editId) {
+                    $('gsAcctLabel').value = accts[i].label || '';
+                    $('gsAcctUser').value = accts[i].username || '';
+                    $('gsAcctDefault').checked = !!accts[i].isDefault;
+                    break;
+                }
+            }
+        }
+        showMask('gsAcctMask');
+        setTimeout(function () { $('gsAcctUser').focus(); }, 50);
+    }
+    $('gsAcctCancel') && $('gsAcctCancel').addEventListener('click', function () { hideMask('gsAcctMask'); acctEditGid = null; acctEditId = null; });
+    $('gsAcctOk') && $('gsAcctOk').addEventListener('click', function () {
+        if (!acctEditGid) { hideMask('gsAcctMask'); return; }
+        var gid = acctEditGid; // capture before async callbacks — 闭包安全
+        var label = $('gsAcctLabel').value.trim();
+        var user = $('gsAcctUser').value.trim();
+        var pwd = $('gsAcctPwd').value;
+        var isDefault = $('gsAcctDefault').checked;
+        if (!user) { toast(T('账号不能为空')); return; }
+        if (!pwd) { toast(T('密码不能为空')); return; }
+        var acct = { id: acctEditId || undefined, label: label, username: user, password: pwd, isDefault: isDefault };
+        DESKTOP.gameSaveAccount(gid, acct).then(function (r) {
+            if (r && r.ok) {
+                hideMask('gsAcctMask');
+                acctEditGid = null; acctEditId = null;
+                refreshAccountsCache(gid).then(function () {
+                    renderPropAccounts(gid); // 用 captured gid，安全
+                });
+                toast(T('保存成功'));
+            } else {
+                toast(T('保存失败：') + (r && r.error || T('未知错误')));
+            }
+        }).catch(function () { toast(T('保存失败')); });
+    });
+
+    // 刷新账号缓存（从主进程 game-launch.json 读）
+    function refreshAccountsCache(gid) {
+        if (!DESKTOP || !DESKTOP.gameListAccounts) return Promise.resolve();
+        return DESKTOP.gameListAccounts(gid).then(function (r) {
+            if (!state.gameAccounts) state.gameAccounts = {};
+            state.gameAccounts[gid] = (r && r.ok && Array.isArray(r.accounts)) ? r.accounts : [];
+        });
+    }
+
+    // 属性弹窗账号管理区渲染（账号列表 + 添加按钮 + 数量上限）
+    function renderPropAccounts(gid) {
+        var sec = $('gsPropAcctSection');
+        var list = $('gsPropAcctList');
+        var countEl = $('gsPropAcctCount');
+        var addBtn = $('gsPropAcctAdd');
+        if (!sec) return;
+        var g = state.games[gid] || {};
+        var maxInst = Math.max(1, Math.min(100, parseInt(g.max_instances, 10) || 1));
+        var allowMulti = !!g.allow_multi_instance;
+        var accts = state.gameAccounts && state.gameAccounts[gid] ? state.gameAccounts[gid] : [];
+        // 显示条件：允许多开 或 已有账号
+        if (!allowMulti && accts.length === 0) { sec.classList.add('hidden'); return; }
+        sec.classList.remove('hidden');
+        // 数量显示
+        countEl.textContent = accts.length + '/' + maxInst;
+        // 添加按钮：达到上限时禁用
+        addBtn.disabled = accts.length >= maxInst;
+        addBtn.title = accts.length >= maxInst ? T('已达最大账号数（') + maxInst + T('）') : T('添加启动账号');
+        // 渲染列表
+        list.innerHTML = '';
+        accts.forEach(function (a) {
+            var row = el('div', 'gs-prop-acct-item' + (a.isDefault ? ' active' : ''), '');
+            var dot = el('div', 'gs-acct-default-dot' + (a.isDefault ? '' : ' empty'), '');
+            row.appendChild(dot);
+            var lbl = el('div', 'gs-acct-label', a.label || a.username);
+            row.appendChild(lbl);
+            var user = el('div', 'gs-acct-user', a.username);
+            row.appendChild(user);
+            var actions = el('div', 'gs-acct-actions', '');
+            var editBtn = el('button', '', T('编辑'));
+            editBtn.addEventListener('click', function (e) { e.stopPropagation(); openAcctDialog(gid, a.id); });
+            actions.appendChild(editBtn);
+            var delBtn = el('button', 'danger', T('删除'));
+            delBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (accts.length <= 1) { toast(T('必须至少保留一个账号')); return; }
+                DESKTOP.gameDeleteAccount(gid, a.id).then(function (r) {
+                    if (r && r.ok) {
+                        refreshAccountsCache(gid).then(function () { renderPropAccounts(gid); });
+                        toast(T('已删除'));
+                    } else {
+                        toast(T('删除失败：') + (r && r.error || T('未知错误')));
+                    }
+                }).catch(function () { toast(T('删除失败')); });
+            });
+            actions.appendChild(delBtn);
+            row.appendChild(actions);
+            list.appendChild(row);
+        });
+        // 绑定添加按钮
+        addBtn.onclick = function () {
+            if (accts.length >= maxInst) { toast(T('已达最大账号数（') + maxInst + T('）')); return; }
+            openAcctDialog(gid, null);
+        };
+    }
+
     // 按钮行签名（任务ID + 文案 + 样式）：供 syncLibGamePage 判断按钮行是否需要重建。
     // 下载中↔校验交替时签名不变（两态都产出"暂停/取消"）→ 跳过重建，消除按钮重绘/尺寸闪烁；
     // 任务更换（taskId 变化）时签名变化 → 强制重建，确保按钮事件闭包绑定到当前任务对象
@@ -2988,17 +3247,26 @@
             // （窗口可见后 game-start 广播自动切"运行中"；探测失败/超时也回正，不卡该态）
             acts.push({ text: T('正在启动'), cls: 'running', fn: function () { toast(T('游戏正在启动，请稍候…')); } });
         } else if (state.running[gid]) {
-            // 运行中（Steam 同款）：启动入口原地显示为"运行中"，不再可点启动（进程退出自动回落）
-            acts.push({ text: T('运行中'), cls: 'running', fn: function () { toast(T('游戏正在运行中')); } });
+            // 运行中：多开模式下未满上限时仍可继续启动（启动按钮保持可点 + caret 下拉）
+            // 单实例或已达上限才锁死为"运行中"
+            var gForAct = state.games[gid] || {};
+            var _allowMulti2 = !!gForAct.allow_multi_instance;
+            var _max2 = Math.max(1, Math.min(100, parseInt(gForAct.max_instances, 10) || 1));
+            var _curCount2 = runningCount(gid);
+            if (_allowMulti2 && _curCount2 < _max2) {
+                acts.push({ text: T('启动'), cls: 'primary', fn: function () { launchGame(gid); }, caret: true, gid: gid });
+            } else {
+                acts.push({ text: T('运行中'), cls: 'running', fn: function () { toast(T('游戏正在运行中')); } });
+            }
         } else {
             switch (libState) {
                 case 3:
-                    acts.push({ text: T('启动'), cls: 'primary', fn: function () { launchGame(gid); } });
+                    acts.push({ text: T('启动'), cls: 'primary', fn: function () { launchGame(gid); }, caret: true, gid: gid });
                     break;
                 case 4:
                     // 待更新（Steam 同款）：旧版仍可启动继续玩，更新按钮并行提供
                     acts.push({ text: T('更新'), cls: 'primary', fn: function () { startInstall(g, true); } });
-                    acts.push({ text: T('启动'), cls: '', fn: function () { launchGame(gid); } });
+                    acts.push({ text: T('启动'), cls: '', fn: function () { launchGame(gid); }, caret: true, gid: gid });
                     break;
                 case 1:
                 case 2:
@@ -3737,14 +4005,27 @@
     }
 
     // 参数模板 → 参数数组：替换 {0}=登录账号、{1}=账号专属密码（spawn 直传数组，无需再转义引号）
-    function buildLaunchArgs(tpl, gid) {
+    // buildLaunchArgs：参数模板 → 占位符替换 → 分词数组
+    // {0}=平台登录账号 {1}=平台账号派生密码 {2}=自定义账号（opts.customUsername）{3}=自定义密码（opts.customPassword）
+    function buildLaunchArgs(tpl, gid, opts) {
+        var meta = gameLaunchMeta(gid);
+        // 商户隐藏模式：强制用商户模板，忽略用户覆盖（用户在属性弹窗保存的 args 会被忽略）
+        var gm = state.games[gid] || {};
+        if (gm.launch_args_hidden) tpl = meta.args || '';
         tpl = String(tpl || '').trim();
         if (!tpl) return [];
-        var meta = gameLaunchMeta(gid);
+        var u0 = String(username || '');          // {0} 平台账号
+        var p1 = String(meta.password || '');     // {1} 平台派生密码
+        // {2}/{3} 智能回退：有自定义账号密码就用，没有就回退到 {0}/{1}（平台账号密码）
+        // 这样模板只写 {2}/{3} 时默认启动也能带平台账号密码，只写 {0}/{1} 时保持原行为不变
+        var u2Raw = String((opts && opts.customUsername) || '');
+        var p3Raw = String((opts && opts.customPassword) || '');
+        var u2 = u2Raw || u0;   // 没自定义账号 → 回退平台账号
+        var p3 = p3Raw || p1;   // 没自定义密码 → 回退平台密码
         var parts = splitLaunchArgs(tpl);
         var out = [];
         for (var i = 0; i < parts.length; i++) {
-            out.push(parts[i].replace(/\{0\}/g, String(username || '')).replace(/\{1\}/g, String(meta.password || '')));
+            out.push(parts[i].replace(/\{0\}/g, u0).replace(/\{1\}/g, p1).replace(/\{2\}/g, u2).replace(/\{3\}/g, p3));
         }
         return out;
     }
@@ -3844,9 +4125,22 @@
         var libState = lib ? Number(lib.state) : null;
         var items = [];
         // 启动入口仅已安装（3）可见：与库卡片按钮态一致（0未安装=安装 / 1下载中·2暂停=暂停·继续 / 4待更新=更新，旧版仍可启动）
-        if (state.launching[gid]) items.push({ label: T('正在启动'), onClick: function () { toast(T('游戏正在启动，请稍候…')); } });
-        else if (state.running[gid]) items.push({ label: T('运行中'), onClick: function () { toast(T('游戏正在运行中')); } });
-        else if (libState === 3 || libState === 4) items.push({ label: T('启动游戏'), onClick: function () { launchGame(gid); } });
+        var gForCtx = state.games[gid] || {};
+        var _allowCtx = !!gForCtx.allow_multi_instance;
+        var _maxCtx = Math.max(1, Math.min(100, parseInt(gForCtx.max_instances, 10) || 1));
+        var _countCtx = runningCount(gid);
+        var _canMultiLaunch = _allowCtx && _countCtx < _maxCtx;
+        if (state.launching[gid] && !_canMultiLaunch) items.push({ label: T('正在启动'), onClick: function () { toast(T('游戏正在启动，请稍候…')); } });
+        else if (state.running[gid] && !_canMultiLaunch) items.push({ label: T('运行中'), onClick: function () { toast(T('游戏正在运行中')); } });
+        else if ((state.running[gid] && _canMultiLaunch) || libState === 3 || libState === 4) {
+            // 右键启动项：允许多开 → 弹账号下拉（含默认+配置账号+手动输入…）；单实例 → 直接启动
+            items.push({
+                label: _canMultiLaunch ? (T('启动游戏') + '  ›') : T('启动游戏'),
+                onClick: _canMultiLaunch
+                    ? function () { closeCtxMenu(); openLaunchDrop(gid, x, y); }
+                    : function () { closeCtxMenu(); launchGame(gid); }
+            });
+        }
         items.push({ label: T('属性'), onClick: function () { openPropModal(gid); } });
         items.push({ label: T('移出游戏库'), danger: true, onClick: function () { removeFromLib(gid); } });
 
@@ -4044,6 +4338,15 @@
         $('gsPropArgs').placeholder = T('自定义启动参数（留空则用游戏默认）。支持占位符：{0}=登录账号，{1}=账号专属密码');
         $('gsPropDir').textContent = (lib && lib.install_path) || T('未安装');
         $('gsPropArgs').value = '';
+        // 商户隐藏模式切换：launch_args_hidden=true 时用户看不到参数模板
+        var argsHidden = !!(g && g.launch_args_hidden);
+        if (argsHidden) {
+            $('gsPropArgsEditWrap').classList.add('hidden');
+            $('gsPropArgsHidden').classList.remove('hidden');
+        } else {
+            $('gsPropArgsEditWrap').classList.remove('hidden');
+            $('gsPropArgsHidden').classList.add('hidden');
+        }
         // 端口透传转发（管理端配置，只读展示；本地游戏才可编辑自己的规则）
         var pfs = parsePortForwards(g.port_forwards);
         $('gsPropPf').textContent = pfs.length ? pfRulesToText(pfs) : T('无（直连游戏默认服务器）');
@@ -4058,6 +4361,27 @@
                 if (opts.exe) { propExe = opts.exe; refreshPropExe(); }
             }).catch(function () {});
         }
+        // 关键修复：从服务端强制拉最新游戏详情 — 管理后台刚修改的 allow_multi_instance/max_instances
+        // 字段在页面加载时的缓存里可能还没有，导致账号区被错误隐藏
+        api('GET', '/api/game/' + gid).then(function (res) {
+            if (!res.ok || propGid !== gid) return;
+            var fresh = res.data || {};
+            state.games[gid] = fresh;
+            if (state.lib[gid]) state.lib[gid].game = fresh;
+            // 端口转发可能也更新了（管理后台修改）
+            var newPf = parsePortForwards(fresh.port_forwards);
+            $('gsPropPf').textContent = newPf.length ? pfRulesToText(newPf) : T('无（直连游戏默认服务器）');
+            // 当前在启动选项分栏 → 用新的 allow_multi_instance 值重新渲染账号区
+            var curPane = $('gsPropNav').querySelector('.gs-prop-navitem.active');
+            if (curPane && curPane.getAttribute('data-pane') === 'launch') {
+                refreshAccountsCache(gid).then(function () { renderPropAccounts(gid); });
+            }
+        }).catch(function () {});
+        // 异步加载账号列表 → 渲染到属性弹窗「启动选项」分栏
+        refreshAccountsCache(gid).then(function () {
+            if (propGid !== gid) return; // 期间切了游戏：丢弃
+            renderPropAccounts(gid);
+        });
     }
     // 属性弹窗左侧分栏导航（Steam 同款）：点左侧按钮切换右侧内容区，并刷新自绘悬浮滑块
     function showPropPane(name) {
@@ -4070,6 +4394,10 @@
         });
         $('gsPropPanes').scrollTop = 0; // 切分栏回到顶部（分栏内容各自独立阅读）
         osbTick($('gsPropPanes'), 300);
+        // 切到启动选项分栏时刷新账号管理区（allow_multi_instance 可能刚从服务端下发）
+        if (name === 'launch' && propGid) {
+            refreshAccountsCache(propGid).then(function () { renderPropAccounts(propGid); });
+        }
     }
     (function () {
         var items = $('gsPropNav').querySelectorAll('.gs-prop-navitem');
@@ -4093,8 +4421,10 @@
         if (propLid) { saveLocalProp(); return; } // 本地游戏模式：存 localStorage（名称/主程序/参数/转发）
         if (!propGid) return;
         if (!DESKTOP || !DESKTOP.gameSetLaunchOptions) { toast(T('请在 PC 客户端中操作')); return; }
-        var args = $('gsPropArgs').value.trim();
-        DESKTOP.gameSetLaunchOptions(propGid, propExe || '', args).then(function (r) {
+        // 商户隐藏模式：忽略用户编辑的 args（强制用商户模板）
+        var gm = state.games[propGid] || {};
+        var saveArgs = gm.launch_args_hidden ? '' : $('gsPropArgs').value.trim();
+        DESKTOP.gameSetLaunchOptions(propGid, propExe || '', saveArgs).then(function (r) {
             if (r && r.ok) { toast(T('已保存启动设置')); $('gsPropMask').classList.add('hidden'); }
             else toast((r && r.error) || T('保存失败'));
         }).catch(function () { toast(T('保存失败')); });
@@ -4522,14 +4852,32 @@
         });
     }
 
-    // 启动流程：读取用户启动覆盖（属性）→ 组装参数（{0}/{1} 替换）→ gameLaunch → needExe 降级手动选。
+    // 启动流程：读取用户启动覆盖（属性）→ 组装参数（{0}/{1}/{2}/{3} 占位符替换）→ gameLaunch → needExe 降级手动选。
+    // opts 可选：{ customUsername, customPassword, instanceId, accountLabel, accountId }
     // 点击即切"正在启动"（进程拉起早于游戏窗口可见），窗口可见后 game-start 广播才切"运行中"
-    function launchGame(gid, exePath, onResult) {
+    function launchGame(gid, exePath, opts, onResult) {
+        // 兼容旧调用签名：launchGame(gid, exePath, onResult)
+        if (typeof opts === 'function') { onResult = opts; opts = null; }
         if (!username) { if (onResult) onResult(false, T('请先在主界面登录')); toast(T('请先在主界面登录后再使用游戏中心')); return; }
         if (!DESKTOP || !DESKTOP.gameLaunch) { if (onResult) onResult(false, T('请在 PC 客户端中启动游戏')); toast(T('请在 PC 客户端中启动游戏')); return; }
-        if (state.running[gid]) { toast(T('游戏正在运行中')); return; }
-        if (state.launching[gid]) { toast(T('游戏正在启动，请稍候…')); return; } // 详情/库页/右键多入口防重复 spawn
-        state.launching[gid] = Date.now();
+        // 多开校验（服务端 max_instances 上限 100，客户端做 UX 预检）
+        var gameInfo = state.games[gid] || {};
+        var maxInst = Math.max(1, Math.min(100, parseInt(gameInfo.max_instances, 10) || 1));
+        var allowMulti = !!gameInfo.allow_multi_instance;
+        var curRunning = runningCount(gid);
+        var curLaunching = state.launchingInsts[gid] ? Object.keys(state.launchingInsts[gid]).length : 0;
+        if (!allowMulti && curRunning >= 1) { toast(T('游戏正在运行中（不允许多开）')); return; }
+        if (curRunning >= maxInst) { toast(T('已达最大实例数（') + maxInst + T('）')); return; }
+        // 多开场景下"正在启动"检查也要聚合：当前启动中的实例数 < maxInst 就放行
+        // （不允许则单实例时仍按原逻辑拦截）
+        if (!allowMulti && state.launching[gid]) { toast(T('游戏正在启动，请稍候…')); return; }
+        if (allowMulti && curLaunching >= (maxInst - curRunning)) { toast(T('已有 ') + curLaunching + T(' 个实例正在启动中，请稍候…')); return; }
+
+        var instanceId = (opts && opts.instanceId) || (gid + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+        var launchTs = Date.now();
+        if (!state.launching[gid]) state.launching[gid] = launchTs;
+        if (!state.launchingInsts[gid]) state.launchingInsts[gid] = {};
+        state.launchingInsts[gid][instanceId] = launchTs;
         scheduleRefresh();
         // 启动前静默刷新单游戏元数据：保证 steam_emu / steam_app_id / net_mode 等管理端配置读到最新值。
         // 800ms 超时兜底，网络抖动或服务器无响应时继续用缓存启动（优雅降级，不白屏）。
@@ -4549,21 +4897,29 @@
                 if (sv && sv.downloaded) toast(T('已从云端同步存档（') + sv.downloaded + T(' 个文件）'));
                 else if (sv && sv.error) toast(T('云存档下载失败：') + sv.error);
                 var optsP = DESKTOP.gameGetLaunchOptions ? DESKTOP.gameGetLaunchOptions(gid) : Promise.resolve(null);
-                return optsP.then(function (opts) {
-                    var tpl = (opts && opts.args) ? opts.args : meta.args; // 用户自定义覆盖 > 管理端默认
+                return optsP.then(function (regOpts) {
+                    // 合并注册表配置（args/exe）与调用者传入的启动选项（customUsername/customPassword/accountLabel）
+                    // 注意：外层 launchGame 的 opts 参数被 .then 回调的 regOpts 遮蔽 → 用 closures 捕获 _callerOpts
+                    var callerOpts = opts || {};
+                    var tpl = (regOpts && regOpts.args) ? regOpts.args : meta.args; // 用户自定义覆盖 > 管理端默认
+                    var mergedOpts = Object.assign({}, regOpts || {}, callerOpts); // callerOpts 覆盖同名字段
                     var payload = {
                         gameId: gid, username: username, installDir: libDir,
-                        launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid),
-                        portForwards: meta.portForwards, // 端口透传转发规则（主进程 spawn 前开启、游戏退出自动关闭）
-                        gateway: state.gateway, // 远程加密网关配置（gw 规则经网关加密透传；未配置时 gw 规则拒绝）
-                        // SmartSteamEmu 启动（steam_emu=1 生效）：steamAppId 写 ini 的 AppId（空=0 读
-                        // steam_appid.txt）、credential 写 ManualSteamId（与 {1} 占位符同源的账号专属16位
-                        // 凭证，每账号唯一保证联机 SteamID 不冲突）、persona 写 PersonaName（昵称回退账号）
+                        launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid, callerOpts),
+                        portForwards: meta.portForwards,
+                        gateway: state.gateway,
                         steamEmu: meta.steamEmu,
                         steamAppId: meta.steamAppId,
                         credential: meta.password,
                         persona: myNickname || username,
-                        netMode: meta.netMode // 联机方式（主进程按 supernode/tunnel/steamEmu 决定防火墙放行范围）
+                        netMode: meta.netMode,
+                        // —— 多实例 & 自定义账号启动 ——
+                        instanceId: instanceId,
+                        maxInstances: maxInst,
+                        allowMultiInstance: allowMulti,
+                        customUsername: callerOpts.customUsername || '',
+                        customPassword: callerOpts.customPassword || '',
+                        accountLabel: callerOpts.accountLabel || ''
                     };
                     if (exePath) payload.exePath = exePath;
                     return DESKTOP.gameLaunch(payload);
@@ -4595,8 +4951,17 @@
     }
 
     // 清除"正在启动"态并刷新按钮（启动中止/失败路径归口；game-start/error/exit 广播另有各自清理）
-    function clearLaunching(gid) {
-        delete state.launching[gid];
+    function clearLaunching(gid, instanceId) {
+        if (instanceId && state.launchingInsts[gid]) {
+            delete state.launchingInsts[gid][instanceId];
+            if (Object.keys(state.launchingInsts[gid]).length === 0) {
+                delete state.launchingInsts[gid];
+                delete state.launching[gid];
+            }
+        } else {
+            delete state.launching[gid];
+            delete state.launchingInsts[gid];
+        }
         scheduleRefresh();
     }
 
@@ -5735,56 +6100,83 @@
         });
     }
 
-    // 游戏进程"正在启动"：多窗口同步（spawn 成功但游戏窗口未可见，启动窗口自身点击时已置位，重复置位无副作用）
+    // 游戏进程"正在启动"：多窗口同步（spawn 成功但游戏窗口未可见）
     if (DESKTOP && DESKTOP.onGameLaunching) {
         DESKTOP.onGameLaunching(function (info) {
             var gid = info && info.gameId;
             if (gid === undefined || gid === null) return;
-            state.launching[gid] = (info && info.startedAt) || Date.now();
-            scheduleRefresh(); // 启动按钮/侧栏行切"正在启动"
-        });
-    }
-
-    // 游戏进程启动（主进程探测到游戏窗口可见后广播）：切"运行中"并登记"正在玩"presence
-    // （多窗口同步；启动窗口自身的"正在启动"在此收口，原 onLaunched 职责并入此处）
-    if (DESKTOP && DESKTOP.onGameStart) {
-        DESKTOP.onGameStart(function (info) {
-            var gid = info && info.gameId;
-            if (gid === undefined || gid === null) return;
-            delete state.launching[gid]; // "正在启动"→"运行中"
-            state.running[gid] = (info && info.startedAt) || Date.now();
-            if (state.sessions[gid] === undefined) state.sessions[gid] = state.running[gid];
-            api('POST', '/api/game/play/' + gid, { action: 'start' }); // 窗口可见才登记 presence（好友侧"N 名好友正在玩"）
-            ensurePlayHeartbeat(); // 多窗口启动的窗口自身也保活"正在玩"presence
+            var iid = info && info.instanceId;
+            var ts = (info && info.startedAt) || Date.now();
+            state.launching[gid] = state.launching[gid] || ts;
+            if (iid) { if (!state.launchingInsts[gid]) state.launchingInsts[gid] = {}; state.launchingInsts[gid][iid] = ts; }
             scheduleRefresh();
         });
     }
 
-    // 游戏启动异步失败（spawn 成功但进程报 error：exe 损坏/依赖缺失/权限等）：运行中回落 +
-    // 明确报错（此前无声失败，用户只见"点了没反应"无法定位）
+    // 游戏进程启动（窗口可见后广播）：切"运行中"并登记 presence
+    if (DESKTOP && DESKTOP.onGameStart) {
+        DESKTOP.onGameStart(function (info) {
+            var gid = info && info.gameId;
+            if (gid === undefined || gid === null) return;
+            var iid = info && info.instanceId;
+            var ts = (info && info.startedAt) || Date.now();
+            // 从 launching 移到 running（单实例迁移）
+            if (iid) {
+                if (state.launchingInsts[gid]) delete state.launchingInsts[gid][iid];
+                if (state.runningInsts[gid]) state.runningInsts[gid][iid] = ts; else state.runningInsts[gid] = {}; state.runningInsts[gid][iid] = ts;
+            }
+            // launching 聚合检查
+            if (state.launchingInsts[gid] && Object.keys(state.launchingInsts[gid]).length === 0) {
+                delete state.launching[gid]; delete state.launchingInsts[gid];
+            }
+            // running 聚合
+            state.running[gid] = state.running[gid] || ts;
+            if (state.sessions[gid] === undefined) state.sessions[gid] = state.running[gid];
+            api('POST', '/api/game/play/' + gid, { action: 'start' });
+            ensurePlayHeartbeat();
+            scheduleRefresh();
+        });
+    }
+
+    // 游戏启动异步失败（spawn error）：对应 instanceId 从 launching 移除，聚合归零则回落
     if (DESKTOP && DESKTOP.onGameLaunchError) {
         DESKTOP.onGameLaunchError(function (info) {
             var gid = info && info.gameId;
             if (gid === undefined || gid === null) return;
-            delete state.launching[gid]; // "正在启动"回落
-            delete state.running[gid]; // "运行中"回落为启动按钮
-            delete state.sessions[gid];
+            var iid = info && info.instanceId;
+            if (iid && state.launchingInsts[gid]) { delete state.launchingInsts[gid][iid]; }
+            if (state.launchingInsts[gid] && Object.keys(state.launchingInsts[gid]).length === 0) {
+                delete state.launching[gid]; delete state.launchingInsts[gid];
+            }
+            if (!state.launching[gid] && !state.running[gid]) { delete state.sessions[gid]; }
             toast(T('游戏启动失败：') + ((info && info.message) || T('进程启动出错')) + T('（游戏文件可能损坏，请尝试点"更新"重装）'));
             scheduleRefresh();
         });
     }
 
-    // 游戏进程退出：结算本次游玩时长并上报（play end）
+    // 游戏进程退出：对应 instanceId 从 running 移除，聚合归零则回落 + 结算时长
     if (DESKTOP && DESKTOP.onGameExit) {
         DESKTOP.onGameExit(function (info) {
             var gid = info && info.gameId;
             if (gid === undefined || gid === null) return;
-            delete state.launching[gid]; // 启动探测期间进程即退出：回落启动按钮
-            delete state.running[gid]; // 运行中回落：侧栏行/启动按钮恢复"启动"
+            var iid = info && info.instanceId;
+            // 移除对应 instanceId
+            if (iid) {
+                if (state.runningInsts[gid]) delete state.runningInsts[gid][iid];
+                if (state.launchingInsts[gid]) delete state.launchingInsts[gid][iid];
+            }
+            // 聚合归零检查
+            var remainingRun = state.runningInsts[gid] ? Object.keys(state.runningInsts[gid]).length : 0;
+            var remainingLaunch = state.launchingInsts[gid] ? Object.keys(state.launchingInsts[gid]).length : 0;
+            if (remainingRun === 0) { delete state.running[gid]; delete state.runningInsts[gid]; }
+            if (remainingLaunch === 0) { delete state.launching[gid]; delete state.launchingInsts[gid]; }
+            // 结算时长（取 sessions[gid] 最早启动时间）
             var startedAt = state.sessions[gid];
-            delete state.sessions[gid];
-            var seconds = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : ((info && info.seconds) || 0);
-            api('POST', '/api/game/play/' + gid, { action: 'end', seconds: seconds });
+            if (remainingRun === 0) delete state.sessions[gid];
+            if (remainingRun === 0 && startedAt) {
+                var seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+                api('POST', '/api/game/play/' + gid, { action: 'end', seconds: seconds });
+            }
             // 退出后上传云端存档（P1 单设备闭环；P2 冲突弹窗裁决）；非阻塞，失败仅提示
             if (DESKTOP && DESKTOP.gameSaveSync) {
                 DESKTOP.gameSaveSync(saveSyncPayload(gid, 'push')).then(function (sv) {

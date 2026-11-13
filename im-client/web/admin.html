@@ -1492,6 +1492,17 @@
                     </select>
                     <input id="gm-f-steamappid" class="admin-input" placeholder="Steam AppId（SmartSteamEmu 联机匹配大厅用，纯数字，可空；如 381210）" maxlength="32">
                 </div>
+                <!-- 多实例控制：SmartSteamEmu 游戏不支持多开（ini 全局单份并发互覆盖），直接启动游戏可多实例并行 -->
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:14px;align-items:center;">
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;"><input type="checkbox" id="gm-f-allow-multi">允许多实例启动</label>
+                    <span style="font-size:13px;color:var(--text-muted);">最多</span>
+                    <input id="gm-f-max-instances" type="number" min="1" max="100" value="1" class="admin-input gm-num-input" style="max-width:100px;">
+                    <span style="font-size:13px;color:var(--text-muted);">个实例（1~100，SmartSteamEmu 游戏锁定为 1）</span>
+                </div>
+                <!-- 启动参数隐藏：商户不想让用户看到启动参数模板（如含机密标识）时开启；开启后客户端属性弹窗隐藏参数编辑区，强制用商户模板 -->
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:14px;align-items:center;">
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;"><input type="checkbox" id="gm-f-args-hidden">隐藏启动参数（用户不可见、不可编辑，强制使用平台模板）</label>
+                </div>
                 <!-- 端口透传转发规则（每行一条：协议:本机端口=远端地址:远端端口）：客户端启动该游戏时
                      自动在本机 127.0.0.1:本机端口 开启监听透传到远端，游戏退出自动关闭；服务端保存时逐条校验 -->
                 <textarea id="gm-f-pf" class="admin-input gm-desc-input" rows="2" placeholder="端口透传转发规则（可空；每行一条——直连：协议:本机端口=远端地址:远端端口，如 tcp:7777=1.2.3.4:7777；网关：g协议:本机端口=网关端口[@网关名]，如 gtcp:7777=18001、gtcp:7777=18001@gw-hz）"></textarea>

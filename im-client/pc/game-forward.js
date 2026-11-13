@@ -537,11 +537,20 @@ function stopUdpGw(fw) {
 // ----- start：tag 维度全量开启（all-or-nothing，任一失败回滚已开启项并返回首个错误） -----
 // 规则来源（渲染层经 game:launch / local-game:launch payload 传入，主进程二次校验）：
 //   上架游戏 = 管理端游戏配置 port_forwards；本地游戏 = 属性弹窗转发规则
+// 引用计数语义：同 tag 多实例并发时复用首个绑定，后续实例 refCount++ 直接返回 reused:true；
+// stop 内部 refCount--，归零才真关。tag 格式 "game:{gameId}"，多实例同 tag 天然命中。
 function start(tag, rules, gwPack) {
     var v = validateRules(rules, gwPack);
     if (!v.ok) return Promise.resolve({ ok: false, err: v.err });
     if (v.rules.length === 0) return Promise.resolve({ ok: true, started: 0 });
-    if (fwMap.has(tag)) stop(tag); // 幂等重启：同 tag 残留先收口（崩溃恢复/重复启动场景）
+    // —— 引用计数复用：已有同 tag 转发正在运行（refCount > 0）→ 直接 +1 返回，跳过绑定 ——
+    var existing = fwMap.get(tag);
+    if (existing && existing.refCount > 0) {
+        existing.refCount++;
+        log('[pf] ' + tag + ' 复用（refCount=' + existing.refCount + '）');
+        return Promise.resolve({ ok: true, started: 0, reused: true });
+    }
+    if (existing) stopForwarders(existing.forwards); // 残留 entry（refCount 已归零但未清理）→ 先清
     var started = [];
     var jobs = v.rules.map(function (r) {
         // 按 mode 分发：空串=直连（现状语义）；gateway=经远程加密网关（TLS+AEAD），
@@ -570,7 +579,7 @@ function start(tag, rules, gwPack) {
         started.forEach(function (s) {
             forwards.set(s.rule.proto + ':' + s.rule.listen, { rule: s.rule, fw: s.fw });
         });
-        fwMap.set(tag, { forwards: forwards, rules: v.rules });
+        fwMap.set(tag, { forwards: forwards, rules: v.rules, refCount: 1 });
         var brief = v.rules.map(function (r) {
             var dst = (r.mode === 'gateway') ? ('网关' + (r.gw ? '@' + r.gw : '') + ':' + r.remote_port) : (r.remote_host + ':' + r.remote_port);
             return (r.mode === 'gateway' ? 'g' : '') + r.proto + ':' + r.listen + '→' + dst;
@@ -578,6 +587,10 @@ function start(tag, rules, gwPack) {
         log('[pf] ' + tag + ' 开启 ' + v.rules.length + ' 条：' + brief);
         return { ok: true, started: v.rules.length };
     });
+}
+
+function stopForwarders(forwards) {
+    forwards.forEach(function (f) { stopForwarder(f.fw); });
 }
 
 // forwarder 统一收口分发（direct/gateway 两模式资源形态不同）
@@ -589,10 +602,16 @@ function stopForwarder(fw) {
     }
 }
 
-// ----- stop：tag 维度收口（幂等；缺省 tag = 全部） -----
+// ----- stop：tag 维度收口（引用计数递减；归零才真关；缺省 tag = 全部 force 关闭） -----
 function stop(tag) {
+    if (!tag) return stopAll();
     var entry = fwMap.get(tag);
     if (!entry) return 0;
+    entry.refCount--;
+    if (entry.refCount > 0) {
+        log('[pf] ' + tag + ' 预留（refCount=' + entry.refCount + '）');
+        return 0; // 还有其他实例在用，不真关
+    }
     fwMap.delete(tag);
     var n = 0;
     entry.forwards.forEach(function (f) {
@@ -603,11 +622,26 @@ function stop(tag) {
     return n;
 }
 
+// stopForce：强制关闭（忽略 refCount，调试/重置用）
+function stopForce(tag) {
+    if (!tag) return stopAll();
+    var entry = fwMap.get(tag);
+    if (!entry) return 0;
+    fwMap.delete(tag);
+    var n = 0;
+    entry.forwards.forEach(function (f) {
+        n++;
+        stopForwarder(f.fw);
+    });
+    log('[pf] ' + tag + ' 强制关闭 ' + n + ' 条转发（原 refCount=' + entry.refCount + '）');
+    return n;
+}
+
 function stopAll() {
     var n = 0;
     var tags = [];
     fwMap.forEach(function (v, t) { tags.push(t); });
-    tags.forEach(function (t) { n += stop(t); });
+    tags.forEach(function (t) { n += stopForce(t); }); // stopAll 语义=全部收口，忽略 refCount 强制关
     return n;
 }
 
@@ -631,4 +665,4 @@ function list() {
 
 function setLogger(fn) { logger = (typeof fn === 'function') ? fn : null; }
 
-module.exports = { start: start, stop: stop, stopAll: stopAll, list: list, setLogger: setLogger, validateRules: validateRules };
+module.exports = { start: start, stop: stop, stopForce: stopForce, stopAll: stopAll, list: list, setLogger: setLogger, validateRules: validateRules };

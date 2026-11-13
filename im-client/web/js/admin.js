@@ -6344,6 +6344,11 @@
         // 功能二期：联机端口登记（逗号分隔多端口；开局实测新端口由服务端自动累加进这里）
         $('gm-f-ports-tcp').value = d ? (d.online_ports_tcp || '') : '';
         $('gm-f-ports-udp').value = d ? (d.online_ports_udp || '') : '';
+        // 多实例控制回填（防御 null：HTML 未就绪时跳过，不阻断编辑器）
+        var _elAM = $('gm-f-allow-multi'), _elMI = $('gm-f-max-instances'), _elAH = $('gm-f-args-hidden');
+        if (_elAM) _elAM.checked = !!(d && d.allow_multi_instance);
+        if (_elMI) _elMI.value = Math.max(1, Math.min(100, (d && d.max_instances) || 1));
+        if (_elAH) _elAH.checked = !!(d && d.launch_args_hidden);
         // 联机方式三态回填（详情返回 net_mode；空=跟随全局）+ supernode 多选回填（联动显隐）
         var gmNm = d ? (d.net_mode || '') : '';
         document.querySelectorAll('input[name="gm-f-netmode"]').forEach(function (r) {
@@ -7105,6 +7110,10 @@
             // AppId 纯数字联机匹配用，服务端清洗非法值归空）
             steam_emu: parseInt($('gm-f-steamemu').value, 10) || 0,
             steam_app_id: $('gm-f-steamappid').value.trim(),
+            // 多实例控制（服务端范围校验 [1,100]，SmartSteamEmu 游戏客户端硬锁单实例）
+            allow_multi_instance: !!($('gm-f-allow-multi') && $('gm-f-allow-multi').checked),
+            max_instances: Math.max(1, Math.min(100, parseInt(($('gm-f-max-instances') && $('gm-f-max-instances').value), 10) || 1)),
+            launch_args_hidden: !!($('gm-f-args-hidden') && $('gm-f-args-hidden').checked),
             // 端口透传转发规则（JSON 数组串，服务端清洗校验；空=不开启转发）
             port_forwards: pfJSON,
             // 仅写库网关（无转发规则游戏的写库归属；空=纯游戏不写库；服务端格式校验）
@@ -7168,6 +7177,10 @@
             // 启动方式/Steam AppId 全量回写（详情含字段）：防上架/下架切换时清空模拟器标记
             steam_emu: (d.steam_emu === 1 ? 1 : 0),
             steam_app_id: d.steam_app_id || '',
+            // 多实例控制全量回写（详情含字段）：防上架/下架切换时重置多开配置
+            allow_multi_instance: !!d.allow_multi_instance,
+            max_instances: Math.max(1, Math.min(100, d.max_instances || 1)),
+            launch_args_hidden: !!d.launch_args_hidden,
             // 端口透传转发规则全量回写（详情含字段，JSON 数组串原样透传）：防上架/下架切换时清空
             port_forwards: d.port_forwards || '',
             // 仅写库网关全量回写（详情含字段）：防上架/下架切换时清空仅写库游戏归属

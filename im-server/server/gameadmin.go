@@ -1066,6 +1066,13 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	if u.Status != 0 && u.Status != 1 {
 		u.Status = g.Status
 	}
+	// max_instances 范围校验（1~100，防误配过大）
+	if u.MaxInstances < 1 {
+		u.MaxInstances = 1
+	}
+	if u.MaxInstances > 100 {
+		u.MaxInstances = 100
+	}
 	updates := map[string]interface{}{
 		"name": u.Name, "short_desc": u.ShortDesc, "description": u.Description,
 		"cover": u.Cover, "banner": u.Banner, "screenshots": u.Screenshots, "tags": u.Tags, "videos": vids,
@@ -1073,9 +1080,12 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
 		"direct_base_url": u.DirectBaseURL,
 		"launch_exe":      u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
+		"launch_args_hidden": u.LaunchArgsHidden,
 		"steam_emu": u.SteamEmu, "steam_app_id": u.SteamAppId,
 		"port_forwards": u.PortForwards,
-		"dbwrite_gw":    u.DbwriteGw,
+		"allow_multi_instance": u.AllowMultiInstance,
+		"max_instances":        u.MaxInstances,
+		"dbwrite_gw":           u.DbwriteGw,
 		// 积分充值配置（gamerecharge.go 清洗后的归一值全量回写）
 		"recharge_enabled":   u.RechargeEnabled,
 		"recharge_gw":        u.RechargeGw,

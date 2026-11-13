@@ -961,6 +961,10 @@
         // 1. **只清 autoLogin，不清密码！**（防止退出后自动登回某个账号）
         for (var j = 0; j < arr.length; j++) { arr[j].autoLogin = false; }
         saveAccounts(arr);
+        // 阶段三百二十八：标记"用户主动退出"——防止 autoLogin IIFE fallback 绕过 autoLogin 清空又自动登回
+        // 用户直接关窗口/崩溃 → 无此标记 → 下次启动 fallback 自动登录（用户期望：退出重开自动恢复）
+        // 用户点"退出登录" → 有此标记 → 下次启动跳过自动登录（用户期望：退出就是退出了）
+        try { localStorage.setItem('im_manual_logout', '1'); } catch (e) {}
         // 2. 清 im_auth 凭据指针 + 网盘 token（绑定当前会话的）
         try { localStorage.removeItem('im_auth'); } catch (e) {}
         try { localStorage.removeItem('drive_token'); } catch (e) {}
@@ -1113,15 +1117,28 @@
     // 连接失败或登录失败时再回退到登录界面（见 LOGIN_RESP 失败分支与 im_connect_failed 监听）
     // 阶段三百零九修复：多账号场景下只要有 autoLogin=true 的账号就自动连接，
     // 不再因为账号数>=2 就忽略 autoLogin 字段（用户勾选了"自动登录选中账号"就是明确意图）
+    // 阶段三百二十八修复：首次登录后 autoLogin 默认为 false（saveAuth 未设置该字段），
+    // 退出客户端重开时 autoLogin IIFE 找不到 autoLogin=true 账号就放弃自动登录——
+    // 现补齐 fallback 逻辑：没有 autoLogin=true 账号时回退到最近登录（arr[0]）且有密码的账号，
+    // 与 getSavedAuth() 保持一致（getSavedAuth 定义时已写好回退但 autoLogin IIFE 未同步）
     (function autoLogin() {
         var saved = null;
         try {
-            var arr = loadAccounts();
-            // 遍历查找 autoLogin=true 且有密码的账号（全局只允许一个 autoLogin，保存逻辑已保证）
-            for (var ai = 0; ai < arr.length; ai++) {
-                if (arr[ai].autoLogin && arr[ai].p) {
-                    saved = { u: arr[ai].u, p: arr[ai].p };
-                    break;
+            // 用户主动退出登录后，跳过自动登录（与 clearAuth 写入 im_manual_logout 联动）
+            var manualLogout = false;
+            try { manualLogout = localStorage.getItem('im_manual_logout') === '1'; } catch (e) {}
+            if (!manualLogout) {
+                var arr = loadAccounts();
+                // 优先遍历查找 autoLogin=true 且有密码的账号（全局只允许一个 autoLogin，保存逻辑已保证）
+                for (var ai = 0; ai < arr.length; ai++) {
+                    if (arr[ai].autoLogin && arr[ai].p) {
+                        saved = { u: arr[ai].u, p: arr[ai].p };
+                        break;
+                    }
+                }
+                // 阶段三百二十八补丁：无 autoLogin 标记时回退到最近登录且有密码的账号（修复首次登录后重启不自动登录）
+                if (!saved && arr.length > 0 && arr[0].p) {
+                    saved = { u: arr[0].u, p: arr[0].p };
                 }
             }
         } catch (e) {}
@@ -9003,6 +9020,8 @@
             // 重连/登录场景 clearAuth() 已把 _loggedOut 置 true，而积分设置（下方）需要调用
             // setPointsBalance（内部首行 if _loggedOut return）；先解锁再设积分，保证重连也能刷分
             _loggedOut = false;
+            // 阶段三百二十八：登录成功 → 清除"用户主动退出"标记（下次关窗口重开可自动恢复登录）
+            try { localStorage.removeItem('im_manual_logout'); } catch (e) {}
             // 登录持久化：登录成功保存凭据，刷新页面时自动重登保持登录状态
             // window._lastPassword 为本次连接使用的密码（socket.js connect 时记录）
             // 阶段三百零九：QR码登录的密码是 qrc:xxx 临时令牌，不保存为凭据
