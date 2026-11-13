@@ -160,6 +160,8 @@ rem productName=im-client Ê±²úÎï¿½Èë¼´ im-client.exe£»¾ÉÖÐÎÄ productName ²úÎïÐè¸
 if exist "%BIN_DIR%\¼´Ê±Í¨Ñ¶.exe" ren "%BIN_DIR%\¼´Ê±Í¨Ñ¶.exe" "im-client.exe"
 rem elevator launcher: copy alongside client when built (shortcuts point to it)
 if exist "%~dp0elevator\elevator.exe" copy /y "%~dp0elevator\elevator.exe" "%BIN_DIR%" >nul
+rem stage 300: incremental hot-update guardian updater.exe (sibling of elevator.exe + im-client.exe in bin/)
+if exist "%~dp0updater\updater.exe" copy /y "%~dp0updater\updater.exe" "%BIN_DIR%" >nul
 if not exist "%BIN_DIR%\im-client.exe" (
     echo [´íÎó] ²¿ÊðÊ§°Ü£¬Çë¼ì²é %BIN_DIR% Ä¿Â¼
     pause
