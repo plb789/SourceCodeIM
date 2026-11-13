@@ -14,7 +14,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process'); // ZIP 打包版本解压阶段（7z 子进程，spawn 不经 shell）
+const { spawn, execFile } = require('child_process'); // ZIP 打包版本解压阶段（7z 子进程，spawn 不经 shell）；进程存活检测用 execFile(tasklist)
 const { app } = require('electron'); // 打包态 resources 路径锚点（7z 组件定位，与 BT 引擎同构）
 
 const MAX_PARALLEL = 2;    // 跨任务并行下载上限，超出排队
@@ -993,22 +993,39 @@ class GameDownloadManager extends EventEmitter {
 
     // 解压后提交：原 _finish 的完成路径（rename 换入正式目录 + done 事件）
     _finishCommit(task) {
+        const self = this;
         task.state = 'done';
         task.received = task.total;
         task._speed = 0;
         task._diskSpeed = 0;
         task._lastEmit = Date.now();
-        const cm = this._commit(task);
-        if (cm && cm.ok === false) {
-            task.state = 'error'; // 换入失败（暂存保留，可重试下载恢复）
+        // _commit 改为 async（含 rename 失败后的重试等待 + 进程检测），外层 Promise 收口
+        // 旧调用方（_finish）已在同步路径里走 _finishCommit，此处不 await 不影响 —— error 态在回调内 setState
+        // 若取消等外部中断发生在等待期间（task.state !== 'downloading'），_commit 内部已做状态裁决
+        Promise.resolve(self._commit(task)).then(function (cm) {
+            // 竞态守卫：commit 等待重试期间用户可能已 cancel/error
+            if (task.state === 'cancelled' || task.state === 'error') {
+                // cancel 已从 tasks 表删除任务并发了 cancel 事件，不再发 error 或 done
+                return;
+            }
+            if (cm && cm.ok === false) {
+                task.state = 'error'; // 换入失败（暂存保留，可重试下载恢复）
+                task._speed = 0;
+                self._emit(task, '', cm.message || '安装目录换入失败', true);
+                self._schedule();
+                return;
+            }
+            self.emit('progress', self._evt(task, ''));
+            self.emit('done', { taskId: task.taskId, gameId: task.gameId, installDir: task.installDir, username: task.username });
+            self._schedule(); // 释放并行槽位，调度排队任务
+        }).catch(function (e) {
+            // 同样竞态守卫
+            if (task.state === 'cancelled' || task.state === 'error') return;
+            task.state = 'error';
             task._speed = 0;
-            this._emit(task, '', cm.message || '安装目录换入失败', true);
-            this._schedule();
-            return;
-        }
-        this.emit('progress', this._evt(task, ''));
-        this.emit('done', { taskId: task.taskId, gameId: task.gameId, installDir: task.installDir, username: task.username });
-        this._schedule(); // 释放并行槽位，调度排队任务
+            self._emit(task, '', '安装目录换入异常：' + ((e && e.message) || e), true);
+            self._schedule();
+        });
     }
 
     // —— ZIP 打包版本解压阶段（packType=1 单 ZIP / 2 分卷 ZIP，内置 7z 通吃）——
@@ -1161,47 +1178,181 @@ class GameDownloadManager extends EventEmitter {
     }
 
     // 暂存目录 → 正式目录同盘一次性换入（Steam 同款）：旧版本先挪 .old-<ts> 腾位，rename 失败回滚；
-    // 换入成功异步删除旧版本备份（大目录递归删除不阻塞主进程，残留可后续清理）；返回 {ok} 或 {ok:false,message}
+    // 换入成功异步删除旧版本备份（大目录递归删除不阻塞主进程，残留可后续清理）；返回 Promise<{ok,message?}>
+    // 含 rename 失败重试（最多 5 次，间隔 2s，给杀毒软件/资源管理器释放文件句柄留时间）+ 进程占用检测
     _commit(task) {
         const finalDir = task.installDir;
         const stagingDir = task.stagingDir;
         const root = task.root;
-        if (!stagingDir || !fs.existsSync(stagingDir)) return { ok: true }; // 无暂存内容（全部秒跳）：正式目录已就绪
+        // 无暂存内容（全部秒跳）：正式目录已就绪，直接成功
+        if (!stagingDir || !fs.existsSync(stagingDir)) return Promise.resolve({ ok: true });
         // 安全校验（致命防呆）：finalDir 必须是 root 的子目录且末级目录名等于 slug。
         // 历史 bug：库记录 install_path 误存安装根（H:\CdonlgameApp）被当作 finalDir 直传，
         // 导致 renameSync 把整个安装根挪走、所有游戏丢失。此处若校验失败直接拒绝。
+        let slug = '';
         try {
             const fNorm = path.resolve(finalDir);
             const rNorm = path.resolve(root);
             const rel = path.relative(rNorm, fNorm);
             const leaf = path.basename(fNorm);
-            const slug = String(task.slug || '');
+            slug = String(task.slug || '');
             // slug 必须非空（start 已校验），为空说明 task 元数据异常，宁拒勿放行
             if (!slug || fNorm === rNorm || rel === '' || rel.startsWith('..') || path.isAbsolute(rel) ||
                 leaf.toLowerCase() !== slug.toLowerCase()) {
-                return { ok: false, message: '安装目录参数异常：finalDir 不是安装根的子目录或与 slug 不匹配，已拒绝执行以防数据丢失' };
+                return Promise.resolve({ ok: false, message: '安装目录参数异常：finalDir 不是安装根的子目录或与 slug 不匹配，已拒绝执行以防数据丢失' });
             }
         } catch (e) {
-            return { ok: false, message: '安装目录校验失败：' + e.message };
+            return Promise.resolve({ ok: false, message: '安装目录校验失败：' + e.message });
         }
-        let bak = '';
-        try {
-            if (fs.existsSync(finalDir)) {
-                bak = finalDir + '.old-' + Date.now();
-                fs.renameSync(finalDir, bak); // 同盘 rename，O(1)
-            }
-        } catch (e) {
-            return { ok: false, message: '旧版本目录腾位失败：' + e.message };
-        }
-        try {
-            fs.renameSync(stagingDir, finalDir);
-        } catch (e) {
-            if (bak) { try { fs.renameSync(bak, finalDir); } catch (e2) { /* 回滚失败：备份仍在，交用户手动处理 */ } }
-            return { ok: false, message: '安装目录换入失败：' + e.message };
-        }
-        if (bak) fs.rm(bak, { recursive: true, force: true }, function () { /* 备份清理失败忽略（残留 .old-*） */ });
-        this._pruneStagingParent(stagingDir);
-        return { ok: true };
+
+        // === 重试常量 ===
+        const MAX_RETRY = 5;       // 最大重试次数
+        const RETRY_INTERVAL = 2000; // 每次重试间隔（ms）—— 杀毒软件实时扫描通常 1-2s 释放句柄
+        const self = this;
+
+        return new Promise(function (resolve) {
+            // 1) 旧版本目录腾位（rename 到 .old-<ts>）
+            const tryBakRename = function () {
+                let bak = '';
+                try {
+                    if (fs.existsSync(finalDir)) {
+                        bak = finalDir + '.old-' + Date.now();
+                        fs.renameSync(finalDir, bak); // 同盘 rename，O(1)
+                    }
+                } catch (e) {
+                    return { ok: false, bak: bak, err: e };
+                }
+                return { ok: true, bak: bak };
+            };
+
+            // 2) 暂存目录 → 正式目录换入
+            const tryStagingRename = function () {
+                try {
+                    fs.renameSync(stagingDir, finalDir);
+                    return { ok: true };
+                } catch (e) {
+                    return { ok: false, err: e };
+                }
+            };
+
+            // 取消守卫：用户在等待重试期间取消任务（cancel 置 state='cancelled' 并移出 tasks 表）——
+            // 我们放弃 commit，暂存目录保留，下次重下时断点续传。用 resolved 标志防多次 resolve
+            let settled = false;
+            const cancelGuard = function () {
+                if (settled) return true;
+                if (task.state === 'cancelled' || task.state === 'error') {
+                    settled = true;
+                    resolve({ ok: false, message: '下载已取消' });
+                    return true;
+                }
+                return false;
+            };
+
+            // 3) 主循环：腾位 → 换入 → 清理备份；失败则重试腾位（已换入的不再回滚）
+            const attempt = function (tryCount) {
+                if (cancelGuard()) return;
+                const bakRes = tryBakRename();
+                if (!bakRes.ok) {
+                    // 腾位失败（EPERM 等）：进入重试流程
+                    handleBakFail(bakRes.err, tryCount);
+                    return;
+                }
+                // 腾位成功，尝试换入
+                const stageRes = tryStagingRename();
+                if (!stageRes.ok) {
+                    // 换入失败（极其罕见：同盘同一磁盘不应该），回滚备份
+                    if (bakRes.bak) { try { fs.renameSync(bakRes.bak, finalDir); } catch (e2) { /* 回滚失败：备份仍在，交用户手动处理 */ } }
+                    settled = true;
+                    resolve({ ok: false, message: '安装目录换入失败：' + stageRes.err.message });
+                    return;
+                }
+                // 换入成功，异步清理备份
+                settled = true;
+                if (bakRes.bak) fs.rm(bakRes.bak, { recursive: true, force: true }, function () { /* 清理失败忽略 */ });
+                self._pruneStagingParent(stagingDir);
+                resolve({ ok: true });
+            };
+
+            // 腾位失败处理：检测占用 → 决定是否重试 → 翻译错误
+            const handleBakFail = function (err, tryCount) {
+                if (cancelGuard()) return;
+                const code = err && err.code;
+                const isEperm = code === 'EPERM' || code === 'EACCES' || (err && /not permitted|permission|denied/i.test(err.message || ''));
+                // 非权限类错误直接放弃（磁盘错误、路径非法等重试没用）
+                if (!isEperm) {
+                    settled = true;
+                    resolve({ ok: false, message: '旧版本目录腾位失败：' + (err.message || String(err)) });
+                    return;
+                }
+                // 还没到最大重试次数 → 先检测进程占用，再决定等还是放弃
+                if (tryCount < MAX_RETRY) {
+                    self._detectRunningGame(finalDir).then(function (running) {
+                        if (cancelGuard()) return;
+                        if (running) {
+                            // 进程明确在运行，不必等杀毒软件，直接给明确提示（重试也没用——游戏不关永远占用）
+                            settled = true;
+                            resolve({ ok: false, message: '旧版本目录被占用：检测到游戏进程 "' + running + '" 仍在运行，请先关闭游戏再重试下载' });
+                            return;
+                        }
+                        // 没检测到进程 → 大概率是杀毒软件扫描/资源管理器句柄，等一会再试
+                        setTimeout(function () { attempt(tryCount + 1); }, RETRY_INTERVAL);
+                    });
+                    return;
+                }
+                // 5 次都失败了，做最后一次进程检测来决定提示文案
+                self._detectRunningGame(finalDir).then(function (running) {
+                    if (cancelGuard()) return;
+                    settled = true;
+                    if (running) {
+                        resolve({ ok: false, message: '旧版本目录被占用：游戏进程 "' + running + '" 仍在运行，请先关闭游戏后再重试下载' });
+                    } else {
+                        resolve({ ok: false, message: '旧版本目录腾位失败（重试 ' + MAX_RETRY + ' 次仍被占用）：' +
+                            '可能是杀毒软件正在扫描、Windows 资源管理器打开了该目录，或其他程序持有文件。' +
+                            '请关闭可能占用的程序后再重试下载' });
+                    }
+                });
+            };
+
+            attempt(0);
+        });
+    }
+
+    // 检测游戏目录下是否有 exe 正在运行（Windows tasklist 映像名过滤）
+    // 返回 Promise<string|null> —— 正在运行的进程名（如 "露娜1.exe"），没检测到返回 null
+    _detectRunningGame(finalDir) {
+        return new Promise(function (resolve) {
+            // 1) 扫 finalDir 下所有 .exe（含子目录）
+            const exes = [];
+            const walk = function (d) {
+                let entries;
+                try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+                for (let i = 0; i < entries.length; i++) {
+                    const full = path.join(d, entries[i].name);
+                    if (entries[i].isDirectory()) walk(full);
+                    else if (entries[i].isFile() && /\.exe$/i.test(entries[i].name)) exes.push(entries[i].name);
+                }
+            };
+            try { walk(finalDir); } catch (e) { resolve(null); return; }
+            if (!exes.length) { resolve(null); return; }
+
+            // 2) tasklist 一次性列出所有运行中的进程，然后匹配
+            //    tasklist /FO CSV /NH 每行："映像名","PID","会话名","会话#","内存使用"
+            //    比逐个 /FI "IMAGENAME eq" 高效太多（一条命令搞定）
+            execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 8000 }, function (err, stdout) {
+                if (err) { resolve(null); return; } // tasklist 调用失败，静默跳过
+                const lines = String(stdout || '').split(/\r?\n/);
+                const runningSet = {};
+                for (let i = 0; i < lines.length; i++) {
+                    // CSV 格式："Process Name.exe","12345","...","...","... K"
+                    const m = /^"([^"]+\.exe)"\s*,/.exec(lines[i]);
+                    if (m) runningSet[m[1].toLowerCase()] = true;
+                }
+                for (let j = 0; j < exes.length; j++) {
+                    if (runningSet[exes[j].toLowerCase()]) { resolve(exes[j]); return; }
+                }
+                resolve(null);
+            });
+        });
     }
 
     // 清理空的暂存父目录 <root>/downloading（非空/不存在/失败一律忽略）

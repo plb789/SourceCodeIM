@@ -543,8 +543,16 @@ func (r *dbwriteRunner) execOne(e dbwriteEntry) error {
 	switch r.cfg.Strategy {
 	case "insert":
 		args := r.bindArgs(r.ins.Args, val)
-		_, err := r.db.Exec(r.ins.SQL, args...)
-		return err
+		if _, err := r.db.Exec(r.ins.SQL, args...); err != nil {
+			if isDupKeyErr(err) {
+				// 账号已存在（重置同步重写/重复拉取场景）：insert 模板无改写手段，重试永远 1062，
+				// 视为成功并回执让条目收敛——密码是否需要更新由商户选择的策略决定（要更新请用 upsert）
+				log.Printf("[dbwrite] %s 账号已存在（insert 模板幂等忽略，回执收敛）", e.Username)
+				return nil
+			}
+			return err
+		}
+		return nil
 	case "update":
 		args := r.bindArgs(r.upd.Args, val)
 		_, err := r.db.Exec(r.upd.SQL, args...)
@@ -568,10 +576,34 @@ func (r *dbwriteRunner) execOne(e dbwriteEntry) error {
 		if n, err := res.RowsAffected(); err == nil && n > 0 {
 			return nil
 		}
+		// UPDATE 影响 0 行有两种可能：① 账号不在库（INSERT 补建，正常路径）；
+		// ② 账号在库且密码相同——MySQL 默认返回"改变行数"而非"匹配行数"，值未变即报 0，
+		// 此时执行 INSERT 必撞 1062。场景 ② 行内密码已是目标值，视为成功并回执；
+		// 若不容忍：1062 → 不回执 → 永远待写 → 每 30s 重试刷屏，重置同步永远无法收敛
 		args = r.bindArgs(r.ins.Args, val)
-		_, err = r.db.Exec(r.ins.SQL, args...)
-		return err
+		if _, err := r.db.Exec(r.ins.SQL, args...); err != nil {
+			if isDupKeyErr(err) {
+				log.Printf("[dbwrite] %s 账号已存在且密码一致（UPDATE 零命中 + INSERT 撞唯一键，幂等忽略）", e.Username)
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
+}
+
+// isDupKeyErr 唯一键冲突识别（四库统一，特征串匹配而非驱动类型断言——纯 Go 驱动错误类型各异：
+// MySQL "Duplicate entry" / PG "duplicate key ... unique constraint" / MSSQL "UNIQUE KEY" 或
+// "duplicate key" / SQLite "UNIQUE constraint failed"；特征串跨版本稳定，误报面为零）
+func isDupKeyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "duplicate entry") ||
+		strings.Contains(s, "duplicate key") ||
+		strings.Contains(s, "unique constraint") ||
+		strings.Contains(s, "unique key")
 }
 
 // bindArgs 按模板占位符顺序生成参数切片

@@ -38,7 +38,11 @@
     var connected = false;
     // 登录失败提示修复：登录成功标记——登录成功前连接断开不自动重连，
     // 修复密码错误后服务端关闭连接、前端无条件重连导致"失败→重连→失败"无限循环且每次无提示
+    // 阶段三**：loginOk 自动镜像到 window.__imSocketLoginOk——PC 主进程 executeJavaScript 读取
+    // 这个标记来判断渲染层 WS 是否稳定，从而决定是否可以安全地触发 web-cache 静默换新 reload。
+    // 注意：socket 闭包内部通过 syncLoginOk(v) 同步，闭包外部直接 window.__imSocketLoginOk = loginOk
     var loginOk = false;
+    function syncLoginOk(v) { loginOk = v; window.__imSocketLoginOk = v; }
     // 阶段一百三十五：最近一次服务端 ERROR 帧到达时间——登录拒绝/账号封禁踢出场景
     // 服务端会先下发 ERROR 帧再立即关连接，onclose 据此区分"服务端拒绝"与"网络断开"
     var lastRejectAt = 0;
@@ -346,7 +350,7 @@
             ws = null;
         }
         connected = false;
-        loginOk = false;
+        syncLoginOk(false);
         currentUsername = '';
         qrLoginConn = false;
         // P0 修复：清原生 APP 后台保活/交接状态——否则下次登录 bgDoStart 因 bgStartDone=true 直接 return，
@@ -482,7 +486,7 @@
             // bgHoldReconnect 判 false，无保护会误置 loginOk=false 回登录页（实测 100% 复现）
             if (Date.now() - lastRejectAt < 1000 && !bgHoldReconnect()
                 && !bgHandover && !(nativeBG && Date.now() - bgHandoverAt < 8000)) {
-                loginOk = false;
+                syncLoginOk(false);
                 bgResetStart();
             }
             // 阶段二百五十六：交接型断开（kick ERROR 帧丢失/排迟未到而 close 先到时按同口径判定）
@@ -700,7 +704,7 @@
                     bgMissedFrames = true;
                     return;
                 }
-                loginOk = false;
+                syncLoginOk(false);
                 bgResetStart();
                 if (reconnectTimer) {
                     clearTimeout(reconnectTimer);
@@ -719,14 +723,14 @@
             // 登录失败提示修复：记录登录成功标记（新格式 content 为 JSON result='ok'，旧格式 content 为 'ok' 字符串），
             // 登录成功前连接断开不自动重连
             if (msg.content === 'ok') {
-                loginOk = true;
+                syncLoginOk(true);
             }
             // 登录响应携带服务端撤回时间窗口（recall_window 秒），供撤回菜单判断使用
             // 兼容旧格式：content 为 "ok" 字符串时保持默认 120 秒
             try {
                 var info = JSON.parse(msg.content);
                 if (info && info.result === 'ok') {
-                    loginOk = true;
+                    syncLoginOk(true);
                 }
                 // 账号归口（扫码 + 密码登录统一）：服务端 hub 以 DB 规范用户名注册（server.go: c.username = user.Username），
                 // MySQL 排序规则大小写不敏感——登录输入 PLB1 也能命中 plb1 账号：登录成功但本地 currentUsername

@@ -731,6 +731,9 @@ function createWindow() {
     };
     mainWindow.webContents.once('did-finish-load', function () {
         console.log('[BOOT] 主窗口页面加载完成（即将显示主窗口） +' + (Date.now() - BOOT_T0) + 'ms');
+        // 阶段三**：锚定启动宽限期起点——15s 内绝不触发 quietReloadWhenIdle 的 reload 决策，
+        // 给 autoLogin 留足 WS 连接 + 登录握手时间，避免焦点抖动误触发 reload
+        bootStableAt = Date.now();
         revealMainWindow();
 
         // 阶段三百三十二：first instance 命令行参数解析 —— 快捷方式启动链路
@@ -6296,33 +6299,61 @@ app.whenReady().then(async function () {
     registerDisplayMediaHandler(); // 阶段一百四十四：会议桌面共享放行（session 须 ready 后注册）
     // 阶段三百零三：网页资源"静默换新"调度——同步到新资源后不再立即 reload 打断启动，
     // 首载未完成则等加载完成；用户聚焦使用中则等切后台/最小化再换新；未聚焦则直接换新
+    // 阶段三**：启动宽限期——did-finish-load 后 15s 内绝不 reload，给 autoLogin 足够时间
+    // 完成 WS 连接 + 登录握手，避免焦点抖动/瞬时 blur 把启动流程打断（实测：sync 检测到变更
+    // 后 onSynced 在 did-finish-load 附近触发，焦点从 splashWin 切到 mainWin 期间 isFocused()
+    // 会短暂返回 false → 直接走 reload → 把刚建立的 WS 连接掐断 → 用户看到"登录后秒退"）
     var pendingWebReload = false;
     var quietReloadArmed = false;
+    var bootStableAt = 0; // did-finish-load 时刻（毫秒），启动宽限期锚点
     function quietReloadWhenIdle() {
         if (!pendingWebReload) return;
         if (!mainWindow || mainWindow.isDestroyed()) { pendingWebReload = false; return; }
         var wc = mainWindow.webContents;
         if (wc.isLoading()) { wc.once('did-finish-load', quietReloadWhenIdle); return; }
+        // 启动宽限期保护：did-finish-load 后 15s 内只登记 pending，不做任何 reload 决策
+        if (bootStableAt && (Date.now() - bootStableAt < 15000)) return;
         if (mainWindow.isFocused()) {
             if (quietReloadArmed) return;
             quietReloadArmed = true;
             mainWindow.once('blur', function () {
                 quietReloadArmed = false;
-                setTimeout(quietReloadWhenIdle, 500);
+                // 阶段三**：blur 防抖 3s——系统通知/弹窗/最小化动画等瞬时抖动不应触发换新，
+                // 只有用户真的切走窗口超过 3s 才认为"空闲"
+                setTimeout(quietReloadWhenIdle, 3000);
             });
-            setTimeout(quietReloadWhenIdle, 30000); // 兜底：偶发 blur 丢失时 30s 后重新判断窗口状态
+            // 阶段三**：兜底 60s 而非 30s——给连接稳定 + 用户阅读界面留够时间，
+            // 且兜底只是"重新判断"而非直接 reload，不会误杀
+            setTimeout(quietReloadWhenIdle, 60000);
             return;
         }
-        pendingWebReload = false;
-        // 阶段三百零三：换新前探测未发送内容（聊天输入框 / 工作台编辑草稿），
-        // 有未保存内容则放弃本轮换新——缓存已更新，下次启动自然加载新版本，绝不吞用户输入；
-        // 探测失败按"有内容"保守处理（通话窗口为独立窗口，不受主窗换新影响）
-        wc.executeJavaScript("(function(){try{var m=document.getElementById('message-input');if(m&&m.value&&m.value.trim())return true;var t=document.querySelector('textarea.ws-edit-ta');if(t&&t.value&&t.value.trim())return true;return false;}catch(e){return true;}})()")
-            .then(function (hasDraft) {
-                if (hasDraft) return;
-                try { wc.reload(); } catch (e) { /* 窗口销毁竞态：忽略 */ }
+        // 阶段三**：渲染层连接活跃保护——如果 WS 还在 CONNECTING / LOGIN_OK 阶段，
+        // 延迟 reload 直到连接进入稳定状态（loginOk 为 true 且非刚连接）
+        wc.executeJavaScript("(function(){try{return !!(window.__imSocketLoginOk);}catch(e){return true;}})()")
+            .then(function (loginOk) {
+                if (!loginOk) {
+                    // 连接还没稳定，再等 5 秒回来检查
+                    setTimeout(quietReloadWhenIdle, 5000);
+                    return;
+                }
+                // 连接已稳定 + 窗口未聚焦 → 真正可以换新了
+                pendingWebReload = false;
+                // 阶段三百零三：换新前探测未发送内容（聊天输入框 / 工作台编辑草稿），
+                // 有未保存内容则放弃本轮换新——缓存已更新，下次启动自然加载新版本，绝不吞用户输入；
+                // 探测失败按"有内容"保守处理（通话窗口为独立窗口，不受主窗换新影响）
+                wc.executeJavaScript("(function(){try{var m=document.getElementById('message-input');if(m&&m.value&&m.value.trim())return true;var t=document.querySelector('textarea.ws-edit-ta');if(t&&t.value&&t.value.trim())return true;return false;}catch(e){return true;}})()")
+                    .then(function (hasDraft) {
+                        if (hasDraft) return;
+                        try { wc.reload(); } catch (e) { /* 窗口销毁竞态：忽略 */ }
+                    })
+                    .catch(function () { /* 探测失败：保守放弃本次换新，留待下次启动 */ });
             })
-            .catch(function () { /* 探测失败：保守放弃本次换新，留待下次启动 */ });
+            .catch(function () {
+                // 阶段三**：IPC 失败不是终点——renderer 可能正在短暂 pause（主线程长任务/GC），
+                // 再等 5 秒重试，与 loginOk=false 路径对称。极端情况（renderer crash）下 pendingWebReload
+                // 会保持 true 但无触发源，用户重启客户端后自然恢复
+                setTimeout(quietReloadWhenIdle, 5000);
+            });
     }
     webCache.init({
         serverUrl: SERVER_URL,
