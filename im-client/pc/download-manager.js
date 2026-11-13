@@ -14,7 +14,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn, execFile } = require('child_process'); // ZIP 打包版本解压阶段（7z 子进程，spawn 不经 shell）；进程存活检测用 execFile(tasklist)
+const os = require('os'); // pending-updates.json 非 Electron 环境 fallback 路径
+const { spawn } = require('child_process'); // ZIP 打包版本解压阶段（7z 子进程，spawn 不经 shell）
 const { app } = require('electron'); // 打包态 resources 路径锚点（7z 组件定位，与 BT 引擎同构）
 
 const MAX_PARALLEL = 2;    // 跨任务并行下载上限，超出排队
@@ -34,6 +35,162 @@ class GameDownloadManager extends EventEmitter {
         // 注意不能用 res.pipe + res.pause 实现节流：pipe 会在写盘 drain 时自动 resume 源流覆盖 pause，
         // 故下载改为手动写盘 + 请求级挂起队列（见 _downloadFile 门控），令牌恢复由补充定时器放行
         this._lim = { down: 0, tokens: 0, last: 0, timer: null, waiters: new Set() };
+        // pending-updates.json 内存缓存（构造时懒加载，增删改同步落盘）
+        // 用内存缓存彻底消除 readFileSync → 修改 → writeFileSync 的多步竞态：
+        // 两次独立的 _pendingAdd 调用如果中间没有让出控制权（Node.js 单线程），内存数组是同一个引用，
+        // 直接 push + 单次 writeFileSync，不会出现 "A 写了 B 的旧版本被 B 覆盖" 的丢失更新。
+        // 即使未来有人把 _pendingAdd 放到 async 回调里也安全——内存数组是原子的，落盘用 writeFileSync 串行。
+        this._pendingCache = null;
+    }
+
+    // ===== 待提交更新持久化（pending-updates.json） =====
+    // 场景：下载完成但旧游戏目录被运行中进程占用无法 commit → 暂存目录保留，
+    //       写入 pending-updates.json，下次 IM 启动时（无游戏运行）自动 commit。
+    //       解决 Windows 上 rename 被占用的 OS 级限制。
+
+    // pending-updates.json 路径：app userData 目录下（非 Electron 环境 fallback 到系统 tmpdir，方便单元测试）
+    _pendingFilePath() {
+        try {
+            if (app && typeof app.getPath === 'function') {
+                return path.join(app.getPath('userData'), 'pending-updates.json');
+            }
+        } catch (e) { /* app 未 ready 或非 Electron 环境，走 fallback */ }
+        try {
+            return path.join(os.tmpdir(), 'im-pending-updates.json');
+        } catch (e2) { return null; }
+    }
+
+    // 读取待提交列表（内存缓存优先，首次调用或缓存被 _pendingSave 清空后从磁盘懒加载）
+    _pendingLoad() {
+        if (this._pendingCache !== null) return this._pendingCache;
+        const p = this._pendingFilePath();
+        if (!p || !fs.existsSync(p)) { this._pendingCache = []; return this._pendingCache; }
+        try {
+            const raw = fs.readFileSync(p, 'utf8');
+            const arr = JSON.parse(raw);
+            this._pendingCache = Array.isArray(arr) ? arr : [];
+        } catch (e) {
+            // 文件损坏，清掉——宁丢勿误提交
+            try { fs.unlinkSync(p); } catch (e2) { }
+            this._pendingCache = [];
+        }
+        return this._pendingCache;
+    }
+
+    // 保存并更新缓存（所有写操作的唯一出口——内存修改后一次性 writeFileSync）
+    _pendingSave(list) {
+        this._pendingCache = list;
+        const p = this._pendingFilePath();
+        if (!p) return;
+        try {
+            fs.writeFileSync(p, JSON.stringify(list, null, 2), 'utf8');
+        } catch (e) {
+            console.error('[download-manager] pending-updates.json 写入失败:', e && e.message);
+        }
+    }
+
+    // 添加一条待提交（按 gameId 去重，同游戏只保留最新）
+    _pendingAdd(entry) {
+        const list = this._pendingLoad();
+        const filtered = list.filter(function (x) { return x.gameId !== entry.gameId; });
+        filtered.push(entry);
+        this._pendingSave(filtered);
+    }
+
+    // 移除已提交的 gameId
+    _pendingRemove(gameId) {
+        const list = this._pendingLoad();
+        const filtered = list.filter(function (x) { return x.gameId !== gameId; });
+        this._pendingSave(filtered);
+    }
+
+    // 公开方法：启动时自动 commit 所有待提交更新（main.js 在 createWindow 前调用）
+    // 文件级 replace（复用 Steam 同款逻辑），IM 刚启动时没有游戏在运行，锁定文件应该能全部替换
+    // 返回 {ok:number, failed:number, pendingLocked:number, failedDetails:[{gameId, error}]}
+    _pendingCommitAll() {
+        const self = this;
+        const list = this._pendingLoad();
+        if (!list.length) return { ok: 0, failed: 0, pendingLocked: 0, failedDetails: [] };
+        const result = { ok: 0, failed: 0, pendingLocked: 0, failedDetails: [] };
+        const remaining = []; // 本次仍有 locked 文件 → 留在 pending 里，下次启动再试
+        for (let i = 0; i < list.length; i++) {
+            const e = list[i];
+            // 校验暂存目录还在
+            if (!e.stagingDir || !fs.existsSync(e.stagingDir)) {
+                result.failed++;
+                result.failedDetails.push({ gameId: e.gameId, error: '暂存目录已不存在：' + e.stagingDir });
+                continue;
+            }
+            // 安全校验（复用新方法）
+            const v = this._validateInstallDir(e.finalDir, e.root, e.slug);
+            if (!v.ok) {
+                result.failed++;
+                result.failedDetails.push({ gameId: e.gameId, error: v.message });
+                continue;
+            }
+            // 文件级 replace（同步，和新 _commit 同逻辑）
+            const stagingFiles = this._listFilesRecursive(e.stagingDir);
+            if (!stagingFiles.length) {
+                // staging 空目录 → 无内容要提交，直接删除 staging 并标记成功
+                try { fs.rmSync(e.stagingDir, { recursive: true, force: true }); } catch (err) { }
+                result.ok++;
+                continue;
+            }
+            let diskError = null;
+            const locked = [];
+            for (let j = 0; j < stagingFiles.length; j++) {
+                const rel = stagingFiles[j];
+                const src = path.join(e.stagingDir, rel);
+                const dst = path.join(e.finalDir, rel);
+                try { fs.mkdirSync(path.dirname(dst), { recursive: true }); } catch (mderr) { }
+                try {
+                    fs.renameSync(src, dst);
+                } catch (err1) {
+                    const code = err1 && err1.code;
+                    const isEperm = code === 'EPERM' || code === 'EACCES' || (err1 && /not permitted|permission|denied/i.test(err1.message || ''));
+                    if (code === 'ENOSPC') { diskError = '磁盘空间不足'; break; }
+                    if (isEperm) { locked.push(rel); continue; }
+                    if (code === 'EEXIST' || code === 'ENOENT') {
+                        try {
+                            if (fs.existsSync(dst)) fs.unlinkSync(dst);
+                            fs.renameSync(src, dst);
+                        } catch (err2) {
+                            const isEperm2 = err2 && (err2.code === 'EPERM' || err2.code === 'EACCES');
+                            if (isEperm2) { locked.push(rel); continue; }
+                            diskError = '文件替换失败：' + rel; break;
+                        }
+                    } else if (code === 'EXDEV') {
+                        try { fs.copyFileSync(src, dst); fs.unlinkSync(src); } catch (err3) {
+                            if (err3 && (err3.code === 'EPERM' || err3.code === 'EACCES')) { locked.push(rel); continue; }
+                            diskError = '跨盘复制失败：' + rel; break;
+                        }
+                    } else {
+                        diskError = '文件替换失败：' + rel; break;
+                    }
+                }
+            }
+            if (diskError) {
+                result.failed++;
+                result.failedDetails.push({ gameId: e.gameId, error: diskError });
+                continue;
+            }
+            // 清理旧残留（staging 没有、finalDir 有的文件）
+            if (!locked.length) {
+                // 全部成功 → 清理 stagingDir + 旧残留 + 空目录
+                try { fs.rmSync(e.stagingDir, { recursive: true, force: true }); } catch (err) { }
+                self._pruneStagingParent(e.stagingDir);
+                result.ok++;
+            } else {
+                // 仍有 locked 文件 → 保留 stagingDir，更新 pending 记录（更新时间）
+                e.queuedAt = Date.now();
+                e.lockedFiles = locked;
+                remaining.push(e);
+                result.pendingLocked++;
+                result.failedDetails.push({ gameId: e.gameId, error: '仍有 ' + locked.length + ' 个文件被锁定（可能游戏还在运行）' });
+            }
+        }
+        this._pendingSave(remaining);
+        return result;
     }
 
     // 全局下载限速（字节/秒，0=不限速）：设置页变更即时生效——清限速时放行全部挂起数据并停补充定时器
@@ -231,10 +388,13 @@ class GameDownloadManager extends EventEmitter {
     }
 
     // 取消：中断请求 + 删除 .part 与未完成文件（已完整落盘且校验过的正式文件保留），任务移出任务表
+    // 特别处理 pending_restart 状态：commit 已完成但有 locked 文件保留着 stagingDir + pending-updates.json 记录，
+    // 用户取消后必须一并清理——否则下次启动 _pendingCommitAll 会自动 commit 被取消的更新（孤儿更新）
     cancel(taskId) {
         const task = this.tasks.get(String(taskId || ''));
         if (!task) return { ok: false, error: '任务不存在' };
         const wasActive = task.state === 'downloading';
+        const wasPendingRestart = task.state === 'pending_restart';
         task.state = 'cancelled'; // 中断标记：进行中的下载 Promise 按外部中断处理
         if (task._reqs) {
             task._reqs.forEach(function (r) { try { r.destroy(); } catch (e) { } });
@@ -248,6 +408,21 @@ class GameDownloadManager extends EventEmitter {
             pend.push(self._safeUnlink(base + '.part'));
             pend.push(self._safeUnlink(base + '.part-chunks')); // 分块断点状态文件一并清理
         });
+        // pending_restart 状态额外清理：删 stagingDir + 从 pending-updates.json 移除（防下次启动孤儿自动 commit）
+        if (wasPendingRestart) {
+            pend.push(new Promise(function (resolve) {
+                try {
+                    // stagingDir 里可能已经被 replace 走了一部分文件（非 locked 的），rm -rf 全清最干净
+                    if (task.stagingDir && fs.existsSync(task.stagingDir)) fs.rmSync(task.stagingDir, { recursive: true, force: true });
+                    self._pruneStagingParent(task.stagingDir);
+                } catch (e) { /* stagingDir 不存在或权限问题，忽略 */ }
+                // 从 pending-updates.json 移除对应 gameId
+                if (task.gameId) {
+                    self._pendingRemove(task.gameId);
+                }
+                resolve();
+            }));
+        }
         const fin = function () {
             self._emit(task, '', null, true, 'cancel'); // 取消终态必发一条（页面清理 UI），随后任务从表移除
             self.tasks.delete(task.taskId);
@@ -991,7 +1166,8 @@ class GameDownloadManager extends EventEmitter {
         this._finishCommit(task);
     }
 
-    // 解压后提交：原 _finish 的完成路径（rename 换入正式目录 + done 事件）
+    // 解压后提交：Steam 文件级 replace 换入 + done 事件
+    // 新 _commit 是同步 for 循环（纯 sync rename 操作），不需要 Promise 收口
     _finishCommit(task) {
         const self = this;
         task.state = 'done';
@@ -999,33 +1175,34 @@ class GameDownloadManager extends EventEmitter {
         task._speed = 0;
         task._diskSpeed = 0;
         task._lastEmit = Date.now();
-        // _commit 改为 async（含 rename 失败后的重试等待 + 进程检测），外层 Promise 收口
-        // 旧调用方（_finish）已在同步路径里走 _finishCommit，此处不 await 不影响 —— error 态在回调内 setState
-        // 若取消等外部中断发生在等待期间（task.state !== 'downloading'），_commit 内部已做状态裁决
-        Promise.resolve(self._commit(task)).then(function (cm) {
-            // 竞态守卫：commit 等待重试期间用户可能已 cancel/error
-            if (task.state === 'cancelled' || task.state === 'error') {
-                // cancel 已从 tasks 表删除任务并发了 cancel 事件，不再发 error 或 done
-                return;
-            }
+
+        try {
+            const cm = self._commit(task);
             if (cm && cm.ok === false) {
-                task.state = 'error'; // 换入失败（暂存保留，可重试下载恢复）
-                task._speed = 0;
-                self._emit(task, '', cm.message || '安装目录换入失败', true);
+                task.state = 'error';
+                self._emit(task, '', cm.message || '文件安装失败', true);
                 self._schedule();
                 return;
             }
+            // pendingRestart: true → 部分文件被锁定，已写 pending-updates.json，暂存目录保留
+            if (cm && cm.ok === true && cm.pendingRestart) {
+                task.state = 'pending_restart';
+                const lockedList = (cm.sampleLocked || []).join(', ');
+                self._emit(task, '',
+                    '下载完成，但有 ' + cm.lockedCount + ' 个文件被占用（' + lockedList + '）。' +
+                    '安装将在下次启动时自动生效', true);
+                self._schedule(); // 释放并行槽位
+                return;
+            }
+            // 全部成功
             self.emit('progress', self._evt(task, ''));
             self.emit('done', { taskId: task.taskId, gameId: task.gameId, installDir: task.installDir, username: task.username });
-            self._schedule(); // 释放并行槽位，调度排队任务
-        }).catch(function (e) {
-            // 同样竞态守卫
-            if (task.state === 'cancelled' || task.state === 'error') return;
-            task.state = 'error';
-            task._speed = 0;
-            self._emit(task, '', '安装目录换入异常：' + ((e && e.message) || e), true);
             self._schedule();
-        });
+        } catch (e) {
+            task.state = 'error';
+            self._emit(task, '', '安装异常：' + ((e && e.message) || e), true);
+            self._schedule();
+        }
     }
 
     // —— ZIP 打包版本解压阶段（packType=1 单 ZIP / 2 分卷 ZIP，内置 7z 通吃）——
@@ -1177,182 +1354,223 @@ class GameDownloadManager extends EventEmitter {
         }
     }
 
-    // 暂存目录 → 正式目录同盘一次性换入（Steam 同款）：旧版本先挪 .old-<ts> 腾位，rename 失败回滚；
-    // 换入成功异步删除旧版本备份（大目录递归删除不阻塞主进程，残留可后续清理）；返回 Promise<{ok,message?}>
-    // 含 rename 失败重试（最多 5 次，间隔 2s，给杀毒软件/资源管理器释放文件句柄留时间）+ 进程占用检测
-    _commit(task) {
-        const finalDir = task.installDir;
-        const stagingDir = task.stagingDir;
-        const root = task.root;
-        // 无暂存内容（全部秒跳）：正式目录已就绪，直接成功
-        if (!stagingDir || !fs.existsSync(stagingDir)) return Promise.resolve({ ok: true });
-        // 安全校验（致命防呆）：finalDir 必须是 root 的子目录且末级目录名等于 slug。
-        // 历史 bug：库记录 install_path 误存安装根（H:\CdonlgameApp）被当作 finalDir 直传，
-        // 导致 renameSync 把整个安装根挪走、所有游戏丢失。此处若校验失败直接拒绝。
-        let slug = '';
+    // ===== Steam 同款文件级 replace 提交 =====
+    // 核心思路：遍历 stagingDir 里的每个文件，直接 deleteSync(finalFile) + renameSync(stagingFile, finalFile)。
+    // 单文件失败（EPERM=被游戏进程独占锁定 / EACCES=权限不足）→ 记录到 locked 列表，继续处理下一个。
+    // 全部文件处理完：
+    //   - 无 locked 文件 → 清理 stagingDir + 清理 finalDir 里 staging 没有的旧残留 → resolve({ok:true})
+    //   - 有 locked 文件 → 保留 stagingDir + 写 pending-updates.json → resolve({ok:true, pendingRestart:true})
+    // 为什么 Explorer 打开目录不阻塞？因为 Windows 目录句柄只阻塞目录本身的 rename，
+    // 不阻塞目录内部文件的 delete/rename。Explorer 内部用 ReadDirectoryChangesW 实时感知文件变化。
+    // 为什么游戏运行中的 .exe 会阻塞？因为游戏进程持有 .exe 的独占读句柄，OS 禁止 deleteSync。
+    // 本方案彻底根除：目录 rename EPERM 问题、等待轮询复杂度、进程检测误判。
+
+    // 安全校验（同 _commit 和 _pendingCommitAll 共用）：
+    // 返回 {ok:true} 或 {ok:false,message}
+    _validateInstallDir(finalDir, root, slug) {
         try {
             const fNorm = path.resolve(finalDir);
             const rNorm = path.resolve(root);
             const rel = path.relative(rNorm, fNorm);
             const leaf = path.basename(fNorm);
-            slug = String(task.slug || '');
-            // slug 必须非空（start 已校验），为空说明 task 元数据异常，宁拒勿放行
+            slug = String(slug || '');
             if (!slug || fNorm === rNorm || rel === '' || rel.startsWith('..') || path.isAbsolute(rel) ||
                 leaf.toLowerCase() !== slug.toLowerCase()) {
-                return Promise.resolve({ ok: false, message: '安装目录参数异常：finalDir 不是安装根的子目录或与 slug 不匹配，已拒绝执行以防数据丢失' });
+                return { ok: false, message: '安装目录参数异常：finalDir 不是安装根的子目录或与 slug 不匹配，已拒绝执行以防数据丢失' };
             }
+            return { ok: true };
         } catch (e) {
-            return Promise.resolve({ ok: false, message: '安装目录校验失败：' + e.message });
+            return { ok: false, message: '安装目录校验失败：' + e.message };
         }
-
-        // === 重试常量 ===
-        const MAX_RETRY = 5;       // 最大重试次数
-        const RETRY_INTERVAL = 2000; // 每次重试间隔（ms）—— 杀毒软件实时扫描通常 1-2s 释放句柄
-        const self = this;
-
-        return new Promise(function (resolve) {
-            // 1) 旧版本目录腾位（rename 到 .old-<ts>）
-            const tryBakRename = function () {
-                let bak = '';
-                try {
-                    if (fs.existsSync(finalDir)) {
-                        bak = finalDir + '.old-' + Date.now();
-                        fs.renameSync(finalDir, bak); // 同盘 rename，O(1)
-                    }
-                } catch (e) {
-                    return { ok: false, bak: bak, err: e };
-                }
-                return { ok: true, bak: bak };
-            };
-
-            // 2) 暂存目录 → 正式目录换入
-            const tryStagingRename = function () {
-                try {
-                    fs.renameSync(stagingDir, finalDir);
-                    return { ok: true };
-                } catch (e) {
-                    return { ok: false, err: e };
-                }
-            };
-
-            // 取消守卫：用户在等待重试期间取消任务（cancel 置 state='cancelled' 并移出 tasks 表）——
-            // 我们放弃 commit，暂存目录保留，下次重下时断点续传。用 resolved 标志防多次 resolve
-            let settled = false;
-            const cancelGuard = function () {
-                if (settled) return true;
-                if (task.state === 'cancelled' || task.state === 'error') {
-                    settled = true;
-                    resolve({ ok: false, message: '下载已取消' });
-                    return true;
-                }
-                return false;
-            };
-
-            // 3) 主循环：腾位 → 换入 → 清理备份；失败则重试腾位（已换入的不再回滚）
-            const attempt = function (tryCount) {
-                if (cancelGuard()) return;
-                const bakRes = tryBakRename();
-                if (!bakRes.ok) {
-                    // 腾位失败（EPERM 等）：进入重试流程
-                    handleBakFail(bakRes.err, tryCount);
-                    return;
-                }
-                // 腾位成功，尝试换入
-                const stageRes = tryStagingRename();
-                if (!stageRes.ok) {
-                    // 换入失败（极其罕见：同盘同一磁盘不应该），回滚备份
-                    if (bakRes.bak) { try { fs.renameSync(bakRes.bak, finalDir); } catch (e2) { /* 回滚失败：备份仍在，交用户手动处理 */ } }
-                    settled = true;
-                    resolve({ ok: false, message: '安装目录换入失败：' + stageRes.err.message });
-                    return;
-                }
-                // 换入成功，异步清理备份
-                settled = true;
-                if (bakRes.bak) fs.rm(bakRes.bak, { recursive: true, force: true }, function () { /* 清理失败忽略 */ });
-                self._pruneStagingParent(stagingDir);
-                resolve({ ok: true });
-            };
-
-            // 腾位失败处理：检测占用 → 决定是否重试 → 翻译错误
-            const handleBakFail = function (err, tryCount) {
-                if (cancelGuard()) return;
-                const code = err && err.code;
-                const isEperm = code === 'EPERM' || code === 'EACCES' || (err && /not permitted|permission|denied/i.test(err.message || ''));
-                // 非权限类错误直接放弃（磁盘错误、路径非法等重试没用）
-                if (!isEperm) {
-                    settled = true;
-                    resolve({ ok: false, message: '旧版本目录腾位失败：' + (err.message || String(err)) });
-                    return;
-                }
-                // 还没到最大重试次数 → 先检测进程占用，再决定等还是放弃
-                if (tryCount < MAX_RETRY) {
-                    self._detectRunningGame(finalDir).then(function (running) {
-                        if (cancelGuard()) return;
-                        if (running) {
-                            // 进程明确在运行，不必等杀毒软件，直接给明确提示（重试也没用——游戏不关永远占用）
-                            settled = true;
-                            resolve({ ok: false, message: '旧版本目录被占用：检测到游戏进程 "' + running + '" 仍在运行，请先关闭游戏再重试下载' });
-                            return;
-                        }
-                        // 没检测到进程 → 大概率是杀毒软件扫描/资源管理器句柄，等一会再试
-                        setTimeout(function () { attempt(tryCount + 1); }, RETRY_INTERVAL);
-                    });
-                    return;
-                }
-                // 5 次都失败了，做最后一次进程检测来决定提示文案
-                self._detectRunningGame(finalDir).then(function (running) {
-                    if (cancelGuard()) return;
-                    settled = true;
-                    if (running) {
-                        resolve({ ok: false, message: '旧版本目录被占用：游戏进程 "' + running + '" 仍在运行，请先关闭游戏后再重试下载' });
-                    } else {
-                        resolve({ ok: false, message: '旧版本目录腾位失败（重试 ' + MAX_RETRY + ' 次仍被占用）：' +
-                            '可能是杀毒软件正在扫描、Windows 资源管理器打开了该目录，或其他程序持有文件。' +
-                            '请关闭可能占用的程序后再重试下载' });
-                    }
-                });
-            };
-
-            attempt(0);
-        });
     }
 
-    // 检测游戏目录下是否有 exe 正在运行（Windows tasklist 映像名过滤）
-    // 返回 Promise<string|null> —— 正在运行的进程名（如 "露娜1.exe"），没检测到返回 null
-    _detectRunningGame(finalDir) {
-        return new Promise(function (resolve) {
-            // 1) 扫 finalDir 下所有 .exe（含子目录）
-            const exes = [];
-            const walk = function (d) {
-                let entries;
-                try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
-                for (let i = 0; i < entries.length; i++) {
-                    const full = path.join(d, entries[i].name);
-                    if (entries[i].isDirectory()) walk(full);
-                    else if (entries[i].isFile() && /\.exe$/i.test(entries[i].name)) exes.push(entries[i].name);
+    // 递归列出目录下所有文件（相对路径列表，用 forward slashes 归一化）
+    _listFilesRecursive(dir) {
+        const result = [];
+        if (!fs.existsSync(dir)) return result;
+        const walk = function (d) {
+            let entries;
+            try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+            for (let i = 0; i < entries.length; i++) {
+                const full = path.join(d, entries[i].name);
+                if (entries[i].isDirectory()) walk(full);
+                else if (entries[i].isFile()) {
+                    const rel = path.relative(dir, full).replace(/\\/g, '/');
+                    result.push(rel);
                 }
-            };
-            try { walk(finalDir); } catch (e) { resolve(null); return; }
-            if (!exes.length) { resolve(null); return; }
+            }
+        };
+        walk(dir);
+        return result;
+    }
 
-            // 2) tasklist 一次性列出所有运行中的进程，然后匹配
-            //    tasklist /FO CSV /NH 每行："映像名","PID","会话名","会话#","内存使用"
-            //    比逐个 /FI "IMAGENAME eq" 高效太多（一条命令搞定）
-            execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 8000 }, function (err, stdout) {
-                if (err) { resolve(null); return; } // tasklist 调用失败，静默跳过
-                const lines = String(stdout || '').split(/\r?\n/);
-                const runningSet = {};
-                for (let i = 0; i < lines.length; i++) {
-                    // CSV 格式："Process Name.exe","12345","...","...","... K"
-                    const m = /^"([^"]+\.exe)"\s*,/.exec(lines[i]);
-                    if (m) runningSet[m[1].toLowerCase()] = true;
+    // 暂存目录 → 正式目录（Steam 文件级 replace）
+    _commit(task) {
+        const self = this;
+        const finalDir = task.installDir;
+        const stagingDir = task.stagingDir;
+        const root = task.root;
+
+        // 安全校验（致命防呆）
+        const ok = this._validateInstallDir(finalDir, root, task.slug);
+        if (!ok.ok) return ok;
+
+        // 无暂存内容 → 直接成功（首次安装跳过了文件下载？不可能，保留作为边界兜底）
+        if (!stagingDir || !fs.existsSync(stagingDir)) return { ok: true };
+
+        // 遍历 staging 下所有文件，逐文件 replace
+        const stagingFiles = this._listFilesRecursive(stagingDir);
+        if (!stagingFiles.length) return { ok: true };
+
+        const total = stagingFiles.length;
+        let idx = 0;
+        const locked = [];   // EPERM 被锁定的文件列表（rel path）
+        let diskError = null; // 非 EPERM 致命错误（磁盘损坏等）
+
+        for (let i = 0; i < stagingFiles.length; i++) {
+            // 取消守卫：防御性检查。注意：Node.js 单线程模型下，cancel() 必须等当前同步 for 循环完全执行完
+            // （或让出控制权）才能运行——所以在 for 循环中间 cancel 是"不可能"的。守卫保留是因为：
+            //   1) cancel 被调用时（无论何时），state 变成 'cancelled' 是终态，后续逻辑不应再继续
+            //   2) 如果未来 _commit 加了 await/setTimeout 变成异步（回到旧方案），守卫立即生效
+            // 当前纯同步场景下此分支永不触发，属于良性防御代码。
+            if (task.state === 'cancelled' || task.state === 'error') {
+                return { ok: false, message: '下载已取消' };
+            }
+            const rel = stagingFiles[i];
+            const src = path.join(stagingDir, rel);
+            const dst = path.join(finalDir, rel);
+            // 进度事件（节流由 _emit 内部处理，force=false）
+            idx++;
+            task._currentRel = rel;
+            task._phase = 'commit';
+            self._emit(task, rel, null, false);
+            // 确保目标目录存在（staging 里可能有新目录结构）
+            try { fs.mkdirSync(path.dirname(dst), { recursive: true }); } catch (e) { /* 目录已存在忽略 */ }
+            // Steam 同款 replace 策略：
+            //   1. 先尝试 renameSync（同盘 O(1)，最理想路径）
+            //   2. rename 失败 EPERM → 被锁定，跳过记录
+            //   3. rename 失败 ENOENT 目标文件不存在 → 纯 create 直接 rename
+            //   4. rename 失败 EXDEV → 跨盘 fallback（不同盘时先 unlinkSync 再 copyFileSync 最后 unlink 源）
+            //   5. rename 失败 EEXIST → 目标已存在，先 unlinkSync(dst) 再 renameSync(src, dst)
+            //   6. 其他错误（ENOSPC=磁盘满等）→ 放弃整个 commit
+            try {
+                fs.renameSync(src, dst);
+            } catch (e1) {
+                const code = e1 && e1.code;
+                const isEperm = code === 'EPERM' || code === 'EACCES' || (e1 && /not permitted|permission|denied/i.test(e1.message || ''));
+                const isEexist = code === 'EEXIST';
+                const isEnospc = code === 'ENOSPC';
+                const isExdev = code === 'EXDEV';
+                if (isEnospc) {
+                    diskError = '磁盘空间不足，无法完成文件写入';
+                    break;
                 }
-                for (let j = 0; j < exes.length; j++) {
-                    if (runningSet[exes[j].toLowerCase()]) { resolve(exes[j]); return; }
+                if (isEperm) {
+                    // 被锁定（游戏运行中 .exe / .dll 独占；或资源管理器打开文件） → 记录跳过
+                    locked.push(rel);
+                    continue;
                 }
-                resolve(null);
-            });
+                if (isEexist || code === 'ENOENT') {
+                    // 目标存在/不存在：先 unlink 再 rename
+                    try {
+                        if (fs.existsSync(dst)) fs.unlinkSync(dst);
+                        fs.renameSync(src, dst);
+                    } catch (e2) {
+                        const code2 = e2 && e2.code;
+                        const isEperm2 = code2 === 'EPERM' || code2 === 'EACCES' || (e2 && /not permitted|permission|denied/i.test(e2.message || ''));
+                        if (isEperm2) { locked.push(rel); continue; }
+                        diskError = '文件替换失败：' + rel + ' — ' + (e2.message || String(e2));
+                        break;
+                    }
+                } else if (isExdev) {
+                    // 跨盘 fallback（同盘 renameSync 理论上不会触发，这里兜底）
+                    try {
+                        fs.copyFileSync(src, dst);
+                        fs.unlinkSync(src);
+                    } catch (e3) {
+                        const isEperm3 = e3 && (e3.code === 'EPERM' || e3.code === 'EACCES');
+                        if (isEperm3) { locked.push(rel); continue; }
+                        diskError = '跨盘复制失败：' + rel + ' — ' + (e3.message || String(e3));
+                        break;
+                    }
+                } else {
+                    // 其他未知错误（IO 错误、磁盘坏道等）
+                    diskError = '文件替换失败：' + rel + ' — ' + (e1.message || String(e1));
+                    break;
+                }
+            }
+        }
+
+        // 有磁盘致命错误 → 失败
+        // ⚠️ 混合态风险说明：如果 for 循环中途 break（磁盘满/IO 错误），前面几个文件可能已经被 rename
+        // 到 finalDir 了，此时 finalDir 处于"前几个新版 + 其余旧版"的混合态，stagingDir 里也丢了前几个。
+        // Steam 也有这个问题，靠 per-file SHA256 校验自愈——下次启动时发现 finalDir 里的哈希不匹配就重下。
+        // 不改成 copy-then-unlink（避免双倍磁盘占用 + 速度减半），靠校验自愈足够。
+        if (diskError) {
+            return { ok: false, message: diskError };
+        }
+
+        // 清理 finalDir 中 stagingDir 里不存在的旧残留（旧版本特有的文件）
+        // 同时清理空目录（自底向上）
+        // 注意：如果有 locked 文件（stagingDir 还保留），我们先比对 staging 里的文件 → 再反向扫 finalDir
+        // 但 locked 列表里的文件我们不清理（它们还在 staging 里保留，下次启动会 retry replace）
+        const stagingSet = {};
+        for (let i = 0; i < stagingFiles.length; i++) stagingSet[stagingFiles[i]] = true;
+        const finalFiles = this._listFilesRecursive(finalDir);
+        for (let j = 0; j < finalFiles.length; j++) {
+            const rel = finalFiles[j];
+            if (stagingSet[rel]) continue; // staging 里有同名文件（新版本覆盖过了），保留
+            if (locked.indexOf(rel) !== -1) continue; // 被锁定的文件也不动（下次启动再 replace）
+            // 这个文件在 finalDir 里存在但 stagingDir 里没有 → 旧版本残留 → 删除
+            try { fs.unlinkSync(path.join(finalDir, rel)); } catch (e) { /* 被锁定忽略 */ }
+        }
+        // 清理 finalDir 里的空目录（自底向上，先深后浅）
+        this._cleanEmptyDirs(finalDir);
+
+        if (locked.length === 0) {
+            // 全部成功 → 清理 stagingDir
+            try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (e) { }
+            self._pruneStagingParent(stagingDir);
+            return { ok: true };
+        }
+
+        // 有 locked 文件 → 保留 stagingDir，写 pending-updates.json
+        // stagingDir 保留是关键：下次启动时 _pendingCommitAll 从 stagingDir 再走一遍 replace
+        self._pendingAdd({
+            gameId: task.gameId,
+            slug: task.slug,
+            finalDir: finalDir,
+            stagingDir: stagingDir,
+            root: root,
+            lockedFiles: locked,        // 诊断信息：哪些文件被锁定
+            queuedAt: Date.now()
         });
+        return {
+            ok: true,
+            pendingRestart: true,
+            lockedCount: locked.length,
+            totalCount: total,
+            sampleLocked: locked.slice(0, 5) // 前端显示最多 5 个示例
+        };
+    }
+
+    // 清理目录下的空子目录（自底向上，先深后浅；有文件的目录不动）
+    _cleanEmptyDirs(dir) {
+        const clean = function (d) {
+            let entries;
+            try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+            for (let i = 0; i < entries.length; i++) {
+                if (entries[i].isDirectory()) clean(path.join(d, entries[i].name));
+            }
+            // 子目录都处理完了，再看自己是否空（根目录不删）
+            if (d !== dir) {
+                try {
+                    const remaining = fs.readdirSync(d);
+                    if (!remaining.length) fs.rmdirSync(d);
+                } catch (e) { /* 有文件或权限问题，忽略 */ }
+            }
+        };
+        clean(dir);
     }
 
     // 清理空的暂存父目录 <root>/downloading（非空/不存在/失败一律忽略）

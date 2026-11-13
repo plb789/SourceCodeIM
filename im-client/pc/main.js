@@ -6368,6 +6368,23 @@ app.whenReady().then(async function () {
         }
     });
     webCache.installInterceptor();
+    // 阶段三百零五：启动时自动提交上次遗留的待生效游戏更新（pending-updates.json）
+    // 场景：用户下载完成但游戏运行中无法 commit → 保存 pending → 下次 IM 启动（无游戏运行）自动换入
+    // 解决 Windows 上 rename 被占用的 OS 级限制。commit 是同盘 rename O(1) 操作，启动时零可见延迟
+    try {
+        var pendingRet = gameDownloads._pendingCommitAll();
+        if (pendingRet && (pendingRet.ok > 0 || pendingRet.failed > 0)) {
+            console.log('[BOOT] 待提交更新：成功 ' + pendingRet.ok + ' 条' +
+                (pendingRet.failed > 0 ? '，失败 ' + pendingRet.failed + ' 条' : ''));
+            if (pendingRet.failedDetails && pendingRet.failedDetails.length) {
+                pendingRet.failedDetails.forEach(function (d) {
+                    console.warn('[BOOT]   失败 ' + d.gameId + ': ' + d.error);
+                });
+            }
+        }
+    } catch (e) {
+        console.warn('[BOOT] 待提交更新自动执行失败（不阻断启动）:', e && e.message);
+    }
     createWindow();
     console.log('[BOOT] 主窗口已创建（页面开始加载） +' + (Date.now() - BOOT_T0) + 'ms');
     // 阶段一百四十：同步失败不再死等下次重启（原先 cacheDir 旧副本遮蔽内置新快照、页面时好时坏根因）

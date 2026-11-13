@@ -27,7 +27,7 @@
     var PAGE_SIZE = 24;                                                              // 商店分页大小
     var LIB_STATE_TEXT = { 0: T('未安装'), 1: T('下载中'), 2: T('已暂停'), 3: T('已安装'), 4: T('待更新') }; // 库状态文案
     var BADGE_TEXT = { 0: T('已入库'), 1: T('下载中'), 2: T('已暂停'), 3: T('已安装'), 4: T('待更新') };     // 商店卡片徽标文案
-    var TASK_STATE_TEXT = { downloading: T('下载中'), paused: T('已暂停'), verifying: T('校验中'), connecting: T('连接中'), done: T('已完成'), error: T('出错') };
+    var TASK_STATE_TEXT = { downloading: T('下载中'), paused: T('已暂停'), verifying: T('校验中'), connecting: T('连接中'), pending_restart: T('下次生效'), done: T('已完成'), error: T('出错') };
 
     // ==================== 运行时状态 ====================
     var state = {
@@ -1918,7 +1918,7 @@
     // 一律视为"安装进行中"保留环——主进程每下完一个文件都会先发 state:'verifying' 再回到 'downloading'
     // （download-manager.js 逐文件校验），若只在 downloading/paused 显示，环会被反复移除+重建，
     // 左侧行高在 29px↔34px 间跳动，正是用户反馈的"按钮/元素颤抖"
-    var RING_TERMINAL = { done: 1, error: 1, cancel: 1 };
+    var RING_TERMINAL = { done: 1, error: 1, cancel: 1, pending_restart: 1 };
     function applyRowRing(row) {
         var svg = row.querySelector('.gs-lib-sprog');
         var tid = state.taskByGame[row._gid];
@@ -2573,8 +2573,10 @@
         // BT 完成即转做种（最长 12h）：状态显示"做种中"，上传速率数字实时展示
         if (t.state === 'done' && t.via === 'bt') stText = T('做种中');
         row._stEl.textContent = stText;
-        row._stEl.className = 'gs-task-state' + (t.state === 'done' || t.state === 'error' ? ' gray' : '');
-        if (t.fileRelPath) { row._fileEl.textContent = t.fileRelPath; row._fileEl.style.display = ''; }
+        row._stEl.className = 'gs-task-state' + (t.state === 'done' || t.state === 'error' || t.state === 'pending_restart' ? ' gray' : '');
+        if (t.state === 'pending_restart') {
+            row._fileEl.style.display = 'none';
+        } else if (t.fileRelPath) { row._fileEl.textContent = t.fileRelPath; row._fileEl.style.display = ''; }
         else row._fileEl.style.display = 'none';
 
         var pct = t.total > 0 ? Math.min(100, (t.received || 0) / t.total * 100) : 0;
@@ -2582,43 +2584,48 @@
 
         var meta = row._meta;
         meta.innerHTML = '';
-        meta.appendChild(el('span', '', pct.toFixed(1) + '%'));
-        // 显示实际网络下载量与总量；去重复用文件不计入下载量；完成态显示总量以匹配 100% 进度条
-        var netRecv = (typeof t.netReceived === 'number') ? t.netReceived : t.received;
-        var shownRecv = (t.state === 'done') ? t.total : netRecv;
-        meta.appendChild(el('span', '', fmtSize(shownRecv) + ' / ' + fmtSize(t.total)));
-        if (t.via === 'bt') {
-            if (t.state !== 'done') meta.appendChild(el('span', '', T('下载 ') + fmtSpeed(t.speed)));
-            meta.appendChild(el('span', '', T('上传 ') + fmtSpeed(t.upSpeed || 0)));
-            // BT peer 数量（引擎通过 progress 帧 conn/seeds/totalSeeds/totalPeers 字段上报）
-            if (t.state === 'connecting' || t.state === 'downloading' || t.state === 'queued' || t.state === 'metainfo') {
-                var peerInfo = T('Peer ') + (t.conn || 0);
-                if (typeof t.seeds === 'number' && t.seeds > 0) peerInfo += T(' (种子 ') + t.seeds + ')';
-                if (typeof t.totalPeers === 'number' && t.totalPeers >= 0) peerInfo += '/' + t.totalPeers;
-                meta.appendChild(el('span', '', peerInfo));
-            }
+        // pending_restart 状态：主进程已在 error 字段放了友好描述（被锁定文件数 + 示例文件名）
+        if (t.state === 'pending_restart') {
+            meta.appendChild(el('span', '', t.error || T('下载完成，下次启动时自动安装')));
         } else {
-            meta.appendChild(el('span', '', T('速度 ') + fmtSpeed(t.speed)));
-        }
-        // 增量更新提示：已复用本地文件数
-        if (t.dedupedCount > 0) {
-            meta.appendChild(el('span', 'gs-dedup-info', T('复用 ') + t.dedupedCount + T(' 个文件 (') + fmtSize(t.dedupedBytes || 0) + ')'));
-        }
-        var remainBytes = Math.max(0, (t.total || 0) - netRecv);
-        meta.appendChild(el('span', '', T('剩余 ') + (t.speed > 0 && t.total > 0 ? fmtEta(remainBytes / t.speed) : '—')));
-        // 错误信息分层展示：ERROR 态优先显式 error，非 ERROR 态展示临时 engineError
-        if (t.state === 'error') {
-            var finalErr = t.error || t.engineError || '';
-            if (finalErr) meta.appendChild(el('span', '', T('原因：') + finalErr));
-        } else if (t.engineError) {
-            meta.appendChild(el('span', '', T('提示：') + t.engineError));
+            meta.appendChild(el('span', '', pct.toFixed(1) + '%'));
+            // 显示实际网络下载量与总量；去重复用文件不计入下载量；完成态显示总量以匹配 100% 进度条
+            var netRecv = (typeof t.netReceived === 'number') ? t.netReceived : t.received;
+            var shownRecv = (t.state === 'done') ? t.total : netRecv;
+            meta.appendChild(el('span', '', fmtSize(shownRecv) + ' / ' + fmtSize(t.total)));
+            if (t.via === 'bt') {
+                if (t.state !== 'done') meta.appendChild(el('span', '', T('下载 ') + fmtSpeed(t.speed)));
+                meta.appendChild(el('span', '', T('上传 ') + fmtSpeed(t.upSpeed || 0)));
+                // BT peer 数量（引擎通过 progress 帧 conn/seeds/totalSeeds/totalPeers 字段上报）
+                if (t.state === 'connecting' || t.state === 'downloading' || t.state === 'queued' || t.state === 'metainfo') {
+                    var peerInfo = T('Peer ') + (t.conn || 0);
+                    if (typeof t.seeds === 'number' && t.seeds > 0) peerInfo += T(' (种子 ') + t.seeds + ')';
+                    if (typeof t.totalPeers === 'number' && t.totalPeers >= 0) peerInfo += '/' + t.totalPeers;
+                    meta.appendChild(el('span', '', peerInfo));
+                }
+            } else {
+                meta.appendChild(el('span', '', T('速度 ') + fmtSpeed(t.speed)));
+            }
+            // 增量更新提示：已复用本地文件数
+            if (t.dedupedCount > 0) {
+                meta.appendChild(el('span', 'gs-dedup-info', T('复用 ') + t.dedupedCount + T(' 个文件 (') + fmtSize(t.dedupedBytes || 0) + ')'));
+            }
+            var remainBytes = Math.max(0, (t.total || 0) - netRecv);
+            meta.appendChild(el('span', '', T('剩余 ') + (t.speed > 0 && t.total > 0 ? fmtEta(remainBytes / t.speed) : '—')));
+            // 错误信息分层展示：ERROR 态优先显式 error，非 ERROR 态展示临时 engineError
+            if (t.state === 'error') {
+                var finalErr = t.error || t.engineError || '';
+                if (finalErr) meta.appendChild(el('span', '', T('原因：') + finalErr));
+            } else if (t.engineError) {
+                meta.appendChild(el('span', '', T('提示：') + t.engineError));
+            }
         }
 
         // 按钮行：签名守卫（仅任务/状态/通道变化才重建；meta 每帧刷新不触碰按钮 DOM）。
         // verifying（每文件下载完成后的 SHA256 校验过渡态）与 downloading 归一同一签名——
         // 否则每文件切换按钮行清空重建+隐藏再显示，形成用户反馈的"文件切换瞬间按钮闪现"；
         // 校验中仍显示按钮（点击暂停由主进程在文件边界生效），状态文案独立显示"校验中"
-        var showActs = IN_ELECTRON && t.state !== 'done';
+        var showActs = IN_ELECTRON && t.state !== 'done' && t.state !== 'pending_restart';
         var btnState = t.state === 'verifying' ? 'downloading' : t.state;
         var sig = showActs ? (t.taskId + '|' + btnState + '|' + t.via) : '';
         if (row._sig !== sig) {
@@ -2626,10 +2633,11 @@
             if (showActs) {
                 if (t.state === 'downloading' || t.state === 'connecting') {
                     row._acts.appendChild(mkBtn(T('暂停'), '', function () { taskAction(t.taskId, 'pause'); }));
+                    row._acts.appendChild(mkBtn(T('取消'), '', function () { taskAction(t.taskId, 'cancel'); }));
                 } else { // paused / error → 继续
                     row._acts.appendChild(mkBtn(T('继续'), 'primary', function () { taskAction(t.taskId, 'resume'); }));
+                    row._acts.appendChild(mkBtn(T('取消'), '', function () { taskAction(t.taskId, 'cancel'); }));
                 }
-                row._acts.appendChild(mkBtn(T('取消'), '', function () { taskAction(t.taskId, 'cancel'); }));
             }
             row._sig = sig;
         }
