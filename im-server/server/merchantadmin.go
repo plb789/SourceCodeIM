@@ -51,6 +51,12 @@ func (s *Server) handleAdminMerchantList(w http.ResponseWriter, r *http.Request)
 	db.Count(&total)
 	var list []model.Merchant
 	db.Order("id ASC").Offset((page - 1) * size).Limit(size).Find(&list)
+	// 存储占用批量汇总（一次分组查询）：避免逐商户 N+1，口径与 merchantQuotaUsed 一致
+	owners := make([]string, 0, len(list))
+	for _, m := range list {
+		owners = append(owners, m.Username)
+	}
+	usedMap := merchantQuotaUsedBatch(owners)
 	items := make([]map[string]interface{}, 0, len(list))
 	for _, m := range list {
 		var gameCnt int64
@@ -68,7 +74,7 @@ func (s *Server) handleAdminMerchantList(w http.ResponseWriter, r *http.Request)
 			"recharge_total": sum,
 			// 存储配额与占用（安全加固）：管理员分配视角——quota 0=跟随全局 / -1=不限 / >0=专属字节
 			"storage_quota_bytes": m.StorageQuotaBytes,
-			"storage_used_bytes":  merchantQuotaUsed(m.Username),
+			"storage_used_bytes":  usedMap[m.Username],
 			// 单版本文件清单条数上限：0=跟随全局 / -1=不限 / >0=专属条数
 			"max_files_per_version": m.MaxFilesPerVersion,
 			"create_time":           m.CreateTime.Format("2006-01-02 15:04"),

@@ -270,6 +270,9 @@ class GameDownloadManager extends EventEmitter {
         const pt = Number((payload && payload.packType) || 0);
         const packType = (pt === 1 || pt === 2) ? pt : 0;
         const packSize = Math.max(0, Number((payload && payload.packSize) || 0));
+        // 进度总量（散文件通道）：页面按服务端 delta_size_bytes 传增量更新实际字节；
+        // 0=未提供走文件清单累加。ZIP 通道不适用（总量按压缩包/解压后大小推进）
+        const totalBytes = Math.max(0, Number((payload && payload.totalBytes) || 0));
         for (let i = 0; i < files.length; i++) {
             const f = files[i] || {};
             const rel = String(f.rel_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -285,6 +288,16 @@ class GameDownloadManager extends EventEmitter {
             });
         }
         if (!list.length) return { ok: false, error: '文件清单为空或全部非法' };
+        // 下载总量口径（Steam 模式）：
+        //   - 散文件通道 + 服务端给了 delta_size_bytes：只用 delta（本次变化/新增的文件字节）
+        //     —— 本地缺失/损坏的未变更文件不在此阶段计入，由后续"验证补齐"阶段统一处理
+        //   - 其他情况（首次安装/无 from/BT/ZIP）：按清单全量
+        // 不再做 stat 预扫——避免机械盘上 5 万文件同步 stat 阻塞主进程，进度条在下载阶段
+        // 以 delta 为基准，下载完进入验证补齐阶段后推进到 100%
+        const incremental = !!(payload && payload.incremental);
+        const incrementalUpdate = packType === 0 && incremental && totalBytes > 0;
+        const totalNeeded = incrementalUpdate ? totalBytes : 0;
+        const fullTotal = this._calcTotal(list);
         let task;
         if (exist) {
             // 旧任务重置（error 恢复/重复完成重下）：换目录/账号等元数据一并刷新
@@ -302,7 +315,7 @@ class GameDownloadManager extends EventEmitter {
             task._extracted = false;
             task._phase = 'download';
             task._extractProc = null;
-            task.total = this._calcTotal(list);
+            task.total = totalNeeded > 0 ? totalNeeded : fullTotal;
             task.fileIndex = 0;
             task.retries = 0;
             task.received = 0;          // 总处理字节（下载+去重复用，用于整体进度条）
@@ -311,6 +324,7 @@ class GameDownloadManager extends EventEmitter {
             task.dedupedBytes = 0;      // 去重复用总字节
             task._speed = 0;
             task._currentRel = '';
+            task.incremental = incrementalUpdate; // Steam 增量更新标记（下载完进入验证补齐阶段）
         } else {
             task = {
                 taskId: taskId,
@@ -330,11 +344,12 @@ class GameDownloadManager extends EventEmitter {
                 netReceived: 0,       // 实际网络下载字节（速度/净下载量统计）
                 dedupedCount: 0,      // 去重复用文件数
                 dedupedBytes: 0,      // 去重复用总字节
-                total: this._calcTotal(list),
+                total: totalNeeded > 0 ? totalNeeded : fullTotal,
                 fileIndex: 0,
                 startedAt: 0,
                 retries: 0,
                 _reqs: null,       // 当前文件活跃 http 请求集合（Set，暂停/取消遍历 destroy）
+                incremental: incrementalUpdate, // Steam 增量更新标记（下载完进入验证补齐阶段）
                 _speed: 0,         // 500ms 窗口速度（B/s）
                 _diskBytes: 0,     // 磁盘写入字节累计（落盘吞吐采集）
                 _diskSpeed: 0,     // 500ms 窗口磁盘写入速度（B/s）
@@ -1126,8 +1141,168 @@ class GameDownloadManager extends EventEmitter {
         };
     }
 
-    // 任务完成：全部文件下载且校验通过 →（ZIP 打包版本先走解压阶段）→ 暂存目录一次性换入正式目录
-    // （done 必发一条进度；main.js 监听 done 事件探测主程序写注册表）
+    // 验证补齐阶段（Steam 模式）：对已安装目录内的所有清单文件做 stat+hash 校验，
+    // 找出缺失/大小不符/sha 不符的文件并就地下载补齐。补齐文件直接写 finalDir（已安装根）
+    // 的同路径——用临时文件写后 rename，避免写一半断电损坏。
+    // 进度口径：task.total 保持下载阶段的 delta 总量，补齐的网络字节累加到 netReceived，
+    // 进度条从"delta"继续推进。total 最终不变（Steam 模式验证阶段不额外算百分比，
+    // 进度条走完 delta 即认为完成——补齐字节体现在 netReceived > total 上）。
+    _verifyAndPatch(task, done) {
+        const self = this;
+        task._phase = 'verify';
+        task._speed = 0;
+        task._diskSpeed = 0;
+        task._currentRel = '';
+        this._emit(task, '', null, true); // 阶段切换必发一条（页面切"验证中"）
+
+        const finalDir = task.installDir;
+        if (!fs.existsSync(finalDir)) {
+            // 目录不存在：全量清单都要补齐
+            self._runPatchDownloads(task, task.files.slice(), done);
+            return;
+        }
+
+        // 逐文件校验
+        const needsPatch = [];
+        for (const f of task.files) {
+            const target = path.resolve(finalDir, f.rel_path);
+            let ok = false;
+            try {
+                const st = fs.statSync(target);
+                if (st.isFile() && st.size === f.size) {
+                    // 大小匹配 → 做 hash 校验（仅对 sha256 非空的文件）
+                    if (f.sha256) {
+                        const h = self._hashFileSync(target);
+                        if (h && h.toLowerCase() === f.sha256.toLowerCase()) ok = true;
+                    } else {
+                        ok = true; // 无 sha256 只按大小判
+                    }
+                }
+            } catch (e) { /* stat 失败 = 缺失 */ }
+            if (!ok) needsPatch.push(f);
+        }
+        if (!needsPatch.length) {
+            // 全部通过，零补齐
+            self._emit(task, '', null, true);
+            done(null);
+            return;
+        }
+        self._runPatchDownloads(task, needsPatch, done);
+    }
+
+    // 把补齐队列的文件就地下载到 finalDir：直接写临时文件再 rename 到目标路径，
+    // 不经过 stagingDir（避免二次换入）。progress/received 口径与下载阶段一致。
+    _runPatchDownloads(task, queue, done) {
+        const self = this;
+        if (!queue.length) { done(null); return; }
+        // 保持 downloading 状态，进度条继续推进
+        const processOne = function () {
+            if (task.state !== 'downloading') { done(null); return; }
+            const f = queue.shift();
+            if (!f) { done(null); return; }
+            const target = path.resolve(task.installDir, f.rel_path);
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            // 用 _downloadFile 复用下载逻辑——但它默认写 stagingDir 的 target 路径。
+            // 我们换个做法：直接复用 HTTP 下载 + 临时文件 + rename
+            self._patchOneFile(task, f, target).then(function () {
+                processOne();
+            }).catch(function (err) {
+                done(err);
+            });
+        };
+        processOne();
+    }
+
+    // 单文件补齐下载：临时文件 + rename 覆盖（单连接，不走分块/续传，简化逻辑）
+    _patchOneFile(task, file, finalPath) {
+        const self = this;
+        return new Promise(function (resolve, reject) {
+            if (task.state !== 'downloading') { resolve(); return; }
+            const url = self._buildUrl(task, file);
+            if (!url) { reject(new Error('补齐: 缺少下载地址 ' + file.rel_path)); return; }
+            if (task.direct && url.indexOf('https:') !== 0) {
+                reject(new Error('补齐: 直连必须 https ' + url.split('/').slice(0, 3).join('/')));
+                return;
+            }
+            const tmp = finalPath + '.part';
+            const dir = path.dirname(finalPath);
+            fs.mkdirSync(dir, { recursive: true });
+            const mod = url.indexOf('https:') === 0 ? https : http;
+            const req = mod.request({ method: 'GET', url: url, headers: {} }, function (res) {
+                // 302 跟随一次（预签名 URL 常见）
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    const nextUrl = new URL(res.headers.location, url).toString();
+                    res.resume();
+                    self._patchOneFile(task, { rel_path: file.rel_path, url: nextUrl, size: file.size, sha256: file.sha256 }, finalPath)
+                        .then(resolve).catch(reject);
+                    return;
+                }
+                if (res.statusCode !== 200) {
+                    res.resume();
+                    self._safeUnlink(tmp);
+                    reject(new Error('补齐: HTTP ' + res.statusCode + ' ' + file.rel_path));
+                    return;
+                }
+                let got = 0;
+                const writeStream = fs.createWriteStream(tmp);
+                res.pipe(writeStream);
+                res.on('data', function (chunk) {
+                    got += chunk.length;
+                    task.netReceived += chunk.length;
+                    task.received += chunk.length;
+                    self._emit(task, file.rel_path, null, false);
+                });
+                res.on('end', function () {
+                    writeStream.end(function () {
+                        try {
+                            self._safeUnlink(finalPath);
+                            fs.renameSync(tmp, finalPath);
+                            if (file.sha256) {
+                                const h = self._hashFileSync(finalPath);
+                                if (!h || h.toLowerCase() !== file.sha256.toLowerCase()) {
+                                    self._safeUnlink(finalPath);
+                                    reject(new Error('补齐: hash mismatch ' + file.rel_path));
+                                    return;
+                                }
+                            }
+                            resolve();
+                        } catch (e) { reject(e); }
+                    });
+                });
+                res.on('error', function (err) { writeStream.end(); self._safeUnlink(tmp); reject(err); });
+            });
+            req.on('error', function (err) { self._safeUnlink(tmp); reject(err); });
+            try { req.end(); } catch (e) { reject(e); }
+        });
+    }
+
+    // 文件同步哈希（sha256）：分块读取，避免 readFileSync 一次性加载大文件导致 OOM。
+    // CHUNK_SIZE=1MB，4GB 文件仅常驻 1MB 缓冲。保持同步签名，调用方无需改 async 链路。
+    _hashFileSync(target) {
+        try {
+            const fd = fs.openSync(target, 'r');
+            try {
+                const h = crypto.createHash('sha256');
+                const chunk = Buffer.allocUnsafe(1024 * 1024); // 1MB
+                let pos = 0;
+                let bytesRead;
+                while ((bytesRead = fs.readSync(fd, chunk, 0, chunk.length, pos)) > 0) {
+                    h.update(bytesRead === chunk.length ? chunk : chunk.slice(0, bytesRead));
+                    pos += bytesRead;
+                }
+                return h.digest('hex');
+            } finally {
+                fs.closeSync(fd);
+            }
+        } catch (e) { return ''; }
+    }
+
+    _safeUnlink(p) {
+        try { fs.unlinkSync(p); } catch (e) {}
+    }
+
+    // 任务完成：全部文件下载且校验通过 →（ZIP 打包版本先走解压阶段）→ （增量散文件版本走验证补齐阶段）
+    // → 暂存目录一次性换入正式目录（done 必发一条进度；main.js 监听 done 事件探测主程序写注册表）
     _finish(task) {
         const self = this;
         // ZIP 打包版本（packType>0）：全部卷下载校验通过后进入解压阶段（phase='extract'，
@@ -1159,6 +1334,22 @@ class GameDownloadManager extends EventEmitter {
                 }
                 task._extracted = true;
                 task._phase = 'download';
+                self._finishCommit(task);
+            });
+            return;
+        }
+        // 散文件增量更新（Steam 模式）：下载完 delta 文件后，对已安装目录内所有清单文件做逐文件
+        // stat+hash 校验，把本地缺失/损坏的未变更文件补齐。phase='verify' 页面显示"验证中"。
+        // 首次安装/无 incremental 标记/非散文件通道：跳过验证阶段，直接提交。
+        if (task.packType === 0 && task.incremental && task.state === 'downloading') {
+            this._verifyAndPatch(task, function (err) {
+                if (err) {
+                    task.state = 'error';
+                    task._phase = 'download';
+                    task._emit(task, '', (err && err.message) || '验证补齐失败', true);
+                    self._schedule();
+                    return;
+                }
                 self._finishCommit(task);
             });
             return;

@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1003,7 +1004,8 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 		store.DB.Model(&model.Game{}).Where("id = ?", g.ID).UpdateColumn("down_count", g.DownCount+1)
 	}
 	balance, _ := userPoints(username)
-	manifest, err := s.gameManifest(&g, "")
+	// from=客户端已安装版本号：服务端据此计算 delta_size_bytes（增量更新实际需下载字节）
+	manifest, err := s.gameManifest(&g, "", strings.TrimSpace(r.URL.Query().Get("from")))
 	if err != nil {
 		adminFail(w, http.StatusNotFound, "该游戏暂无可下载版本")
 		return
@@ -1111,7 +1113,7 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 }
 
 // gameManifest 版本清单构建（version 空=最新版）：文件 ID/相对路径/大小/SHA256/下载地址归口下发
-func (s *Server) gameManifest(g *model.Game, version string) (map[string]interface{}, error) {
+func (s *Server) gameManifest(g *model.Game, version string, fromVersion string) (map[string]interface{}, error) {
 	// 下载方式=2（管理员上传种子）：合成清单——文件清单不下发（完整性由 BT 分片校验承担），
 	// slug 取种子内 info.name（安装锚点必须与引擎落盘根一致，否则 exe 探测/启动错位），
 	// 版本沿用最新版本号（未上架过版本用占位 "torrent"），size/file_count 取种子内统计；
@@ -1137,6 +1139,7 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 			"size_bytes": total, "file_count": count,
 			"files":        []map[string]interface{}{},
 			"torrent_kind": "uploaded",
+			"delta_size_bytes": total, // BT 重下无增量语义
 		}, nil
 	}
 	var v model.GameVersion
@@ -1174,6 +1177,17 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 			"url":      fileURL,
 		})
 	}
+
+	// delta_size_bytes：增量更新时客户端实际需要下载的字节数。
+	// 客户端已安装 fromVersion → 目标版本 v，对比两版清单算出差异文件（新增 + sha256 变更）的 size 之和。
+	// 没传 fromVersion 或 fromVersion 不存在 → delta_size_bytes = size_bytes（全量下载）。
+	deltaSize := v.SizeBytes
+	if fromVersion != "" && fromVersion != v.Version {
+		if delta, ok := s.gameManifestDeltaSize(g.ID, fromVersion, v.ID); ok {
+			deltaSize = delta
+		}
+	}
+
 	return map[string]interface{}{
 		"game_id": g.ID, "slug": g.Slug, "name": g.Name,
 		"version": v.Version, "manifest_hash": v.ManifestHash,
@@ -1183,12 +1197,209 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 		// 0=散文件逐个下载（现状） 1=单 ZIP（下载后客户端解压） 2=分卷 ZIP（客户端 7z 分卷解压）
 		// 3=补丁包（服务端已解包合成完整散文件清单，客户端按散文件语义走——dedup 硬链接天然增量）
 		"pack_type": v.PackType, "pack_size": v.PackSize,
-		"files": list,
+		"delta_size_bytes": deltaSize,
+		"files":             list,
 	}, nil
+}
+
+// gameManifestDeltaSize 计算从 fromVersion 到 toVersion 的增量下载字节数。
+// 对比两个版本的 GameFile 清单，差异条件：rel_path 不同（新增/删除不影响——客户端只关心目标版本存在的文件）
+// 或 sha256 不同（变更）。目标版本中 sha256 与 fromVersion 相同的文件客户端本地已有，无需下载。
+//
+// 口径对齐：补丁合成后 v2 的 GameFile.RelPath 会混杂两种口径——继承文件保留基底原始大小写/前缀，
+// 变更文件用归一化后路径。直接按 DB 原始 rel_path 精确匹配会漏掉"逻辑同一路径但口径不同"的文件，
+// 造成增量多算（本该复用却被判为新增）。这里复用补丁合成里的 norm+智能前缀对齐算法，确保口径一致。
+//
+// 返回 (deltaSize, ok) —— ok=false 表示 fromVersion 不存在或无法对比，调用方应回退全量。
+func (s *Server) gameManifestDeltaSize(gameID uint, fromVersion string, toVersionID uint) (int64, bool) {
+	cacheKey := strconv.FormatUint(uint64(gameID), 10) + ":" + fromVersion + ":" + strconv.FormatUint(uint64(toVersionID), 10)
+	if d, ok := deltaCacheGet(cacheKey); ok {
+		return d, true
+	}
+	var fromV model.GameVersion
+	if err := store.DB.Where("game_id = ? AND version = ? AND register_state = 0", gameID, fromVersion).First(&fromV).Error; err != nil {
+		return 0, false
+	}
+	var fromFiles []model.GameFile
+	store.DB.Where("version_id = ?", fromV.ID).Find(&fromFiles)
+	if len(fromFiles) == 0 {
+		return 0, false
+	}
+	norm := func(p string) string {
+		return strings.ToLower(strings.ReplaceAll(p, "\\", "/"))
+	}
+	detectPrefix := func(keys []string) string {
+		if len(keys) == 0 {
+			return ""
+		}
+		sort.Strings(keys)
+		first := keys[0]
+		if idx := strings.IndexByte(first, '/'); idx < 0 {
+			return ""
+		} else {
+			pfx := first[:idx+1]
+			for _, k := range keys {
+				if !strings.HasPrefix(k, pfx) {
+					return ""
+				}
+			}
+			return pfx
+		}
+	}
+	fromMapNorm := make(map[string]string, len(fromFiles))
+	for _, f := range fromFiles {
+		fromMapNorm[norm(f.RelPath)] = f.SHA256
+	}
+	// 检测两批路径公共前缀并对齐（与补丁合成一致）
+	var toFiles []model.GameFile
+	store.DB.Where("version_id = ?", toVersionID).Find(&toFiles)
+	toKeys := make([]string, 0, len(toFiles))
+	for _, f := range toFiles {
+		toKeys = append(toKeys, norm(f.RelPath))
+	}
+	toPfx := detectPrefix(toKeys)
+	fromKeys := make([]string, 0, len(fromFiles))
+	for _, f := range fromFiles {
+		fromKeys = append(fromKeys, norm(f.RelPath))
+	}
+	fromPfx := detectPrefix(fromKeys)
+	// 前缀不对齐时尝试剥离 from 的公共前缀（仅当剥离后匹配率提升）
+	fromLook := fromMapNorm
+	if fromPfx != "" && toPfx != "" && fromPfx != toPfx {
+		// 真实交集：fromMapNorm 与 toKeys
+		toKeySet := make(map[string]struct{}, len(toKeys))
+		for _, k := range toKeys {
+			toKeySet[k] = struct{}{}
+		}
+		var origMatch int
+		for k := range fromMapNorm {
+			if _, ok := toKeySet[k]; ok {
+				origMatch++
+			}
+		}
+		fromStripped := make(map[string]string, len(fromMapNorm))
+		for k, v := range fromMapNorm {
+			nk := strings.TrimPrefix(k, fromPfx)
+			fromStripped[nk] = v
+		}
+		strippedMatch := 0
+		for k := range fromStripped {
+			if _, ok := toKeySet[k]; ok {
+				strippedMatch++
+			}
+		}
+		if strippedMatch > origMatch && (strippedMatch >= 10 || strippedMatch > origMatch*2) {
+			fromLook = fromStripped
+		}
+	}
+	var delta int64
+	for _, f := range toFiles {
+		nk := norm(f.RelPath)
+		// 对称：如果 to 有公共前缀 from 没有，也尝试剥离 to 的前缀再查一次
+		if fromPfx != "" && toPfx != "" && fromPfx != toPfx {
+			nkStripped := strings.TrimPrefix(nk, toPfx)
+			if oldSHA, exists := fromLook[nkStripped]; exists && oldSHA == f.SHA256 {
+				continue
+			}
+		}
+		if oldSHA, exists := fromLook[nk]; exists && oldSHA == f.SHA256 {
+			continue
+		}
+		delta += f.SizeBytes
+	}
+	deltaCacheSet(cacheKey, delta)
+	return delta, true
 }
 
 // errVersionNotFound 版本不存在哨兵（清单构建归口复用）
 var errVersionNotFound = errGame("该游戏暂无可下载版本")
+
+// ===== delta_size 短 TTL 缓存（游戏清单 diff 结果）=====
+// key = "gameID:fromVersion:toVersionID"，value = 清单级增量字节数。
+// 目的：避免每次 manifest 都 SELECT 两次大清单 + map 构建。失效点：
+//   - gameVersionAsyncProcess 完成登记（register_state 0）
+//   - 版本删除
+// TTL 60s + LRU 512，版本登记完成后主动 invalidate 兜底。
+const (
+	deltaCacheTTLMs   = 60 * 1000
+	deltaCacheMaxKeys = 512
+)
+
+type deltaCacheEntry struct {
+	delta int64
+	ts    int64 // 写入毫秒时间戳
+}
+
+var (
+	deltaCacheMu sync.Mutex
+	deltaCache   = map[string]*deltaCacheEntry{}
+	deltaCacheQ  []string // LRU 队列：头旧尾新
+)
+
+// deltaCacheGet 读缓存；命中且未过期返回 delta, true
+func deltaCacheGet(key string) (int64, bool) {
+	deltaCacheMu.Lock()
+	defer deltaCacheMu.Unlock()
+	e, ok := deltaCache[key]
+	if !ok {
+		return 0, false
+	}
+	if time.Now().UnixMilli()-e.ts > deltaCacheTTLMs {
+		delete(deltaCache, key)
+		return 0, false
+	}
+	// 命中 → 把 key 移到 LRU 尾
+	for i, k := range deltaCacheQ {
+		if k == key {
+			deltaCacheQ = append(deltaCacheQ[:i], deltaCacheQ[i+1:]...)
+			break
+		}
+	}
+	deltaCacheQ = append(deltaCacheQ, key)
+	return e.delta, true
+}
+
+// deltaCacheSet 写缓存；超上限时按 LRU 淘汰
+func deltaCacheSet(key string, delta int64) {
+	deltaCacheMu.Lock()
+	defer deltaCacheMu.Unlock()
+	deltaCache[key] = &deltaCacheEntry{delta: delta, ts: time.Now().UnixMilli()}
+	// LRU：已存在则移尾
+	found := false
+	for i, k := range deltaCacheQ {
+		if k == key {
+			deltaCacheQ = append(deltaCacheQ[:i], deltaCacheQ[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		deltaCacheQ = append(deltaCacheQ, key)
+	}
+	// 超上限：从头淘汰
+	for len(deltaCache) > deltaCacheMaxKeys && len(deltaCacheQ) > 0 {
+		oldest := deltaCacheQ[0]
+		deltaCacheQ = deltaCacheQ[1:]
+		delete(deltaCache, oldest)
+	}
+}
+
+// invalidateDeltaCache 使某游戏的所有 delta 缓存失效（版本登记完成/删除后调用）。
+// 简单做法：遍历 key 前缀删除。游戏数有限，512 条上限下遍历成本可忽略。
+func invalidateDeltaCache(gameID uint) {
+	deltaCacheMu.Lock()
+	defer deltaCacheMu.Unlock()
+	prefix := strconv.FormatUint(uint64(gameID), 10) + ":"
+	kept := deltaCacheQ[:0]
+	for _, k := range deltaCacheQ {
+		if strings.HasPrefix(k, prefix) {
+			delete(deltaCache, k)
+		} else {
+			kept = append(kept, k)
+		}
+	}
+	deltaCacheQ = kept
+}
 
 // errGame 业务错误类型（errors.New 语义等价，独立命名便于清单链路识别）
 type errGame string
@@ -1217,7 +1428,7 @@ func (s *Server) HandleGameManifest(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
-	manifest, err := s.gameManifest(&g, strings.TrimSpace(r.URL.Query().Get("version")))
+	manifest, err := s.gameManifest(&g, strings.TrimSpace(r.URL.Query().Get("version")), strings.TrimSpace(r.URL.Query().Get("from")))
 	if err != nil {
 		adminFail(w, http.StatusNotFound, "该游戏暂无可下载版本")
 		return

@@ -1719,6 +1719,17 @@ func gameVersionLock(gameID uint) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
+// ===== Phase2 串行队列：同一 gameID 的 Phase2 必须按序跑（补丁 Phase2 需读基底清单）=====
+var phase2Queues sync.Map // map[uint]chan struct{}（容量 1：队列为空可入队）
+
+// phase2Queue 取游戏 Phase2 串行队列（不存在即原子创建容量 1 的 channel）
+// 入队 = 拿 token（阻塞等前一个 Phase2 出队），出队 = 释放 token。
+// 不同 gameID 的队列独立，互不阻塞。
+func phase2Queue(gameID uint) chan struct{} {
+	v, _ := phase2Queues.LoadOrStore(gameID, make(chan struct{}, 1))
+	return v.(chan struct{})
+}
+
 // gameVersionCreateCore 版本上架登记共享核心（管理端/商户端同链路，商户侧前置归属校验）：
 // 入参 {version, changelog, min_req, files:[{rel_path,size,sha256,upload_id}]}
 // 流程：清洗校验 → 逐文件合并分片至 games/<slug>/<version>/<rel_path>（MultiWriter 单遍复算
@@ -1766,7 +1777,12 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		adminFail(w, http.StatusConflict, "该游戏有另一个版本登记/删除操作进行中，请稍后重试")
 		return
 	}
-	defer vlock.Unlock()
+	// 注：Phase1 全程持锁到 Phase2 goroutine 启动前主动 Unlock（见 L1953），
+	// 避免 handler 返回时锁被持有导致下一请求 TryLock 撞 409。
+	// 此处 defer 为 Phase1 提前 return 的兜底防泄漏。
+	defer func() {
+		if vlock != nil { vlock.Unlock() }
+	}()
 	var exist model.GameVersion
 	// 查重放行 register_state IN (1,2) 同版本号（登记中/失败的版本行可重提覆盖）
 	if err := store.DB.Where("game_id = ? AND version = ? AND register_state = 0", g.ID, version).First(&exist).Error; err == nil {
@@ -1878,6 +1894,24 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 			return
 		}
 	}
+	// pack_type=3：基底版本存在性 + register_state=0 就绪 + PackType 合法
+	// —— 提到 switch 外统一查一次基底 GameVersion + GameFile 清单，
+	// 供 Phase1 packType==3 同步校验块复用，消除重复 SELECT
+	var baseVerFiles []model.GameFile
+	if packType == 3 {
+		var bv model.GameVersion
+		if err := store.DB.Where("game_id = ? AND version = ? AND register_state = 0", g.ID, baseVer).First(&bv).Error; err != nil {
+			adminFail(w, http.StatusNotFound, "基底版本不存在或未就绪: "+baseVer)
+			return
+		}
+		if bv.PackType != 0 && bv.PackType != 3 {
+			adminFail(w, http.StatusBadRequest, "基底版本必须为散文件版或补丁版（当前基底 pack_type="+strconv.FormatInt(int64(bv.PackType), 10)+"）")
+			return
+		}
+		// 基底 GameFile 清单：Phase1 packType==3 同步校验块复用（Phase2 异步 goroutine 必须自己再查一次，
+		// 因为 Phase1 Unlock 到 Phase2 执行之间有真实时序间隙，基底可能被删）
+		store.DB.Where("version_id = ?", bv.ID).Find(&baseVerFiles)
+	}
 	if packType == 2 {
 		if cap := s.cfg.Game.MaxUnpackSize; cap > 0 && packSize > cap {
 			adminFail(w, http.StatusBadRequest, "解压后总大小超出上限（上限 "+strconv.FormatInt(cap>>20, 10)+"MB）")
@@ -1905,13 +1939,155 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		previewSize += it.size
 	}
 
-	// 创建版本目录（Phase 1 完成前不会有文件写入，goroutine 里的重活才写）
+	// 创建版本目录
 	var verRoot string
+	var createdVersion bool // Phase1 成功创建 GameVersion 行后置 true，供下方 defer 清理泄漏用
 	if !direct {
 		verRoot = filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, version)
 		if err := os.MkdirAll(verRoot, os.ModePerm); err != nil {
 			adminFail(w, http.StatusInternalServerError, "版本目录创建失败: "+err.Error())
 			return
+		}
+		// Phase1 中途 return 时清理 verRoot（Phase1 packType==3 同步校验会写文件到 verRoot，
+		// 但 GameVersion 行还没创建，handler 直接 return 会让残留目录混进下次同版本号登记）。
+		defer func() {
+			if !createdVersion {
+				os.RemoveAll(verRoot)
+			}
+		}()
+	}
+
+	// ===== Phase1 同步校验 packType==3 补丁（非直连模式）=====
+	// 设计约束：delete/change/patch.json 等内容校验必须同步返回 HTTP 400/404，
+	// 不能等 Phase2 异步 goroutine——否则客户端拿到 HTTP 200 后才通过 WS 收到失败。
+	// Phase1 持锁期间做 patch.zip 合并 + 解包 + 校验，耗时几十毫秒（补丁包是增量的，体积小）。
+	if packType == 3 && !direct {
+		// 合并 patch.zip 分片到 verRoot
+		zipItem := items[0]
+		zipPath := filepath.Join(verRoot, filepath.FromSlash(zipItem.relPath))
+		if err := s.gameMergeChunks(s.gameTmpDir(zipItem.uploadID), zipPath, zipItem.size, zipItem.sha); err != nil {
+			adminFail(w, http.StatusBadRequest, "补丁包文件校验失败（"+err.Error()+"）")
+			return
+		}
+		// 解包补丁（落游戏文件到 verRoot + 拿 patch.json + 流式算 SHA256）
+		changeMapRaw, pjBytes, err := gamePatchUnpack(zipPath, verRoot, s.cfg.Game.MaxUnpackSize)
+		if err != nil {
+			adminFail(w, http.StatusBadRequest, "补丁包解包失败（"+err.Error()+"）")
+			return
+		}
+		// 归一化 helper
+		norm := func(p string) string { return strings.ToLower(strings.ReplaceAll(p, "\\", "/")) }
+		detectPrefix := func(keys []string) string {
+			if len(keys) == 0 { return "" }
+			sort.Strings(keys)
+			first := keys[0]
+			if idx := strings.IndexByte(first, '/'); idx < 0 { return "" } else {
+				pfx := first[:idx+1]
+				for _, k := range keys { if !strings.HasPrefix(k, pfx) { return "" } }
+				return pfx
+			}
+		}
+		// 基底 GameFile 清单：已在 switch 外统一查询 baseVerFiles，直接复用
+		if len(baseVerFiles) == 0 {
+			adminFail(w, http.StatusBadRequest, "基底版本清单缺失")
+			return
+		}
+		// 构建基底归一化 map
+		type baseEntryPhase1 struct { origRel string; size int64; sha string; storage string }
+		baseMapNormPhase1 := make(map[string]baseEntryPhase1, len(baseVerFiles))
+		for _, f := range baseVerFiles {
+			baseMapNormPhase1[norm(f.RelPath)] = baseEntryPhase1{origRel: f.RelPath, size: f.SizeBytes, sha: f.SHA256, storage: f.StoragePath}
+		}
+		// changeMap 归一化
+		changeMapNormPhase1 := make(map[string]gameUploadItem, len(changeMapRaw))
+		for k, v := range changeMapRaw {
+			nk := norm(k)
+			v.relPath = nk
+			changeMapNormPhase1[nk] = v
+		}
+		// patch.json 解析 + 格式 + base_version + version 一致性
+		var pjPhase1 struct {
+			Format      int      `json:"format"`
+			BaseVersion string   `json:"base_version"`
+			Version     string   `json:"version"`
+			Change      []string `json:"change"`
+			Delete      []string `json:"delete"`
+		}
+		if err2 := json.Unmarshal(pjBytes, &pjPhase1); err2 != nil {
+			adminFail(w, http.StatusBadRequest, "patch.json 解析失败（"+err2.Error()+"）")
+			return
+		}
+		if pjPhase1.Format != 1 {
+			adminFail(w, http.StatusBadRequest, "patch.json 格式版本不支持")
+			return
+		}
+		if pjPhase1.BaseVersion != "" && pjPhase1.BaseVersion != baseVer {
+			adminFail(w, http.StatusBadRequest, "patch.json 基底版本与登记参数不一致")
+			return
+		}
+		if pjPhase1.Version != "" && pjPhase1.Version != version {
+			adminFail(w, http.StatusBadRequest, "patch.json 版本号与登记版本号不一致")
+			return
+		}
+		// change 数量 + 条目一致性（归一化后对比）
+		pjChangeNormPhase1 := make([]string, 0, len(pjPhase1.Change))
+		for _, c := range pjPhase1.Change { pjChangeNormPhase1 = append(pjChangeNormPhase1, norm(c)) }
+		if len(pjChangeNormPhase1) != len(changeMapNormPhase1) {
+			adminFail(w, http.StatusBadRequest, "patch.json change 数量与 zip 条目不一致")
+			return
+		}
+		for _, c := range pjChangeNormPhase1 {
+			if _, ok := changeMapNormPhase1[c]; !ok {
+				adminFail(w, http.StatusBadRequest, "patch.json change 与 zip 条目不一致: "+c)
+				return
+			}
+		}
+		// 智能前缀对齐
+		baseKeysPhase1 := make([]string, 0, len(baseMapNormPhase1))
+		for k := range baseMapNormPhase1 { baseKeysPhase1 = append(baseKeysPhase1, k) }
+		changeKeysPhase1 := make([]string, 0, len(changeMapNormPhase1))
+		for k := range changeMapNormPhase1 { changeKeysPhase1 = append(changeKeysPhase1, k) }
+		basePfxPhase1 := detectPrefix(baseKeysPhase1)
+		changePfxPhase1 := detectPrefix(changeKeysPhase1)
+		if basePfxPhase1 != "" && basePfxPhase1 != changePfxPhase1 {
+			origMatch := 0
+			for k := range baseMapNormPhase1 { if _, ok := changeMapNormPhase1[k]; ok { origMatch++ } }
+			baseStripped := make(map[string]baseEntryPhase1, len(baseMapNormPhase1))
+			for k, v := range baseMapNormPhase1 {
+				if strings.HasPrefix(k, basePfxPhase1) { baseStripped[strings.TrimPrefix(k, basePfxPhase1)] = v } else { baseStripped[k] = v }
+			}
+			strippedMatch := 0
+			for k := range baseStripped { if _, ok := changeMapNormPhase1[k]; ok { strippedMatch++ } }
+			if strippedMatch > origMatch && (strippedMatch >= 10 || strippedMatch > origMatch*2) {
+				logger.Info("[补丁合成] Phase1 前置校验：基底清单路径公共前缀 %q 与补丁不对齐，自动剥离: 原始匹配 %d → 剥离后 %d",
+					basePfxPhase1, origMatch, strippedMatch)
+				baseMapNormPhase1 = baseStripped
+			} else {
+				basePfxPhase1 = "" // 不剥离则后续 delete 检查也不尝试
+			}
+		} else {
+			basePfxPhase1 = ""
+		}
+		// delete 校验（路径安全 + 不在 change + 在基底清单中 + delete∩change 冲突）
+		for _, dRaw := range pjPhase1.Delete {
+			d := norm(dRaw)
+			if basePfxPhase1 != "" && !strings.HasPrefix(d, basePfxPhase1) {
+				if _, ok := baseMapNormPhase1[d]; !ok {
+					if _, ok2 := baseMapNormPhase1[basePfxPhase1+d]; ok2 { d = basePfxPhase1 + d }
+				}
+			}
+			if zipEntryUnsafe(d) {
+				adminFail(w, http.StatusBadRequest, "补丁删除清单含非法路径: "+d)
+				return
+			}
+			if _, ok := changeMapNormPhase1[d]; ok {
+				adminFail(w, http.StatusBadRequest, "delete 与 change 冲突: "+d)
+				return
+			}
+			if _, ok := baseMapNormPhase1[d]; !ok {
+				adminFail(w, http.StatusBadRequest, "delete 路径不在基底版本清单中: "+d)
+				return
+			}
 		}
 	}
 
@@ -1933,6 +2109,7 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 		adminFail(w, http.StatusInternalServerError, "版本登记失败: "+err.Error())
 		return
 	}
+	createdVersion = true // GameVersion 行已落库，defer 不再清理 verRoot
 
 	// 立即返回 version_id —— HTTP 响应 < 1s，根治 CDN 超时
 	logger.Info("[版本登记·Phase1 完成] game=%s(%s) v%s version_id=%d files=%d operator=%s",
@@ -1948,6 +2125,10 @@ func (s *Server) gameVersionCreateCore(w http.ResponseWriter, r *http.Request, g
 	})
 
 	// 启动 Phase 2 后台 goroutine（重活：分片合并 + 清单写入 + manifest + 病毒扫描）
+	// Phase2 之前主动释放 vlock：Phase1 handler 一旦返回，下一请求应能立即 TryLock 成功；
+	// 而 Phase2 goroutine 自己会重新 Lock（阻塞等待），不会与后续请求并发重活。
+	vlock.Unlock()
+	vlock = nil
 	go s.gameVersionAsyncProcess(g, v, items, operator, direct, verRoot, packType, packSize, baseVer, fileLimit)
 }
 
@@ -1958,14 +2139,20 @@ func (s *Server) gameVersionAsyncProcess(
 	g *model.Game, v model.GameVersion, items []gameUploadItem, operator string,
 	direct bool, verRoot string, packType int8, packSize int64, baseVer string, fileLimit int,
 ) {
-	// 版本锁：Phase 1 已释放，goroutine 重新获取（TryLock 快速失败避免长时间挂起）
-	vlock := gameVersionLock(g.ID)
-	if !vlock.TryLock() {
-		logger.Error("[版本登记·Phase2] 无法获取版本锁，放弃处理。game=%s(%s) v%s", g.Name, g.Slug, v.Version)
-		s.markVersionFailed(v.ID, "后台处理被中断（锁竞争），请联系管理员重试", operator)
+	// Phase1 已在返回前释放 vlock——Phase2 独立跑重活，不持 vlock。
+	// 但同一 gameID 的 Phase2 必须串行：补丁 Phase2 需要读基底版本清单合成，
+	// 若前一个 Phase2 还没写完 GameFile，补丁 Phase2 就会撞"基底清单缺失"。
+	// 用 per-gameID 信号量队列：每个 gameID 一个 chan struct{}(容量 1)，Phase2 try 入队，
+	// 队满则阻塞等前一个 Phase2 完。不同 gameID 互不影响。
+	ch := phase2Queue(g.ID)
+	select {
+	case ch <- struct{}{}:
+		defer func() { <-ch }()
+	case <-time.After(30 * time.Second):
+		logger.Error("[版本登记·Phase2] 等待 Phase2 队列超时。game=%s(%s) v%s", g.Name, g.Slug, v.Version)
+		store.DB.Model(&v).Updates(map[string]interface{}{"register_state": 2, "error_msg": "Phase2 队列排队超时"})
 		return
 	}
-	defer vlock.Unlock()
 
 	tStart := time.Now()
 	// 统一错误处理 + 回滚
@@ -1984,9 +2171,11 @@ func (s *Server) gameVersionAsyncProcess(
 	}
 
 	// 分片合并（重活，最大耗时点）
+	// 注意：packType==3 补丁包 + 非直连 → Phase1 同步校验块已经做过 merge + unpack（落盘到 verRoot），
+	// 且 Phase2 后面 pack_type=3 分支会用 finalItems 重建 totalSize/hashLines，这里跳过避免重复 IO。
 	var totalSize int64
 	hashLines := make([]string, 0, len(items))
-	if !direct {
+	if !direct && packType != 3 {
 		for _, it := range items {
 			dst := filepath.Join(verRoot, filepath.FromSlash(it.relPath))
 			abs, err := filepath.Abs(dst)
@@ -2048,12 +2237,11 @@ func (s *Server) gameVersionAsyncProcess(
 	storageOverride := map[string]string{}
 	if packType == 3 {
 		var bv model.GameVersion
-		if err := store.DB.Where("game_id = ? AND version = ?", g.ID, baseVer).First(&bv).Error; err != nil {
-			fail("基底版本不存在: " + baseVer)
-			return
-		}
-		if bv.PackType != 0 && bv.PackType != 3 {
-			fail("基底版本必须为散文件版或补丁版")
+		// Phase1 已同步校验过基底存在性 + register_state=0 + PackType 合法；
+		// Phase2 这里再查一次（补 register_state=0 兜底）——
+		// Phase1 Unlock vlock 到 Phase2 goroutine 真正执行之间，基底行理论上可能被删或状态变
+		if err := store.DB.Where("game_id = ? AND version = ? AND register_state = 0", g.ID, baseVer).First(&bv).Error; err != nil {
+			fail("基底版本不存在或未就绪: " + baseVer)
 			return
 		}
 		var baseFiles []model.GameFile
@@ -2331,10 +2519,12 @@ func (s *Server) gameVersionAsyncProcess(
 	}
 
 	// 刷新游戏最新版冗余
-	store.DB.Model(&model.Game{}).Updates(map[string]interface{}{
+	if err := store.DB.Model(&model.Game{}).Where("id = ?", g.ID).Updates(map[string]interface{}{
 		"latest_version": v.Version,
 		"size_bytes":     totalSize,
-	})
+	}).Error; err != nil {
+		logger.Warn("[版本登记·Phase2] 最新版冗余刷新失败 game=%s: %v", g.Slug, err)
+	}
 
 	// 清理分片临时目录
 	if !direct {
@@ -2349,6 +2539,9 @@ func (s *Server) gameVersionAsyncProcess(
 	logger.Info("[版本登记·Phase2 完成] game=%s(%s) v%s version_id=%d files=%d size=%d elapsed=%v operator=%s",
 		g.Name, g.Slug, v.Version, v.ID, len(finalItems), totalSize,
 		time.Since(tStart).Round(time.Millisecond), operator)
+
+	// 清除该游戏的 delta 缓存：刚登记完成的版本清单已变更，旧缓存（含未完成的登记中版本）全部失效
+	invalidateDeltaCache(g.ID)
 
 	// 病毒扫描（异步 goroutine，已在 clamScanGameVersionAsync 内 fail-open）
 	if g.OwnerUsername != "" && !direct && s.cfg.ClamAV.Enabled {
@@ -2445,18 +2638,61 @@ func (s *Server) RecoverRegisteringVersions() {
 	}
 }
 
-// merchantQuotaUsed 商户存储配额占用口径：名下全部游戏全部版本 size_bytes 之和
-// （官方游戏 OwnerUsername 为空天然不参与；空库/无版本 COALESCE 兜底 0）。
-// 排除直连游戏（download_method=3，方案 D2：其版本文件不在平台磁盘，不占配额——
-// 否则商户切直连后配额占用虚高，进度条与实际平台磁盘占用脱节）
+// merchantQuotaUsed 商户存储配额占用口径：按 GameFile.storage_path 去重汇总实际物理磁盘占用。
+// 同一物理文件被多个版本引用（如补丁包继承基底版本的文件路径）只算一次，
+// 避免 pack_type=3 补丁合成后 size_bytes 写成完整客户端大小导致配额虚高。
+// 排除直连游戏（download_method=3）——其文件不在平台磁盘，storage_path 为空串天然被过滤。
 func merchantQuotaUsed(owner string) int64 {
 	var used int64
-	store.DB.Model(&model.GameVersion{}).
-		Select("COALESCE(SUM(im_game_version.size_bytes), 0)").
-		Joins("JOIN im_game ON im_game.id = im_game_version.game_id").
-		Where("im_game.owner_username = ? AND im_game.download_method <> 3", owner).
-		Scan(&used)
+	store.DB.Raw(`
+		SELECT COALESCE(SUM(t.sz), 0) FROM (
+			SELECT gf.storage_path, MIN(gf.size_bytes) AS sz
+			FROM im_game_file gf
+			JOIN im_game_version gv ON gv.id = gf.version_id
+			JOIN im_game g ON g.id = gv.game_id
+			WHERE g.owner_username = ?
+			  AND g.download_method <> 3
+			  AND gv.register_state = 0
+			  AND gf.storage_path != ''
+			GROUP BY gf.storage_path
+		) t
+	`, owner).Scan(&used)
 	return used
+}
+
+// merchantQuotaUsedBatch 批量版 merchantQuotaUsed（口径完全一致）：一次分组查询汇总多个商户的
+// 物理占用，供管理端商户列表使用——避免逐商户各跑一次 GROUP BY 的 N+1 开销。
+// 返回覆盖全部入参的 map（无文件的商户为 0）。
+func merchantQuotaUsedBatch(owners []string) map[string]int64 {
+	out := make(map[string]int64, len(owners))
+	if len(owners) == 0 {
+		return out
+	}
+	for _, o := range owners {
+		out[o] = 0
+	}
+	var rows []struct {
+		Owner string
+		Used  int64
+	}
+	store.DB.Raw(`
+		SELECT t.owner AS owner, COALESCE(SUM(t.sz), 0) AS used FROM (
+			SELECT g.owner_username AS owner, gf.storage_path, MIN(gf.size_bytes) AS sz
+			FROM im_game_file gf
+			JOIN im_game_version gv ON gv.id = gf.version_id
+			JOIN im_game g ON g.id = gv.game_id
+			WHERE g.owner_username IN ?
+			  AND g.download_method <> 3
+			  AND gv.register_state = 0
+			  AND gf.storage_path != ''
+			GROUP BY g.owner_username, gf.storage_path
+		) t
+		GROUP BY t.owner
+	`, owners).Scan(&rows)
+	for _, r := range rows {
+		out[r.Owner] = r.Used
+	}
+	return out
 }
 
 // merchantQuotaLimit 商户存储配额解析归口（管理员后台分配支持）：商户行专属值优先——
@@ -2987,6 +3223,7 @@ func (s *Server) gameVersionDeleteCore(w http.ResponseWriter, v *model.GameVersi
 	}
 	store.DB.Where("version_id = ?", v.ID).Delete(&model.GameFile{})
 	store.DB.Delete(&v)
+	invalidateDeltaCache(g.ID) // 版本删除后清单结构变化，所有 delta 缓存失效
 	os.RemoveAll(filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, v.Version))
 	// 最新版冗余回退。BT·上传种子游戏不走版本体系（版本行只可能是历史误上架的孤儿数据），
 	// 删除后冗余字段须回填种子重扫结果（latest_version=种子上传日期、size_bytes=种子总大小），

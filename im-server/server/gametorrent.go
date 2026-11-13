@@ -529,7 +529,7 @@ func (s *Server) HandleGameTorrent(w http.ResponseWriter, r *http.Request) {
 		s.gameServeUploadedTorrent(w, &g)
 		return
 	}
-	manifest, err := s.gameManifest(&g, strings.TrimSpace(r.URL.Query().Get("version")))
+	manifest, err := s.gameManifest(&g, strings.TrimSpace(r.URL.Query().Get("version")), strings.TrimSpace(r.URL.Query().Get("from")))
 	if err != nil {
 		adminFail(w, http.StatusNotFound, "该游戏暂无可下载版本")
 		return
@@ -603,7 +603,7 @@ func (s *Server) HandleGameP2SP(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "该游戏为纯 BT 下载，无直链源")
 		return
 	}
-	manifest, err := s.gameManifest(&g, version)
+	manifest, err := s.gameManifest(&g, version, "")
 	if err != nil {
 		adminFail(w, http.StatusNotFound, "该游戏暂无可下载版本")
 		return

@@ -72,9 +72,11 @@ func zipUploadSeed(t *testing.T, s *Server, owner, uploadID string, data []byte)
 	return sha
 }
 
-// registerPackVersion 商户身份走版本登记（pack 参数透传）
+// registerPackVersion 商户身份走版本登记（pack 参数透传）。
+// 可选 waitPhase2=true 等待后台 Phase2 goroutine 完成（register_state=0）再返回——
+// 适合后续断言版本行/清单口径的测试；默认 false（与生产 handler 异步语义一致）。
 func registerPackVersion(t *testing.T, s *Server, token string, gid uint, version string,
-	packType int, packSize int64, files []map[string]interface{}) (int, map[string]interface{}) {
+	packType int, packSize int64, files []map[string]interface{}, waitPhase2 ...bool) (int, map[string]interface{}) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]interface{}{
 		"version": version, "pack_type": packType, "pack_size": packSize, "files": files,
@@ -87,6 +89,20 @@ func registerPackVersion(t *testing.T, s *Server, token string, gid uint, versio
 	code, resp := gwrUnwrap(rec)
 	if resp == nil {
 		resp = map[string]interface{}{}
+	}
+	if len(waitPhase2) > 0 && waitPhase2[0] {
+		vid, _ := resp["version_id"].(float64)
+		if vid > 0 {
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				var v model.GameVersion
+				if err := store.DB.Where("id = ?", uint(vid)).First(&v).Error; err == nil && v.RegisterState == 0 {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			// 等待超时不 fatal——调用方后续断言会显式揭示 register_state 不符
+		}
 	}
 	return code, resp
 }
@@ -191,7 +207,7 @@ func buildPatchZip(t *testing.T, changeFiles map[string]string, meta []byte) []b
 
 // registerPatchVersion 商户身份登记补丁版本（pack_type=3，带 base_version）
 func registerPatchVersion(t *testing.T, s *Server, token string, gid uint, version, baseVersion string,
-	files []map[string]interface{}) (int, map[string]interface{}) {
+	files []map[string]interface{}, waitPhase2 ...bool) (int, map[string]interface{}) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]interface{}{
 		"version": version, "pack_type": 3, "base_version": baseVersion, "files": files,
@@ -204,6 +220,19 @@ func registerPatchVersion(t *testing.T, s *Server, token string, gid uint, versi
 	code, resp := gwrUnwrap(rec)
 	if resp == nil {
 		resp = map[string]interface{}{}
+	}
+	if len(waitPhase2) > 0 && waitPhase2[0] {
+		vid, _ := resp["version_id"].(float64)
+		if vid > 0 {
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				var v model.GameVersion
+				if err := store.DB.Where("id = ?", uint(vid)).First(&v).Error; err == nil && v.RegisterState == 0 {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
 	}
 	return code, resp
 }
@@ -237,7 +266,7 @@ func TestMerchantVersionPatch(t *testing.T) {
 		{"rel_path": "keep.txt", "size": 4, "sha256": shaKeep, "upload_id": "mtest-pt-keep"},
 		{"rel_path": "old.txt", "size": 3, "sha256": shaOld, "upload_id": "mtest-pt-old"},
 		{"rel_path": "chg.txt", "size": 6, "sha256": shaChgOld, "upload_id": "mtest-pt-chgold"},
-	}); code != 200 {
+	}, true); code != 200 {
 		t.Fatalf("基底登记应 200：%d %v", code, resp)
 	}
 
@@ -248,7 +277,7 @@ func TestMerchantVersionPatch(t *testing.T) {
 	shaPatch := zipUploadSeed(t, s, "mtest_pt", "mtest-pt-patch", patchZip)
 	code, resp := registerPatchVersion(t, s, tk, g.ID, "1.0.1", "1.0.0", []map[string]interface{}{
 		{"rel_path": "patch.zip", "size": len(patchZip), "sha256": shaPatch, "upload_id": "mtest-pt-patch"},
-	})
+	}, true)
 	if code != 200 {
 		t.Fatalf("补丁登记应 200：%d %v", code, resp)
 	}
@@ -325,7 +354,7 @@ func TestMerchantVersionPatch(t *testing.T) {
 	shaCn := zipUploadSeed(t, s, "mtest_pt", "mtest-pt-cn", []byte("CNDATA"))
 	if code, resp := registerPackVersion(t, s, tk, g.ID, "1.0.中文版", 0, 0, []map[string]interface{}{
 		{"rel_path": "cn.txt", "size": 6, "sha256": shaCn, "upload_id": "mtest-pt-cn"},
-	}); code != 200 {
+	}, true); code != 200 {
 		t.Fatalf("中文版本号登记应 200：%d %v", code, resp)
 	}
 	reqCN := httptest.NewRequest("GET", "/api/merchant/games/"+fmt.Sprint(g.ID)+"/versions/1.0.中文版/filelist", nil)
@@ -417,7 +446,7 @@ func TestMerchantVersionPatch(t *testing.T) {
 	idH, shaH, zH := newPatch(`{"format":1,"base_version":"1.0.1","change":["keep.txt"],"delete":[]}`, map[string]string{"keep.txt": "KEEP2"})
 	if code, resp := registerPatchVersion(t, s, tk, g.ID, "1.0.2", "1.0.1", []map[string]interface{}{
 		{"rel_path": "patch.zip", "size": len(zH), "sha256": shaH, "upload_id": idH},
-	}); code != 200 {
+	}, true); code != 200 {
 		t.Fatalf("链式补丁登记应 200：%d %v", code, resp)
 	}
 	var v2 model.GameVersion
@@ -496,7 +525,7 @@ func TestMerchantVersionPackTypes(t *testing.T) {
 	// ① 单 ZIP 正常登记：200，服务端实算 PackSize>0
 	code, resp := registerPackVersion(t, s, tk, g.ID, "1.0.0", 1, 0, []map[string]interface{}{
 		{"rel_path": "game.zip", "size": len(zipData), "sha256": sha, "upload_id": "mtest-pk-zip"},
-	})
+	}, true)
 	if code != 200 {
 		t.Fatalf("单 ZIP 登记应 200：%d %v", code, resp)
 	}
@@ -525,7 +554,7 @@ func TestMerchantVersionPackTypes(t *testing.T) {
 	code, resp = registerPackVersion(t, s, tk, g.ID, "2.0.0", 2, 12345678, []map[string]interface{}{
 		{"rel_path": "game.zip.001", "size": len(vol1), "sha256": sha1, "upload_id": "mtest-pk-vol1"},
 		{"rel_path": "game.zip.002", "size": len(vol2), "sha256": sha2, "upload_id": "mtest-pk-vol2"},
-	})
+	}, true)
 	if code != 200 {
 		t.Fatalf("分卷登记应 200：%d %v", code, resp)
 	}
@@ -567,7 +596,7 @@ func TestMerchantVersionPackTypes(t *testing.T) {
 	sha5 := zipUploadSeed(t, s, "mtest_pk", "mtest-pk-plain", zipData)
 	if code, _ := registerPackVersion(t, s, tk, g.ID, "0.9.0", 0, 0, []map[string]interface{}{
 		{"rel_path": "bin/game.exe", "size": len(zipData), "sha256": sha5, "upload_id": "mtest-pk-plain"},
-	}); code != 200 {
+	}, true); code != 200 {
 		t.Fatalf("散文件登记应 200，实得 %d", code)
 	}
 	var v0 model.GameVersion
@@ -743,7 +772,7 @@ func TestGameVersionCreateConcurrent(t *testing.T) {
 			defer wg.Done()
 			code, _ := registerPackVersion(t, s, tk, g.ID, "9.9.9", 0, 0, []map[string]interface{}{
 				{"rel_path": "f.txt", "size": args[i].size, "sha256": args[i].sha, "upload_id": args[i].uid},
-			})
+			}, true)
 			codes <- code
 		}()
 	}

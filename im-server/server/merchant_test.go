@@ -444,7 +444,7 @@ func TestMerchantVersionOwnership(t *testing.T) {
 		}
 	})
 
-	merchantRegister := func(token string, gid uint, version string) (int, map[string]interface{}) {
+	merchantRegister := func(token string, gid uint, version string, waitPhase2 ...bool) (int, map[string]interface{}) {
 		body, _ := json.Marshal(map[string]interface{}{
 			"version": version,
 			"files": []map[string]interface{}{
@@ -457,14 +457,24 @@ func TestMerchantVersionOwnership(t *testing.T) {
 		rec := httptest.NewRecorder()
 		s.merchantGuard(s.handleMerchantVersionCreate)(rec, req)
 		code, resp := gwrUnwrap(rec)
-		if resp == nil {
-			resp = map[string]interface{}{}
+		if len(waitPhase2) > 0 && waitPhase2[0] {
+			vid, _ := resp["version_id"].(float64)
+			if vid > 0 {
+				deadline := time.Now().Add(10 * time.Second)
+				for time.Now().Before(deadline) {
+					var v model.GameVersion
+					if err := store.DB.Where("id = ?", uint(vid)).First(&v).Error; err == nil && v.RegisterState == 0 {
+						break
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+			}
 		}
 		return code, resp
 	}
 
 	// ① 会话 Owner=商户 A 登记商户 A 自己的游戏 → 200，版本与文件落位、最新版冗余刷新
-	code, resp := merchantRegister(tkA, ga.ID, "1.0.0")
+	code, resp := merchantRegister(tkA, ga.ID, "1.0.0", true)
 	if code != 200 {
 		t.Fatalf("归属一致登记应 200：%d %v", code, resp)
 	}
@@ -733,7 +743,7 @@ func TestMerchantDirectHTTP(t *testing.T) {
 	code, resp := registerPackVersion(t, s, token, g.ID, "v1", 0, 0, []map[string]interface{}{
 		{"rel_path": "bin/game.exe", "size": 1024, "sha256": strings.Repeat("a", 64)},
 		{"rel_path": "数据/readme.txt", "size": 128, "sha256": strings.Repeat("b", 64)},
-	})
+	}, true)
 	if code != 200 {
 		t.Fatalf("直连登记应成功: %d %v", code, resp)
 	}
@@ -755,7 +765,7 @@ func TestMerchantDirectHTTP(t *testing.T) {
 	}
 
 	// 2) manifest：url 拼接商户地址（rel_path QueryEscape）+ download_method=3
-	m, err := s.gameManifest(&g, "v1")
+	m, err := s.gameManifest(&g, "v1", "")
 	if err != nil {
 		t.Fatalf("清单构建失败: %v", err)
 	}

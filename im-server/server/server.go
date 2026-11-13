@@ -141,6 +141,9 @@ func (s *Server) HandleWS(conn *websocket.Conn, realIP string) {
 // 集群模式：本地投递 + 总线定向信封（各实例对本实例内该用户连接投递，From==self 回环跳过）
 // 跨实例段为尽力而为（总线 fire-and-forget）；本地段语义不变
 func (s *Server) sendToUser(username string, data []byte) {
+	if s.hub == nil {
+		return // 测试环境/未启动 hub 时静默跳过
+	}
 	if s.hub.bus != nil {
 		s.hub.bus.publish(&busEnvelope{Kind: busKindDirect, Targets: []string{username}, Data: data})
 	}
@@ -153,6 +156,9 @@ func (s *Server) sendToUsers(usernames []string, data []byte) {
 	if len(usernames) == 0 {
 		return
 	}
+	if s.hub == nil {
+		return
+	}
 	if s.hub.bus != nil {
 		s.hub.bus.publish(&busEnvelope{Kind: busKindDirect, Targets: usernames, Data: data})
 	}
@@ -163,6 +169,9 @@ func (s *Server) sendToUsers(usernames []string, data []byte) {
 
 // deliverLocal 纯本地定向投递（总线订阅回调回环投递归口）
 func (s *Server) deliverLocal(username string, data []byte) {
+	if s.hub == nil {
+		return
+	}
 	for _, c := range s.hub.GetAll(username) {
 		c.send(data)
 	}

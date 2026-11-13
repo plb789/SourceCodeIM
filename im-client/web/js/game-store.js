@@ -2576,6 +2576,8 @@
         var stText = TASK_STATE_TEXT[t.state] || t.state || '—';
         // ZIP 打包版本解压阶段（state 仍为 downloading，phase='extract' 由主进程下载器标记）
         if (t.state === 'downloading' && t.phase === 'extract') stText = T('解压中');
+        // Steam 增量更新：下载完 delta 后进入"验证补齐"阶段（逐文件 stat+hash，就地修复缺失/损坏）
+        if (t.state === 'downloading' && t.phase === 'verify') stText = T('验证中');
         // BT 完成即转做种（最长 12h）：状态显示"做种中"，上传速率数字实时展示
         if (t.state === 'done' && t.via === 'bt') stText = T('做种中');
         row._stEl.textContent = stText;
@@ -3311,7 +3313,10 @@
         // isGameRoot=true：installDir 为库记录的 install_path（已是游戏根，含 slug 层）——payload 走
         // finalDir 直传（更新/重装沿用原目录不再叠 slug）；false：installDir 为安装根（首次选盘），管理器拼 slug
         var go = function (installDir, isGameRoot) {
-            api('POST', '/api/game/library/' + gid).then(function (res) {
+            // 更新场景带上已安装版本号：服务端对比两版清单算出 delta_size_bytes（实际需下载字节），
+            // 下载进度总量与"已下载 X / Y"文案按增量显示，而非完整客户端大小
+            var fromQ = (isGameRoot && prevInstalled) ? ('?from=' + encodeURIComponent(prevInstalled)) : '';
+            api('POST', '/api/game/library/' + gid + fromQ).then(function (res) {
                 if (!res.ok) { toast(res.msg || T('加入游戏库失败')); return; }
                 var d = res.data || {};
                 var manifest = d.manifest || {};
@@ -3336,6 +3341,10 @@
                 // 下载方式路由：1=BT·服务端生成种子（P2SP 混合）2=BT·上传种子（纯 BT，不叠加直链源）
                 var dlMethod = Number(g.download_method) || 0;
                 var viaBt = !forceHttp && (dlMethod === 1 || dlMethod === 2) && !!slug; // BT 需种子锚点 slug
+                // 下载总量口径：HTTP 散文件通道用服务端增量值（更新只下变更文件），首次安装与 BT 整包
+                // 走全量 size_bytes（服务端无 from 时 delta_size_bytes 即等于 size_bytes）
+                var deltaBytes = Number(manifest.delta_size_bytes) || 0;
+                var dlTotal = (!viaBt && deltaBytes > 0) ? deltaBytes : (Number(manifest.size_bytes) || 0);
                 var taskId = 'g' + gid + '-' + Date.now();
                 // 同游戏旧任务卡清理：重下/回退重建换新 taskId，页面残留旧任务（如 BT 失败任务、
                 // 重复点下载产生的旧卡）一并移除，防同游戏双卡片（gameId 可能字符串/数字异型，归一比较）
@@ -3353,7 +3362,7 @@
                     installDir: effectiveDir,
                     prevInstalled: prevInstalled,
                     received: 0,
-                    total: manifest.size_bytes || 0,
+                    total: dlTotal,
                     speed: 0,
                     state: 'downloading',
                     fileRelPath: '',
@@ -3434,6 +3443,10 @@
                         // 单 ZIP 与 .zip.001 分卷通吃）；pack_size=解压后总大小（磁盘余量预检）
                         packType: Number(manifest.pack_type) || 0,
                         packSize: Number(manifest.pack_size) || 0,
+                        // 进度总量（散文件更新=增量字节；ZIP 通道忽略此值，按压缩包大小推进）
+                        totalBytes: dlTotal,
+                        // 增量更新标记：主进程据此把"本地缺失/大小不符"的文件也计入进度总量
+                        incremental: !viaBt && !!fromQ,
                         files: manifest.files || []
                     }, dirPayload))).then(adoptDedup);
                     toast(T('开始下载：') + (g.name || (T('游戏 #') + gid)) +
