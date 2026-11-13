@@ -1,0 +1,2 @@
+updater.c
+[build] done: E:\SourceCodeIM\im-client\pc\updater\updater.exe
