@@ -46,6 +46,8 @@
       "!loader.js",
       "!obfuscate.js",
       "!build.bat",
+      "!build-light.js",
+      "!build-light.bat",
       "!main.js",
       "!web-cache.js",
       "!agent-executor.js",
@@ -73,7 +75,11 @@
       "!double.bat",
       "!publish-update.bat",
       "!installer.nsh",
-      "!light-dist/**"
+      "!light-dist/**",
+      "!.asar-tmp/**",
+      "!code-build.json",
+      "!app-update.yml",
+      "!.gitignore"
     ],
     "win": {
       "target": "nsis",

@@ -86,7 +86,8 @@ walkDir(ROOT, ROOT, allFiles);
 // 只排除（files 全是 ! 前缀）
 // 加上 electron-builder 默认排除项（它隐式排除但不写在 files 里）
 const extraExclude = [
-    '.gitignore', 'build-light.js', 'build-light.bat', 'app-update.yml',
+    '.gitignore', 'code-build.json', 'app-update.yml', '.asar-tmp/**',
+    'build-light.js', 'build-light.bat', 'build-updater.bat',
     'package-lock.json',                   // electron-builder 默认排除
     'build/**',                            // electron-builder 默认排除 build/ 资源目录
     'node_modules/**/.cache/**',           // 常见缓存
@@ -98,6 +99,8 @@ const extraExclude = [
     'node_modules/**/doc/**',
     'node_modules/**/docs/**',
     'node_modules/**/LICENSE*',
+    'node_modules/**/README*',
+    'node_modules/**/CHANGELOG*',
     'node_modules/**/*.md',
     'node_modules/**/*.txt',
     'node_modules/**/*.ts',                // 源码类型声明（运行时不需要）
