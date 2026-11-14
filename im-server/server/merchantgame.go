@@ -342,6 +342,9 @@ func (s *Server) handleMerchantGameUpdate(w http.ResponseWriter, r *http.Request
 		adminFail(w, http.StatusInternalServerError, "保存失败")
 		return
 	}
+	// 下载方式/直连地址变更：manifest 中 files[].url 和 download_method 字段会变，旧缓存强制失效
+	invalidateDeltaCache(g.ID)
+	invalidateManifestCache(g.ID)
 	logger.Info("商户编辑游戏: %s (%s), 商户=%s（回待审核）", g.Name, g.Slug, me)
 	adminJSON(w, map[string]interface{}{"ok": true, "audit_status": model.GameAuditPending})
 }

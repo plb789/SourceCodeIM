@@ -1144,6 +1144,10 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store.DB.First(&g, id)
+	// 下载方式/直连地址/种子更换都会影响 manifest 结构（files 数组、url、slug），
+	// 即使没有版本变更，旧 manifest 缓存（gameID:version 为 key）也可能携带错误 URL/结构，强制失效
+	invalidateDeltaCache(g.ID)
+	invalidateManifestCache(g.ID)
 	adminJSON(w, gameSummary(g))
 }
 
@@ -2540,8 +2544,9 @@ func (s *Server) gameVersionAsyncProcess(
 		g.Name, g.Slug, v.Version, v.ID, len(finalItems), totalSize,
 		time.Since(tStart).Round(time.Millisecond), operator)
 
-	// 清除该游戏的 delta 缓存：刚登记完成的版本清单已变更，旧缓存（含未完成的登记中版本）全部失效
+	// 清除该游戏的 delta 缓存 + manifest 缓存：刚登记完成的版本清单已变更，旧缓存全部失效
 	invalidateDeltaCache(g.ID)
+	invalidateManifestCache(g.ID)
 
 	// 病毒扫描（异步 goroutine，已在 clamScanGameVersionAsync 内 fail-open）
 	if g.OwnerUsername != "" && !direct && s.cfg.ClamAV.Enabled {
@@ -3223,7 +3228,8 @@ func (s *Server) gameVersionDeleteCore(w http.ResponseWriter, v *model.GameVersi
 	}
 	store.DB.Where("version_id = ?", v.ID).Delete(&model.GameFile{})
 	store.DB.Delete(&v)
-	invalidateDeltaCache(g.ID) // 版本删除后清单结构变化，所有 delta 缓存失效
+	invalidateDeltaCache(g.ID)      // 版本删除后清单结构变化，所有 delta 缓存失效
+	invalidateManifestCache(g.ID)   // 同步清除 manifest 缓存（同一个 gameID 前缀）
 	os.RemoveAll(filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, v.Version))
 	// 最新版冗余回退。BT·上传种子游戏不走版本体系（版本行只可能是历史误上架的孤儿数据），
 	// 删除后冗余字段须回填种子重扫结果（latest_version=种子上传日期、size_bytes=种子总大小），

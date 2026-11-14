@@ -12,6 +12,7 @@ package server
 //      文件 ID 逐个下载；库归属校验后才放行，防清单外枚举下载
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -1142,6 +1143,7 @@ func (s *Server) gameManifest(g *model.Game, version string, fromVersion string)
 			"delta_size_bytes": total, // BT 重下无增量语义
 		}, nil
 	}
+	// 确定目标版本号（缓存 key 需精确版本号，version 空时需先查库得最新版号）
 	var v model.GameVersion
 	var err error
 	if version == "" {
@@ -1152,30 +1154,54 @@ func (s *Server) gameManifest(g *model.Game, version string, fromVersion string)
 	if err != nil {
 		return nil, errVersionNotFound
 	}
-	var files []model.GameFile
-	if err := store.DB.Where("version_id = ?", v.ID).Order("rel_path ASC").Find(&files).Error; err != nil {
-		return nil, errVersionNotFound
-	}
-	list := make([]map[string]interface{}, 0, len(files))
-	// 下载方式=3（商户直连 HTTP）：文件本体在商户服务器，服务端仅持清单——
-	// 逐文件 url = 商户根地址 + QueryEscape(rel_path)；完整性由清单 SHA256（服务端持权）
-	// 在客户端逐文件校验兜底，商户无法投毒（篡改任意文件即校验失败拒装）
-	directBase := ""
-	if g.DownloadMethod == 3 {
-		directBase = strings.TrimRight(g.DirectBaseURL, "/")
-	}
-	for _, f := range files {
-		fileURL := "/api/game/file/" + strconv.FormatUint(uint64(f.ID), 10)
-		if directBase != "" {
-			fileURL = directBase + "/" + url.QueryEscape(f.RelPath)
+
+	// 尝试 manifest 缓存：key = gameID:version（不含 fromVersion，delta_size_bytes 每次动态计算覆盖）
+	cacheKey := strconv.FormatUint(uint64(g.ID), 10) + ":" + v.Version
+	var manifest map[string]interface{}
+	if cached, ok := manifestCacheGet(cacheKey); ok {
+		logger.Info("[game-cache] gameManifest 缓存命中: game=%d version=%s", g.ID, v.Version)
+		manifest = deepCopyManifest(cached) // 副本：避免覆盖缓存中的 delta_size_bytes
+	} else {
+		logger.Info("[game-cache] gameManifest 缓存未命中，走慢路径查库: game=%d version=%s (DM=%d)", g.ID, v.Version, g.DownloadMethod)
+		// 缓存未命中：查库构建（慢路径，可能几万条 GameFile）
+		var files []model.GameFile
+		if err := store.DB.Where("version_id = ?", v.ID).Order("rel_path ASC").Find(&files).Error; err != nil {
+			return nil, errVersionNotFound
 		}
-		list = append(list, map[string]interface{}{
-			"id":       f.ID,
-			"rel_path": f.RelPath,
-			"size":     f.SizeBytes,
-			"sha256":   f.SHA256,
-			"url":      fileURL,
-		})
+		list := make([]map[string]interface{}, 0, len(files))
+		// 下载方式=3（商户直连 HTTP）：文件本体在商户服务器，服务端仅持清单——
+		// 逐文件 url = 商户根地址 + QueryEscape(rel_path)；完整性由清单 SHA256（服务端持权）
+		// 在客户端逐文件校验兜底，商户无法投毒（篡改任意文件即校验失败拒装）
+		directBase := ""
+		if g.DownloadMethod == 3 {
+			directBase = strings.TrimRight(g.DirectBaseURL, "/")
+		}
+		for _, f := range files {
+			fileURL := "/api/game/file/" + strconv.FormatUint(uint64(f.ID), 10)
+			if directBase != "" {
+				fileURL = directBase + "/" + url.QueryEscape(f.RelPath)
+			}
+			list = append(list, map[string]interface{}{
+				"id":       f.ID,
+				"rel_path": f.RelPath,
+				"size":     f.SizeBytes,
+				"sha256":   f.SHA256,
+				"url":      fileURL,
+			})
+		}
+		manifest = map[string]interface{}{
+			"game_id": g.ID, "slug": g.Slug, "name": g.Name,
+			"version": v.Version, "manifest_hash": v.ManifestHash,
+			"size_bytes": v.SizeBytes, "file_count": v.FileCount,
+			"download_method": g.DownloadMethod,
+			// 打包方式（新增字段，老客户端 JSON 解析忽略未知字段不受影响）：
+			// 0=散文件逐个下载（现状） 1=单 ZIP（下载后客户端解压） 2=分卷 ZIP（客户端 7z 分卷解压）
+			// 3=补丁包（服务端已解包合成完整散文件清单，客户端按散文件语义走——dedup 硬链接天然增量）
+			"pack_type": v.PackType, "pack_size": v.PackSize,
+			"files":     list,
+		}
+		// 写入缓存（不含 delta_size_bytes）
+		manifestCacheSet(cacheKey, manifest)
 	}
 
 	// delta_size_bytes：增量更新时客户端实际需要下载的字节数。
@@ -1187,19 +1213,9 @@ func (s *Server) gameManifest(g *model.Game, version string, fromVersion string)
 			deltaSize = delta
 		}
 	}
+	manifest["delta_size_bytes"] = deltaSize
 
-	return map[string]interface{}{
-		"game_id": g.ID, "slug": g.Slug, "name": g.Name,
-		"version": v.Version, "manifest_hash": v.ManifestHash,
-		"size_bytes": v.SizeBytes, "file_count": v.FileCount,
-		"download_method": g.DownloadMethod,
-		// 打包方式（新增字段，老客户端 JSON 解析忽略未知字段不受影响）：
-		// 0=散文件逐个下载（现状） 1=单 ZIP（下载后客户端解压） 2=分卷 ZIP（客户端 7z 分卷解压）
-		// 3=补丁包（服务端已解包合成完整散文件清单，客户端按散文件语义走——dedup 硬链接天然增量）
-		"pack_type": v.PackType, "pack_size": v.PackSize,
-		"delta_size_bytes": deltaSize,
-		"files":             list,
-	}, nil
+	return manifest, nil
 }
 
 // gameManifestDeltaSize 计算从 fromVersion 到 toVersion 的增量下载字节数。
@@ -1338,6 +1354,16 @@ var (
 
 // deltaCacheGet 读缓存；命中且未过期返回 delta, true
 func deltaCacheGet(key string) (int64, bool) {
+	// 集群部署优先 Redis
+	if store.RedisAvailable() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		v, err := store.RDB.Get(ctx, store.KeyGameDelta+key).Int64()
+		if err == nil {
+			return v, true
+		}
+	}
+	// 进程内缓存（单机兜底 + Redis 挂时降级）
 	deltaCacheMu.Lock()
 	defer deltaCacheMu.Unlock()
 	e, ok := deltaCache[key]
@@ -1361,6 +1387,15 @@ func deltaCacheGet(key string) (int64, bool) {
 
 // deltaCacheSet 写缓存；超上限时按 LRU 淘汰
 func deltaCacheSet(key string, delta int64) {
+	// 集群部署写 Redis
+	if store.RedisAvailable() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		if err := store.RDB.Set(ctx, store.KeyGameDelta+key, delta, 60*time.Second).Err(); err != nil {
+			logger.Warn("deltaCacheSet Redis 写入失败: %v", err)
+		}
+	}
+	// 进程内缓存始终写入（兜底）
 	deltaCacheMu.Lock()
 	defer deltaCacheMu.Unlock()
 	deltaCache[key] = &deltaCacheEntry{delta: delta, ts: time.Now().UnixMilli()}
@@ -1385,20 +1420,209 @@ func deltaCacheSet(key string, delta int64) {
 }
 
 // invalidateDeltaCache 使某游戏的所有 delta 缓存失效（版本登记完成/删除后调用）。
-// 简单做法：遍历 key 前缀删除。游戏数有限，512 条上限下遍历成本可忽略。
+// 集群部署下先删 Redis key（SCAN 前缀匹配 + DEL），再清进程内（兜底）
 func invalidateDeltaCache(gameID uint) {
+	prefix := store.KeyGameDelta + strconv.FormatUint(uint64(gameID), 10) + ":"
+
+	if store.RedisAvailable() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		var cursor uint64
+		for {
+			keys, next, err := store.RDB.Scan(ctx, cursor, prefix+"*", 100).Result()
+			if err != nil {
+				logger.Warn("invalidateDeltaCache Redis SCAN 失败: %v", err)
+				break
+			}
+			if len(keys) > 0 {
+				if err := store.RDB.Del(ctx, keys...).Err(); err != nil {
+					logger.Warn("invalidateDeltaCache Redis DEL 失败: %v", err)
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+
+	// 进程内缓存始终清理（兜底）
 	deltaCacheMu.Lock()
 	defer deltaCacheMu.Unlock()
-	prefix := strconv.FormatUint(uint64(gameID), 10) + ":"
+	localPrefix := strconv.FormatUint(uint64(gameID), 10) + ":"
 	kept := deltaCacheQ[:0]
 	for _, k := range deltaCacheQ {
-		if strings.HasPrefix(k, prefix) {
+		if strings.HasPrefix(k, localPrefix) {
 			delete(deltaCache, k)
 		} else {
 			kept = append(kept, k)
 		}
 	}
 	deltaCacheQ = kept
+}
+
+// ==================== manifestCache 版本清单内存缓存 ====================
+// manifestCache 游戏版本文件清单缓存（解决散文件/商户直连方式每次查库+构建大 JSON 的 2-3s 延迟）。
+// BT 上传种子方式（DM=2）不下发文件清单、本身毫秒级，不走此缓存。
+// TTL 24h + LRU 128：版本发布后 GameFile 列表是准静态（只读快照），
+// 长 TTL 最大化缓存命中，进程内 LRU 128 兜底内存上限。
+// 所有可能变更 manifest 的写路径（版本登记/删除、管理员改游戏、商户改游戏）
+// 都会主动 invalidateManifestCache 清 Redis + 进程内 → 绝无脏数据窗口。
+const (
+	manifestCacheTTLMs   = 24 * 60 * 60 * 1000 // 24 小时
+	manifestCacheMaxKeys = 128
+)
+
+type manifestCacheEntry struct {
+	manifest map[string]interface{} // 基础清单（不含 delta_size_bytes，返回时动态计算覆盖）
+	ts       int64                  // 写入毫秒时间戳
+}
+
+var (
+	manifestCacheMu sync.Mutex
+	manifestCache   = map[string]*manifestCacheEntry{}
+	manifestCacheQ  []string // LRU 队列：头旧尾新
+)
+
+func manifestCacheGet(key string) (map[string]interface{}, bool) {
+	// 集群部署优先 Redis（跨实例共享）
+	if store.RedisAvailable() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		raw, err := store.RDB.Get(ctx, store.KeyGameManifest+key).Result()
+		if err == nil && raw != "" {
+			var m map[string]interface{}
+			if json.Unmarshal([]byte(raw), &m) == nil {
+				logger.Info("[game-cache] manifestCacheGet Redis 命中: %s", key)
+				return m, true
+			}
+		}
+		// Redis 未命中或解析失败 → 继续走进程内（兜底）
+	} else {
+		logger.Info("[game-cache] RedisAvailable=false，manifestCacheGet 走进程内降级: %s", key)
+	}
+	// 进程内缓存（单机兜底 + Redis 挂时降级）
+	manifestCacheMu.Lock()
+	defer manifestCacheMu.Unlock()
+	e, ok := manifestCache[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().UnixMilli()-e.ts > manifestCacheTTLMs {
+		delete(manifestCache, key)
+		return nil, false
+	}
+	for i, k := range manifestCacheQ {
+		if k == key {
+			manifestCacheQ = append(manifestCacheQ[:i], manifestCacheQ[i+1:]...)
+			break
+		}
+	}
+	manifestCacheQ = append(manifestCacheQ, key)
+	return e.manifest, true
+}
+
+func manifestCacheSet(key string, manifest map[string]interface{}) {
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		logger.Warn("manifestCacheSet json 序列化失败: %v", err)
+	} else {
+		// 集群部署写 Redis（跨实例共享）
+		if store.RedisAvailable() {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			if err := store.RDB.Set(ctx, store.KeyGameManifest+key, data, 24*time.Hour).Err(); err == nil {
+				logger.Info("[game-cache] manifestCacheSet Redis 写入: %s (TTL=24h, size=%d)", key, len(data))
+				// Redis 写入成功 → 仍同步写进程内（同实例后续请求更快 + Redis 瞬时故障降级）
+			} else {
+				logger.Warn("[game-cache] manifestCacheSet Redis 写入失败: %v，退只写进程内", err)
+			}
+		} else {
+			logger.Info("[game-cache] RedisAvailable=false，manifestCacheSet 只写进程内: %s", key)
+		}
+	}
+	// 进程内缓存始终写入（兜底）
+	manifestCacheMu.Lock()
+	defer manifestCacheMu.Unlock()
+	manifestCache[key] = &manifestCacheEntry{manifest: deepCopyManifest(manifest), ts: time.Now().UnixMilli()}
+	found := false
+	for i, k := range manifestCacheQ {
+		if k == key {
+			manifestCacheQ = append(manifestCacheQ[:i], manifestCacheQ[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		manifestCacheQ = append(manifestCacheQ, key)
+	}
+	for len(manifestCache) > manifestCacheMaxKeys && len(manifestCacheQ) > 0 {
+		oldest := manifestCacheQ[0]
+		manifestCacheQ = manifestCacheQ[1:]
+		delete(manifestCache, oldest)
+	}
+}
+
+// invalidateManifestCache 使某游戏的所有 manifest 缓存失效（版本登记完成/删除后调用）
+// 集群部署下先删 Redis key（SCAN 前缀匹配 + DEL），再清进程内（兜底）
+func invalidateManifestCache(gameID uint) {
+	prefix := store.KeyGameManifest + strconv.FormatUint(uint64(gameID), 10) + ":"
+
+	if store.RedisAvailable() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		var cursor uint64
+		for {
+			keys, next, err := store.RDB.Scan(ctx, cursor, prefix+"*", 100).Result()
+			if err != nil {
+				logger.Warn("invalidateManifestCache Redis SCAN 失败: %v", err)
+				break
+			}
+			if len(keys) > 0 {
+				if err := store.RDB.Del(ctx, keys...).Err(); err != nil {
+					logger.Warn("invalidateManifestCache Redis DEL 失败: %v", err)
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+
+	// 进程内缓存始终清理（兜底）
+	manifestCacheMu.Lock()
+	defer manifestCacheMu.Unlock()
+	localPrefix := strconv.FormatUint(uint64(gameID), 10) + ":"
+	kept := manifestCacheQ[:0]
+	for _, k := range manifestCacheQ {
+		if strings.HasPrefix(k, localPrefix) {
+			delete(manifestCache, k)
+		} else {
+			kept = append(kept, k)
+		}
+	}
+	manifestCacheQ = kept
+}
+
+// deepCopyManifest 深拷贝 manifest map（缓存存副本避免多 goroutine 共享；返回时也需要副本覆盖 delta_size_bytes）
+func deepCopyManifest(m map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	if files, ok := out["files"].([]map[string]interface{}); ok {
+		nf := make([]map[string]interface{}, len(files))
+		for i, f := range files {
+			cp := make(map[string]interface{}, len(f))
+			for k, v := range f {
+				cp[k] = v
+			}
+			nf[i] = cp
+		}
+		out["files"] = nf
+	}
+	return out
 }
 
 // errGame 业务错误类型（errors.New 语义等价，独立命名便于清单链路识别）

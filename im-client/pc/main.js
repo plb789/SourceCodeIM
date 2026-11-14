@@ -6562,12 +6562,17 @@ app.whenReady().then(async function () {
     } catch (e) {
         console.warn('[BOOT] 待提交更新自动执行失败（不阻断启动）:', e && e.message);
     }
-    createWindow();
-    console.log('[BOOT] 主窗口已创建（页面开始加载） +' + (Date.now() - BOOT_T0) + 'ms');
     // 阶段一百四十：同步失败不再死等下次重启（原先 cacheDir 旧副本遮蔽内置新快照、页面时好时坏根因）
     // ——失败后 web-cache 内部定时重试（30s 起指数退避封顶 5 分钟），自愈成功经 onSynced 刷新主窗口
+    // 根因修复（2026-11-14）：原实现在 createWindow() 之后 await sync()——拦截器在 loadURL 时从 cacheDir
+    // 读文件，此时 cacheDir 还是旧版（sync 还没跑），页面从一开始就是旧版。sync 跑完后靠 quietReloadWhenIdle
+    // 换新，但该函数有 15s 宽限期 + 窗口聚焦 + WS 稳定 + 无草稿等多重保护条件，用户正常使用时几乎永不触发，
+    // 导致"重启客户端还是旧页面"。修复：把 sync() 移到 createWindow() 之前，让 cacheDir 在拦截器第一次响应
+    // 请求时就已就位（新版），页面第一次加载就是最新版——根本不需要 reload。
     var syncResult = await webCache.sync();
-    console.log('[BOOT] 启动增量同步返回 +' + (Date.now() - BOOT_T0) + 'ms');
+    console.log('[BOOT] 启动增量同步完成 +' + (Date.now() - BOOT_T0) + 'ms');
+    createWindow();
+    console.log('[BOOT] 主窗口已创建（页面开始加载） +' + (Date.now() - BOOT_T0) + 'ms');
     createTray();
     // 阶段二百九十五：安装目录跟随运行 exe（更正注册表 InstallLocation 后再初始化自动更新，
     // 保证后续 quitAndInstall 触发的 NSIS 安装覆盖到当前运行目录而非历史登记目录）
