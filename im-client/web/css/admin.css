@@ -2873,3 +2873,219 @@ td .skel-line {
     color: #fff;
     font-weight: 500;
 }
+
+/* ===== 阶段二百九十七：Redis 管理 ===== */
+.redis-db-tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding: 8px;
+    background: var(--panel-bg, #2a2a2a);
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #3a3a3a);
+}
+.redis-db-tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color, #3a3a3a);
+    background: var(--panel-bg, #2a2a2a);
+    color: var(--text-secondary, #888);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+    user-select: none;
+}
+.redis-db-tab:hover {
+    color: var(--text-primary, #ddd);
+    border-color: var(--primary, #07c160);
+}
+.redis-db-tab.active {
+    background: var(--primary, #07c160);
+    border-color: var(--primary, #07c160);
+    color: #fff;
+    font-weight: 500;
+}
+.redis-db-tab .redis-db-count {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    background: rgba(255,255,255,0.15);
+}
+.redis-db-tab.active .redis-db-count {
+    background: rgba(0,0,0,0.2);
+}
+.redis-db-tab .redis-db-count.zero {
+    opacity: 0.5;
+}
+
+.redis-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
+}
+
+.redis-table-wrap {
+    overflow-x: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #3a3a3a);
+}
+.redis-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.redis-table thead {
+    background: var(--panel-bg, #2a2a2a);
+}
+.redis-table th {
+    padding: 10px 12px;
+    text-align: left;
+    color: var(--text-secondary, #888);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border-color, #3a3a3a);
+    white-space: nowrap;
+}
+.redis-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color, #3a3a3a);
+    color: var(--text-primary, #ddd);
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.redis-table tbody tr:hover {
+    background: rgba(255,255,255,0.03);
+}
+.redis-table .redis-type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+}
+.redis-type-badge.string { background: rgba(100,149,237,0.2); color: #6495ed; }
+.redis-type-badge.hash   { background: rgba(255,165,0,0.2); color: #ffa500; }
+.redis-type-badge.list   { background: rgba(50,205,50,0.2); color: #32cd32; }
+.redis-type-badge.set    { background: rgba(186,85,211,0.2); color: #ba55d3; }
+.redis-type-badge.zset   { background: rgba(255,69,0,0.2); color: #ff4500; }
+.redis-type-badge.stream { background: rgba(70,130,180,0.2); color: #4682b4; }
+
+.redis-table .redis-value-cell {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary, #999);
+    font-family: monospace;
+    font-size: 12px;
+}
+.redis-table .redis-ttl-cell {
+    font-size: 12px;
+}
+.redis-table .redis-ttl-cell.ttl-permanent {
+    color: var(--text-secondary, #888);
+}
+.redis-table .redis-ttl-cell.ttl-expire {
+    color: var(--primary, #07c160);
+}
+
+.redis-table .redis-row-actions {
+    display: flex;
+    gap: 6px;
+}
+.redis-table .redis-row-actions button {
+    padding: 2px 8px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color, #3a3a3a);
+    background: transparent;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    transition: all .15s;
+}
+.redis-table .redis-row-actions button:hover {
+    color: var(--text-primary, #ddd);
+    border-color: var(--primary, #07c160);
+}
+.redis-table .redis-row-actions button.danger:hover {
+    color: #ff6b6b;
+    border-color: #ff6b6b;
+}
+
+.redis-pager {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+/* Redis 详情弹窗内的 value 预览 */
+.redis-detail-section {
+    margin-bottom: 16px;
+}
+.redis-detail-section h4 {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    color: var(--text-secondary, #888);
+    font-weight: 500;
+}
+.redis-detail-section .redis-detail-key {
+    font-family: monospace;
+    color: var(--primary, #07c160);
+    word-break: break-all;
+}
+.redis-detail-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.redis-detail-meta-item {
+    padding: 8px;
+    background: var(--panel-bg, #2a2a2a);
+    border-radius: 6px;
+    border: 1px solid var(--border-color, #3a3a3a);
+}
+.redis-detail-meta-item .label {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    display: block;
+    margin-bottom: 2px;
+}
+.redis-detail-meta-item .value {
+    font-size: 13px;
+    color: var(--text-primary, #ddd);
+    font-family: monospace;
+}
+.redis-detail-value {
+    background: var(--panel-bg, #2a2a2a);
+    border: 1px solid var(--border-color, #3a3a3a);
+    border-radius: 6px;
+    padding: 12px;
+    max-height: 300px;
+    overflow: auto;
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--text-primary, #ddd);
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.redis-detail-value.hash-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+}
+.redis-detail-value.hash-row .hash-key {
+    color: var(--primary, #07c160);
+}
+.redis-detail-truncated {
+    font-size: 11px;
+    color: #ffa500;
+    margin-top: 6px;
+}

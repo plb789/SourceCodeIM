@@ -91,6 +91,7 @@
                 <button class="admin-nav-item" data-view="linksec">链接安全</button>
                 <button class="admin-nav-item" data-view="branding">品牌设置</button>
                 <button class="admin-nav-item" data-view="features">功能开关</button>
+                <button class="admin-nav-item" data-view="redis">Redis 管理</button>
             </nav>
             <div class="admin-side-foot">
                 <span id="admin-current-user" class="admin-current-user"></span>
@@ -921,6 +922,97 @@
                     <span class="agentset-sub-tip">客户端应用时机：页面加载即拉取（localStorage 缓存兜底），刷新/重开生效</span>
                 </div>
             </section>
+
+            <!-- 阶段二百九十七：Redis 管理后台（多 DB 切换 / Key 浏览 / 预览 / 删除 / TTL 更新） -->
+            <section id="admin-view-redis" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>Redis 管理</h2>
+                    <span id="redis-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">Redis 缓存管理：浏览各 DB 中的 Key、查看值预览、删除或调整过期时间。操作日志完整记录，仅限管理员权限。</p>
+
+                <!-- DB 切换 Tab -->
+                <div class="redis-db-tabs" id="redis-db-tabs"></div>
+
+                <!-- 搜索和批量操作栏 -->
+                <div class="redis-toolbar">
+                    <input type="text" id="redis-search" class="admin-input" placeholder="输入 Key 名称搜索（支持 * ? 通配符）" style="flex:1">
+                    <button id="redis-search-btn" class="admin-btn">搜索</button>
+                    <button id="redis-refresh-btn" class="admin-btn small">刷新</button>
+                    <button id="redis-batch-del-btn" class="admin-btn danger small hidden">批量删除 <span id="redis-batch-count"></span></button>
+                </div>
+
+                <!-- Key 列表表格 -->
+                <div class="redis-table-wrap">
+                    <table class="redis-table">
+                        <thead>
+                            <tr>
+                                <th style="width:36px"><input type="checkbox" id="redis-select-all"></th>
+                                <th>键</th>
+                                <th>值预览</th>
+                                <th style="width:70px">类型</th>
+                                <th style="width:80px">长度</th>
+                                <th style="width:90px">有效期</th>
+                                <th style="width:140px">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="redis-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 分页 -->
+                <div class="redis-pager">
+                    <button id="redis-prev" class="admin-btn small" type="button">上一页</button>
+                    <span id="redis-page-info" class="admin-field-hint"></span>
+                    <button id="redis-next" class="admin-btn small" type="button">下一页</button>
+                    <select id="redis-page-size" class="admin-input" style="width:90px">
+                        <option value="20">20/页</option>
+                        <option value="50" selected>50/页</option>
+                        <option value="100">100/页</option>
+                        <option value="200">200/页</option>
+                    </select>
+                </div>
+            </section>
+
+            <!-- Redis Key 详情弹窗 -->
+            <div id="redis-detail-mask" class="modal-mask hidden">
+                <div class="modal-box" style="width:720px">
+                    <div class="modal-title">Key 详情</div>
+                    <div class="modal-body" id="redis-detail-body" style="max-height:65vh;overflow-y:auto"></div>
+                    <div class="modal-btns">
+                        <button id="redis-detail-ttl-btn" class="modal-btn">调整过期时间</button>
+                        <button id="redis-detail-close" class="modal-btn">关 闭</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Redis TTL 编辑弹窗 -->
+            <div id="redis-ttl-mask" class="modal-mask hidden">
+                <div class="modal-box" style="width:420px">
+                    <div class="modal-title">调整过期时间</div>
+                    <div class="modal-body">
+                        <div class="admin-field-row">
+                            <label class="admin-field-label">Key</label>
+                            <span id="redis-ttl-key" class="admin-field-hint"></span>
+                        </div>
+                        <div class="admin-field-row">
+                            <label class="admin-field-label">当前 TTL</label>
+                            <span id="redis-ttl-current" class="admin-field-hint"></span>
+                        </div>
+                        <div class="admin-field-row">
+                            <label class="admin-field-label">新 TTL（秒）</label>
+                            <input id="redis-ttl-input" type="number" class="admin-input" placeholder="-1 = 永久，3600 = 1小时">
+                        </div>
+                        <div class="admin-field-hint" style="margin-top:8px">预设：<button class="admin-btn small" data-ttl="-1">永久</button> <button class="admin-btn small" data-ttl="3600">1小时</button> <button class="admin-btn small" data-ttl="86400">1天</button> <button class="admin-btn small" data-ttl="604800">7天</button></div>
+                    </div>
+                    <div class="modal-btns">
+                        <button id="redis-ttl-cancel" class="modal-btn">取 消</button>
+                        <button id="redis-ttl-save" class="modal-btn primary">保 存</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- 阶段一百六十六：网盘设置（上传扩展名黑名单热更，归口 drive.go driveBlockExts） -->
             <section id="admin-view-drive" class="admin-view">

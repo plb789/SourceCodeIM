@@ -42,7 +42,9 @@
             branding: 'M23 12l-2.44-2.79.34-3.69-3.61-.82-1.89-3.2L12 2.96 8.6 1.5 6.71 4.69 3.1 5.5l.34 3.7L1 12l2.44 2.79-.34 3.7 3.61.82L8.6 22.5l3.4-1.47 3.4 1.46 1.89-3.19 3.61-.82-.34-3.69L23 12zm-12.91 5.24l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z',
             features: 'M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z',
             // 阶段二百九十三：服务号管理图标（Material campaign 喇叭——代表公众号推送/通知）
-            official: 'M18 11v-2c0-3.07-1.64-5.64-4.5-6.32V2c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 3.36 6 5.92 6 9v2H4v2h2v4c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-4h.91l4.09 3.6V17c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-1.76l4-3.6v-.64l-2-.56zm-5 7.83l-2.11-1.83H8V9h5V4.07c1.42.72 2.5 2.53 2.5 4.93v2.27l2 .56V11h2v-2h-2z'
+            official: 'M18 11v-2c0-3.07-1.64-5.64-4.5-6.32V2c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 3.36 6 5.92 6 9v2H4v2h2v4c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-4h.91l4.09 3.6V17c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-1.76l4-3.6v-.64l-2-.56zm-5 7.83l-2.11-1.83H8V9h5V4.07c1.42.72 2.5 2.53 2.5 4.93v2.27l2 .56V11h2v-2h-2z',
+            // 阶段二百九十七：Redis 管理图标（Material database 数据库——代表 Redis 缓存管理）
+            redis: 'M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2zm0 2c5.2 0 8 1.83 8 2.5S17.2 9 12 9 4 7.17 4 6.5 6.8 4 12 4zm0 16c-5.2 0-8-1.83-8-2.5V9.74c2.47 1.16 5.84 1.76 8 1.76s5.53-.6 8-1.76v7.76c0 .67-2.8 2.5-8 2.5z'
         };
         var nav = document.querySelector('.admin-nav');
         if (!nav) return;
@@ -429,6 +431,8 @@
             else if (item.dataset.view === 'branding') { loadBranding(); }
             // 阶段二百九十五扩展：进入功能开关视图拉取当前开关状态
             else if (item.dataset.view === 'features') { loadFeatures(); }
+            // 阶段二百九十七：进入 Redis 管理视图拉取 DB 统计和 Key 列表
+            else if (item.dataset.view === 'redis') { redisInit(); }
             // 阶段二百九十三：进入服务号管理视图拉取服务号列表（微信同款公众号 CRUD）
             else if (item.dataset.view === 'official') { if (window.loadOfficial) loadOfficial(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
@@ -9273,6 +9277,371 @@
                 whitelistLoad();
             });
         });
+    }
+
+    // ===== 阶段二百九十七：Redis 管理 =====
+    var redisState = {
+        db: 0,
+        page: 1,
+        pageSize: 50,
+        total: 0,
+        search: '',
+        dbStats: [],
+        checkedKeys: new Set(),
+        loaded: false,
+        lastDetail: null
+    };
+
+    function redisInit() {
+        if (redisState.loaded) {
+            redisRenderTabs();
+            redisLoadKeys();
+            return;
+        }
+        redisState.loaded = true;
+        redisRenderTabs();
+        redisBindEvents();
+        redisLoadKeys();
+    }
+
+    function redisRenderTabs() {
+        var tabsEl = $('redis-db-tabs');
+        if (!tabsEl) return;
+        tabsEl.innerHTML = '<span class="admin-view-tip" style="padding:4px 8px">加载 DB 统计中…</span>';
+        api('GET', '/admin/api/redis/dbs').then(function (result) {
+            if (!result.ok) {
+                tabsEl.innerHTML = '<span class="admin-view-tip" style="padding:4px 8px;color:#ff6b6b">加载失败: ' + (result.msg || '') + '</span>';
+                return;
+            }
+            var dbs = result.data || [];
+            redisState.dbStats = dbs;
+            tabsEl.innerHTML = '';
+            if (!dbs || dbs.length === 0) {
+                tabsEl.innerHTML = '<span class="admin-view-tip" style="padding:4px 8px">Redis 未连接或无权限访问</span>';
+                return;
+            }
+            dbs.forEach(function (s) {
+                var tab = document.createElement('div');
+                tab.className = 'redis-db-tab' + (s.db === redisState.db ? ' active' : '');
+                tab.innerHTML = 'DB' + s.db + ' <span class="redis-db-count' + (s.keys === 0 ? ' zero' : '') + '">' + (s.keys >= 0 ? s.keys : '?') + '</span>';
+                tab.addEventListener('click', function () {
+                    redisState.db = s.db;
+                    redisState.page = 1;
+                    redisState.checkedKeys.clear();
+                    redisRenderTabs();
+                    redisLoadKeys();
+                });
+                tabsEl.appendChild(tab);
+            });
+        });
+    }
+
+    function redisBindEvents() {
+        var search = $('redis-search');
+        if (search) {
+            search.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    redisState.page = 1;
+                    redisState.search = search.value.trim();
+                    redisLoadKeys();
+                }
+            });
+        }
+        var searchBtn = $('redis-search-btn');
+        if (searchBtn) searchBtn.addEventListener('click', function () {
+            redisState.page = 1;
+            redisState.search = search.value.trim();
+            redisLoadKeys();
+        });
+        var refreshBtn = $('redis-refresh-btn');
+        if (refreshBtn) refreshBtn.addEventListener('click', function () {
+            redisRenderTabs();
+            redisLoadKeys();
+        });
+        var prevBtn = $('redis-prev');
+        if (prevBtn) prevBtn.addEventListener('click', function () {
+            if (redisState.page > 1) { redisState.page--; redisLoadKeys(); }
+        });
+        var nextBtn = $('redis-next');
+        if (nextBtn) nextBtn.addEventListener('click', function () {
+            var totalPages = Math.max(1, Math.ceil(redisState.total / redisState.pageSize));
+            if (redisState.page < totalPages) { redisState.page++; redisLoadKeys(); }
+        });
+        var pageSizeSel = $('redis-page-size');
+        if (pageSizeSel) pageSizeSel.addEventListener('change', function () {
+            redisState.pageSize = parseInt(pageSizeSel.value) || 50;
+            redisState.page = 1;
+            redisLoadKeys();
+        });
+        var selectAll = $('redis-select-all');
+        if (selectAll) selectAll.addEventListener('change', function () {
+            var tbody = $('redis-tbody');
+            if (!tbody) return;
+            var checks = tbody.querySelectorAll('.redis-row-check');
+            if (selectAll.checked) {
+                checks.forEach(function (c) { c.checked = true; redisState.checkedKeys.add(c.value); });
+            } else {
+                checks.forEach(function (c) { c.checked = false; redisState.checkedKeys.delete(c.value); });
+            }
+            redisUpdateBatchBtn();
+        });
+        var batchDelBtn = $('redis-batch-del-btn');
+        if (batchDelBtn) batchDelBtn.addEventListener('click', function () {
+            if (redisState.checkedKeys.size === 0) return;
+            if (!showConfirmBool('危险操作', '确认删除选中的 ' + redisState.checkedKeys.size + ' 个 Redis Key？此操作不可恢复')) return;
+            var keys = Array.from(redisState.checkedKeys);
+            api('POST', '/admin/api/redis/batch-delete', { db: redisState.db, keys: keys }).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                showToast('删除成功');
+                redisState.checkedKeys.clear();
+                redisRenderTabs();
+                redisLoadKeys();
+            });
+        });
+        // 详情弹窗关闭
+        var detailClose = $('redis-detail-close');
+        if (detailClose) detailClose.addEventListener('click', function () {
+            $('redis-detail-mask').classList.add('hidden');
+        });
+        var detailTtlBtn = $('redis-detail-ttl-btn');
+        if (detailTtlBtn) detailTtlBtn.addEventListener('click', function () {
+            if (redisState.lastDetail) redisOpenTtlModal(redisState.lastDetail.key, redisState.lastDetail.ttl);
+        });
+        // TTL 弹窗
+        var ttlCancel = $('redis-ttl-cancel');
+        if (ttlCancel) ttlCancel.addEventListener('click', function () {
+            $('redis-ttl-mask').classList.add('hidden');
+        });
+        var ttlSave = $('redis-ttl-save');
+        if (ttlSave) ttlSave.addEventListener('click', function () {
+            var input = $('redis-ttl-input');
+            var ttl = parseInt(input.value);
+            if (isNaN(ttl) || (ttl !== -1 && ttl <= 0)) {
+                showToast('请输入 -1（永久）或正整数秒');
+                return;
+            }
+            var key = $('redis-ttl-key').textContent;
+            api('POST', '/admin/api/redis/ttl', { db: redisState.db, key: key, ttl: ttl }).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '更新失败'); return; }
+                $('redis-ttl-mask').classList.add('hidden');
+                showToast('TTL 更新成功');
+                redisRenderTabs();
+                redisLoadKeys();
+            });
+        });
+        // TTL 预设按钮
+        document.querySelectorAll('#redis-ttl-mask [data-ttl]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                $('redis-ttl-input').value = btn.getAttribute('data-ttl');
+            });
+        });
+    }
+
+    function redisOpenTtlModal(key, currentTtl) {
+        $('redis-ttl-key').textContent = key;
+        $('redis-ttl-current').textContent = redisFormatTTL(currentTtl);
+        $('redis-ttl-input').value = currentTtl;
+        $('redis-ttl-mask').classList.remove('hidden');
+    }
+
+    function redisLoadKeys() {
+        var status = $('redis-status');
+        if (status) status.textContent = '加载中…';
+        var tbody = $('redis-tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">加载中…</td></tr>';
+        redisState.checkedKeys.clear();
+        var selectAll = $('redis-select-all');
+        if (selectAll) selectAll.checked = false;
+        redisUpdateBatchBtn();
+
+        var url = '/admin/api/redis/keys?db=' + redisState.db + '&page=' + redisState.page + '&page_size=' + redisState.pageSize;
+        if (redisState.search) url += '&search=' + encodeURIComponent(redisState.search);
+
+        api('GET', url).then(function (result) {
+            if (!result.ok) {
+                tbody.innerHTML = '<tr><td colspan="7" class="vec-empty" style="color:#ff6b6b">加载失败: ' + (result.msg || '') + '</td></tr>';
+                if (status) status.textContent = '加载失败';
+                return;
+            }
+            var data = result.data || {};
+            redisState.total = data.total || 0;
+            redisRenderKeys(data.keys || []);
+            redisRenderPager();
+            if (status) status.textContent = '共 ' + redisState.total + ' 个 Key';
+        });
+    }
+
+    function redisRenderKeys(keys) {
+        var tbody = $('redis-tbody');
+        if (!tbody) return;
+        if (keys.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">该 DB 中暂无 Key</td></tr>';
+            return;
+        }
+        var rows = '';
+        keys.forEach(function (k) {
+            rows += '<tr>' +
+                '<td><input type="checkbox" class="redis-row-check" value="' + escapeAttr(k.key) + '"></td>' +
+                '<td title="' + escapeAttr(k.key) + '">' + escapeHtml(k.key) + '</td>' +
+                '<td class="redis-value-cell">' + redisRowPreview(k) + '</td>' +
+                '<td><span class="redis-type-badge ' + k.type + '">' + k.type + '</span></td>' +
+                '<td>' + (k.size != null ? k.size : '-') + '</td>' +
+                '<td class="redis-ttl-cell ' + (k.ttl === -1 ? 'ttl-permanent' : 'ttl-expire') + '">' + redisFormatTTL(k.ttl) + '</td>' +
+                '<td><div class="redis-row-actions">' +
+                    '<button data-action="view" data-key="' + escapeAttr(k.key) + '">查看</button>' +
+                    '<button data-action="del" data-key="' + escapeAttr(k.key) + '" class="danger">删除</button>' +
+                '</div></td>' +
+            '</tr>';
+        });
+        tbody.innerHTML = rows;
+        // 绑定行内事件
+        tbody.querySelectorAll('.redis-row-check').forEach(function (cb) {
+            cb.addEventListener('change', function () {
+                if (cb.checked) redisState.checkedKeys.add(cb.value);
+                else redisState.checkedKeys.delete(cb.value);
+                redisUpdateBatchBtn();
+            });
+        });
+        tbody.querySelectorAll('[data-action="view"]').forEach(function (btn) {
+            btn.addEventListener('click', function () { redisOpenDetail(btn.getAttribute('data-key')); });
+        });
+        tbody.querySelectorAll('[data-action="del"]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var key = btn.getAttribute('data-key');
+                if (!showConfirmBool('危险操作', '确认删除 Key「' + key + '」？此操作不可恢复')) return;
+                api('DELETE', '/admin/api/redis/key?db=' + redisState.db + '&key=' + encodeURIComponent(key)).then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                    showToast('删除成功');
+                    redisRenderTabs();
+                    redisLoadKeys();
+                });
+            });
+        });
+    }
+
+    function redisRowPreview(k) {
+        if (k.ttl === -2) return '<span style="color:#888">(已过期)</span>';
+        // 简单预览：按类型给个提示
+        switch (k.type) {
+            case 'string': return '<em>string 类型</em>';
+            case 'hash':   return '<em>' + k.size + ' 个字段</em>';
+            case 'list':   return '<em>' + k.size + ' 个元素</em>';
+            case 'set':    return '<em>' + k.size + ' 个成员</em>';
+            case 'zset':   return '<em>' + k.size + ' 个成员</em>';
+            case 'stream': return '<em>stream</em>';
+            default:       return '<em>' + k.type + '</em>';
+        }
+    }
+
+    function redisRenderPager() {
+        var totalPages = Math.max(1, Math.ceil(redisState.total / redisState.pageSize));
+        var info = $('redis-page-info');
+        if (info) info.textContent = '第 ' + redisState.page + '/' + totalPages + ' 页 · 共 ' + redisState.total + ' 条';
+    }
+
+    function redisUpdateBatchBtn() {
+        var btn = $('redis-batch-del-btn');
+        var count = $('redis-batch-count');
+        if (!btn) return;
+        if (redisState.checkedKeys.size > 0) {
+            btn.classList.remove('hidden');
+            if (count) count.textContent = '(' + redisState.checkedKeys.size + ')';
+        } else {
+            btn.classList.add('hidden');
+        }
+    }
+
+    function redisOpenDetail(key) {
+        api('GET', '/admin/api/redis/key?db=' + redisState.db + '&key=' + encodeURIComponent(key)).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '加载详情失败'); return; }
+            var d = result.data;
+            if (!d) return;
+            redisState.lastDetail = d;
+            var body = $('redis-detail-body');
+            if (!body) return;
+            var ttlText = redisFormatTTL(d.ttl);
+            var expireText = d.ttl > 0 ? new Date(d.expire_at * 1000).toLocaleString() : '永久';
+            var memText = d.memory_usage > 0 ? redisFormatBytes(d.memory_usage) : '不可用';
+
+            var valueHtml = '';
+            if (d.truncated) {
+                valueHtml += '<div class="redis-detail-truncated">⚠️ 值已截断（原始长度 ' + d.valueLen + '，预览上限 ' + redisAdminMaxValuePrev + ' 字符或 50 元素）</div>';
+            }
+            valueHtml += '<div class="redis-detail-value">' + redisRenderValue(d) + '</div>';
+
+            body.innerHTML =
+                '<div class="redis-detail-section">' +
+                    '<h4>Key</h4>' +
+                    '<div class="redis-detail-key">' + escapeHtml(d.key) + '</div>' +
+                '</div>' +
+                '<div class="redis-detail-meta">' +
+                    '<div class="redis-detail-meta-item"><span class="label">类型</span><span class="value">' + d.type + '</span></div>' +
+                    '<div class="redis-detail-meta-item"><span class="label">长度</span><span class="value">' + d.size + '</span></div>' +
+                    '<div class="redis-detail-meta-item"><span class="label">TTL</span><span class="value">' + ttlText + '</span></div>' +
+                    '<div class="redis-detail-meta-item"><span class="label">过期时间</span><span class="value">' + expireText + '</span></div>' +
+                    '<div class="redis-detail-meta-item"><span class="label">内存占用</span><span class="value">' + memText + '</span></div>' +
+                '</div>' +
+                '<div class="redis-detail-section">' +
+                    '<h4>值预览</h4>' +
+                    valueHtml +
+                '</div>';
+            $('redis-detail-mask').classList.remove('hidden');
+        });
+    }
+
+    function redisRenderValue(d) {
+        if (d.value == null) return '<em>null</em>';
+        switch (d.type) {
+            case 'string':
+                return '<code>' + escapeHtml(String(d.value)) + '</code>';
+            case 'hash':
+                var html = '<div class="hash-row">';
+                Object.keys(d.value).forEach(function (k) {
+                    html += '<span class="hash-key">' + escapeHtml(k) + ':</span><span>' + escapeHtml(String(d.value[k])) + '</span>';
+                });
+                html += '</div>';
+                return html;
+            case 'list':
+            case 'set':
+                return '<ol start="0">' + d.value.map(function (v) { return '<li>' + escapeHtml(String(v)) + '</li>'; }).join('') + '</ol>';
+            case 'zset':
+                return '<table style="width:100%"><thead><tr><th style="text-align:left">Member</th><th style="text-align:right">Score</th></tr></thead><tbody>' +
+                    d.value.map(function (item) {
+                        return '<tr><td>' + escapeHtml(String(item.member)) + '</td><td style="text-align:right">' + item.score + '</td></tr>';
+                    }).join('') +
+                '</tbody></table>';
+            default:
+                return '<code>' + escapeHtml(JSON.stringify(d.value, null, 2)) + '</code>';
+        }
+    }
+
+    function redisFormatTTL(ttl) {
+        if (ttl === -2) return '(已过期)';
+        if (ttl === -1) return '永久';
+        if (ttl < 60) return ttl + ' 秒';
+        if (ttl < 3600) return (ttl / 60).toFixed(1) + ' 分钟';
+        if (ttl < 86400) return (ttl / 3600).toFixed(1) + ' 小时';
+        return (ttl / 86400).toFixed(1) + ' 天';
+    }
+
+    function redisFormatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    var redisAdminMaxValuePrev = 500;
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function escapeAttr(str) {
+        if (!str) return '';
+        return String(str).replace(/"/g, '&quot;');
     }
 
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====

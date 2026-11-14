@@ -227,6 +227,14 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("PUT /admin/api/vipip/unbind", s.adminGuard(s.handleAdminVipIPUnbind))
 	// 全局 supernode 候选热更（后台界面化管理，保存即热生效 + 落库持久化）
 	http.HandleFunc("PUT /admin/api/vipip/supernodes", s.adminGuard(s.handleAdminVipIPSupernodesSave))
+	// 阶段二百九十七：Redis 管理后台（DB 切换 / key 浏览 / 删除 / TTL 更新，实现归口 redisadmin.go）
+	http.HandleFunc("GET /admin/api/redis/dbs", s.adminGuard(s.handleAdminRedisDBs))
+	http.HandleFunc("GET /admin/api/redis/keys", s.adminGuard(s.handleAdminRedisKeyList))
+	http.HandleFunc("GET /admin/api/redis/key", s.adminGuard(s.handleAdminRedisKeyDetail))
+	http.HandleFunc("DELETE /admin/api/redis/key", s.adminGuard(s.handleAdminRedisKeyDelete))
+	http.HandleFunc("POST /admin/api/redis/batch-delete", s.adminGuard(s.handleAdminRedisBatchDelete))
+	http.HandleFunc("POST /admin/api/redis/ttl", s.adminGuard(s.handleAdminRedisTTLUpdate))
+	http.HandleFunc("GET /admin/api/redis/info", s.adminGuard(s.handleAdminRedisInfo))
 	// 服务号功能（微信同款公众号）：管理员后台 CRUD + 审核管理
 	registerOfficialAdminRoutes(s)
 }
