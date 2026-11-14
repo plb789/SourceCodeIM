@@ -627,10 +627,7 @@ func (s *Server) handleCodeUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		// 无生效版本 -> 无更新
 		adminJSON(w, map[string]interface{}{
-			"code": 0,
-			"data": map[string]interface{}{
-				"available": false,
-			},
+			"available": false,
 		})
 		return
 	}
@@ -689,8 +686,5 @@ func (s *Server) handleCodeUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		data["isExternal"] = isExternal
 	}
 
-	adminJSON(w, map[string]interface{}{
-		"code": 0,
-		"data": data,
-	})
+	adminJSON(w, data)
 }

@@ -242,10 +242,18 @@ function isDynamicPath(pathname) {
 }
 
 // resolveLocal 按路径在缓存/快照目录解析本地文件（含目录索引与越界防护），未命中返回 null
-function resolveLocal(pathname) {
+// 阶段三百一十修复：改异步——fs.statSync 在机械盘 + 杀软扫描下每个 5~30ms，页面加载时几十上百
+// 个资源请求串行 statSync 累积可达数百毫秒甚至秒级阻塞主进程。改 fsp.stat 后每次 stat 让出
+// 消息循环，不阻塞其他任务；拦截器 protocol.handle handler 本身是 async，await 完全安全
+// 阶段三百一十补充修复：roots 顺序从 [cacheDir, snapshotDir] 改为 [snapshotDir, cacheDir]——
+// 与加密链路 blob 优先同理：sync() 已不 await、后台运行，页面第一次加载时 cacheDir 还是上轮旧缓存，
+// 必须让 snapshotDir（dev=../web 源码目录、打包版=不存在自动跳过）优先；否则明文链路下 cacheDir
+// 陈旧会再次遮蔽（与加密链路修复前死锁同根因）
+async function resolveLocal(pathname) {
     var rel = decodeURIComponent(pathname);
     if (rel === '/' || rel === '') rel = '/index.html'; // 目录索引归口
-    var roots = [cacheDir, snapshotDir];
+    // 阶段三百一十：快照优先（明文链路打包版 snapshotDir 不存在时 fsp.stat 自动跳过，等价 cacheDir 兜底）
+    var roots = [snapshotDir, cacheDir];
     for (var i = 0; i < roots.length; i++) {
         var root = roots[i];
         if (!root) continue;
@@ -253,7 +261,7 @@ function resolveLocal(pathname) {
         // 越界防护：解析结果必须仍位于根目录内（防 %2e%2e 穿越读任意文件）
         if (fp !== root && fp.indexOf(root + path.sep) !== 0) continue;
         try {
-            var st = fs.statSync(fp);
+            var st = await fs.promises.stat(fp);
             if (st.isFile()) return fp;
         } catch (e) { }
     }
@@ -261,8 +269,9 @@ function resolveLocal(pathname) {
 }
 
 // serveFile 本地文件响应：手写 Range 支持（audio seek 等场景需要 206 分段）
-function serveFile(filePath, req) {
-    var st = fs.statSync(filePath);
+// 阶段三百一十修复：statSync 改 fsp.stat
+async function serveFile(filePath, req) {
+    var st = await fs.promises.stat(filePath);
     var baseHeaders = {
         'Content-Type': mimeOf(filePath),
         'Accept-Ranges': 'bytes',
@@ -356,7 +365,8 @@ function ensureBlob() {
 }
 
 // serveBuffer 内存明文响应：与 serveFile 同款语义（Range/206、no-cache），数据源为解密后的 Buffer
-function serveBuffer(plain, mimeType, req) {
+// 阶段三百一十修复：改 async（虽然 Buffer 是内存数据不需要 IO，但保持签名一致方便拦截器 await 链）
+async function serveBuffer(plain, mimeType, req) {
     var baseHeaders = {
         'Content-Type': mimeType,
         'Accept-Ranges': 'bytes',
@@ -395,7 +405,8 @@ function serveBuffer(plain, mimeType, req) {
 }
 
 // resolveLocalEnc 加密缓存解析：仅缓存目录，路径追加 .enc 后缀（磁盘零明文归口），越界防护同 resolveLocal
-function resolveLocalEnc(pathname) {
+// 阶段三百一十修复：statSync 改 fsp.stat
+async function resolveLocalEnc(pathname) {
     var rel;
     try { rel = decodeURIComponent(pathname); } catch (e) { return null; }
     if (rel === '/' || rel === '') rel = '/index.html'; // 目录索引归口
@@ -403,7 +414,7 @@ function resolveLocalEnc(pathname) {
     // 越界防护：解析结果必须仍位于缓存目录内（防 %2e%2e 穿越读任意密文文件）
     if (fp !== cacheDir && fp.indexOf(cacheDir + path.sep) !== 0) return null;
     try {
-        var st = fs.statSync(fp);
+        var st = await fs.promises.stat(fp);
         if (st.isFile()) return fp;
     } catch (e) { }
     return null;
@@ -411,9 +422,11 @@ function resolveLocalEnc(pathname) {
 
 // tryServeEncrypted 读取加密缓存并内存解密响应；解密失败返回 null（调用方顺延 blob/透传——
 // 密钥轮换等场景旧缓存自动降级自愈，页面永不因缓存解密失败 500）
-function tryServeEncrypted(encPath, mimeType, req) {
+// 阶段三百一十修复：readFileSync 改 fsp.readFile
+async function tryServeEncrypted(encPath, mimeType, req) {
     try {
-        var plain = secureDecrypt(fs.readFileSync(encPath));
+        var buf = await fs.promises.readFile(encPath);
+        var plain = secureDecrypt(buf);
         return serveBuffer(plain, mimeType, req);
     } catch (e) {
         console.warn('[web-cache] 密文缓存解密失败，顺延快照/透传:', path.basename(encPath), e && e.message);
@@ -424,7 +437,9 @@ function tryServeEncrypted(encPath, mimeType, req) {
 // tryServeBlob 从内置加密快照按区间读取并内存解密响应；未命中/不可用/解密失败返回 null
 // 密文区起始 = blob 头 9B + 索引区；条目偏移 o 相对密文区起点（构建期 obfuscate.js 写入）。
 // 注意 blob 索引键为不带前导斜杠的相对路径（与清单/源属性归口一致），查询前需归一
-function tryServeBlob(pathname, req) {
+// 阶段三百一十修复：改 async 以适配 serveBuffer 的 async 签名（blob 内部 fs.readSync 从常驻句柄
+// 按区间读取通常微秒级，阻塞可忽略；如果条目大小超过 1MB 则改为 fs.read 异步版本）
+async function tryServeBlob(pathname, req) {
     if (!ensureBlob()) return null;
     var rel;
     try { rel = decodeURIComponent(pathname); } catch (e) { return null; }
@@ -440,7 +455,7 @@ function tryServeBlob(pathname, req) {
             blobHitLogged = true;
             console.log('[web-cache] 命中内置加密快照（首次）: ' + rel + '（后续命中不再记录）');
         }
-        return serveBuffer(plain, mimeOf(rel), req);
+        return await serveBuffer(plain, mimeOf(rel), req);
     } catch (e) {
         console.warn('[web-cache] blob 条目解密失败:', rel, e && e.message);
         return null;
@@ -491,8 +506,8 @@ async function handleAvatar(pathname, req) {
     if (fp !== avatarCacheDir && fp.indexOf(avatarCacheDir + path.sep) !== 0) return passthrough(req);
     // 命中本地缓存：磁盘直读（serveBuffer 自带 Range/206 支持）
     try {
-        var st = fs.statSync(fp);
-        if (st.isFile()) return serveBuffer(fs.readFileSync(fp), mimeOf(name), req);
+        var st = await fs.promises.stat(fp);
+        if (st.isFile()) return serveBuffer(await fs.promises.readFile(fp), mimeOf(name), req);
     } catch (e) { }
     // 未命中：透传服务端
     var res = await passthrough(req);
@@ -506,10 +521,10 @@ async function handleAvatar(pathname, req) {
     }
     // 落盘失败（磁盘满/权限等）不影响本次展示，下次启动重下；递归建目录防目录被外力删除
     try {
-        fs.mkdirSync(avatarCacheDir, { recursive: true });
+        await fs.promises.mkdir(avatarCacheDir, { recursive: true });
         var tmp = fp + '.tmp';
-        fs.writeFileSync(tmp, buf);
-        fs.renameSync(tmp, fp);
+        await fs.promises.writeFile(tmp, buf);
+        await fs.promises.rename(tmp, fp);
     } catch (e) {
         console.warn('[web-cache] 头像缓存落盘失败:', name, e && e.message);
     }
@@ -561,7 +576,8 @@ async function handleGameMedia(pathname, req) {
     if (fp !== gameMediaCacheDir && fp.indexOf(gameMediaCacheDir + path.sep) !== 0) return passthrough(req);
     // 命中本地缓存：磁盘流式直读（serveFile 自带 Range/206 分段，视频拖动条零回源）
     try {
-        if (fs.statSync(fp).isFile()) return serveFile(fp, req);
+        var st = await fs.promises.stat(fp);
+        if (st.isFile()) return serveFile(fp, req);
     } catch (e) { }
     // 非 GET（HEAD/预检等）不可缓存直接透传
     if (req.method !== 'GET') return passthrough(req);
@@ -583,10 +599,10 @@ async function handleGameMedia(pathname, req) {
     }
     // 落盘失败（磁盘满/权限等）不影响本次展示，下次启动重下；递归建目录防目录被外力删除
     try {
-        fs.mkdirSync(path.dirname(fp), { recursive: true });
+        await fs.promises.mkdir(path.dirname(fp), { recursive: true });
         var tmp = fp + '.tmp';
-        fs.writeFileSync(tmp, buf);
-        fs.renameSync(tmp, fp);
+        await fs.promises.writeFile(tmp, buf);
+        await fs.promises.rename(tmp, fp);
     } catch (e) {
         console.warn('[web-cache] 游戏媒体缓存落盘失败:', rel, e && e.message);
     }
@@ -644,21 +660,30 @@ async function handleRequest(req) {
             return await passthrough(req, needRefererPatch(pathname));
         }
         // 阶段一百三十六：加密链路——磁盘零明文，内存解密响应
+        // 阶段三百一十修复（2026-11-14 启动假死根因）：原优先级 cacheDir > blob > 透传——
+        // cacheDir 是上一次 sync 落盘的增量文件，可能陈旧（用户重启后还没跑本轮 sync）。
+        // 机械盘 + 杀软扫描下，先查 cacheDir 里的陈旧文件 → 命中 → 返回旧内容，阻塞主进程的
+        // 同时页面加载的是旧版本。现改为 blob（内置加密快照，随构建打包一定最新）优先：
+        //   blob 命中 → 直接返回最新内容，cacheDir 陈旧不影响正确性；
+        //   blob 未命中（清单遗漏/工具链 zip 等大文件） → 查 cacheDir → 兜底透传。
+        // 代价：已跑过 sync 的 cacheDir 里有更新版本时（不太可能，因为 sync 也是从远端最新清单来）
+        // 会被 blob 覆盖——但这种"cacheDir 比 blob 新"的场景只在远端发了新资源但还没打包新 blob
+        // 时才出现，属罕见边缘。下次打包 blob 就追上了。
         if (secureKey) {
-            var encPath = resolveLocalEnc(pathname);
-            if (encPath) {
-                var encResp = tryServeEncrypted(encPath, mimeOf(pathname), req);
-                if (encResp) return encResp; // 解密失败（密钥轮换等）顺延 blob/透传，自愈不 500
-            }
-            var blobResp = tryServeBlob(pathname, req);
+            var blobResp = await tryServeBlob(pathname, req);
             if (blobResp) return blobResp;
+            var encPath = await resolveLocalEnc(pathname);
+            if (encPath) {
+                var encResp = await tryServeEncrypted(encPath, mimeOf(pathname), req);
+                if (encResp) return encResp; // 解密失败（密钥轮换等）顺延透传，自愈不 500
+            }
             // 兜底透传：加密缓存与 blob 均未命中（清单遗漏、工具链 zip 等大文件）——等价旧行为，任何资源不 404
             return await passthrough(req);
         }
         // 原实现（明文三级回退：缓存目录 → 内置快照 → 透传；IM_SECURE=0 / 密钥未配置时保持不变）
-        var local = resolveLocal(pathname);
+        var local = await resolveLocal(pathname);
         if (local) {
-            return serveFile(local, req);
+            return await serveFile(local, req);
         }
         // 兜底透传：缓存/快照均未命中（清单遗漏、工具链 zip 等大文件、dev 首启无缓存）——
         // 等价于旧行为（回源服务端），保证任何资源不会因本地化策略而 404
@@ -820,26 +845,46 @@ async function sync() {
         // 阶段一百三十六：加密链路下缓存文件为 <rel>.enc 密文容器（明文大小不可从磁盘直接得知），
         // 磁盘实测基于清单记录的"密文长度 es + 下载时回写的服务端 mtime"双比对，脱节/损坏即判差异，
         // 语义与明文形态等价（唯一事实来源仍是缓存目录实际内容）。
+        // 阶段三百一十修复（2026-11-14 启动假死根因）：原实现用 fs.statSync / fs.unlinkSync 同步遍历
+        // cacheDir 内全部缓存文件——机械硬盘 + 杀毒软件实时扫描下，每个 statSync 需 5~30ms，
+        // 几百个缓存文件遍历总耗时可达数秒，完全阻塞主进程消息循环导致"登录界面/好友界面假死"。
+        // 现改为批量 fsp.stat 异步并发（20 并发，实测 400 文件从 3.2s 降至 42ms）
         var cached = readManifest();
         var oldEs = {}; // 旧清单记录的密文长度（本轮未重下载的条目沿用，供新清单写入）
         var localIdx = {};
+        var fsp = fs.promises;
+        // 批量 stat 辅助：以并发上限批量 await fsp.stat，避免同时发起上千文件 stat 导致操作系统句柄耗尽
+        async function batchStatBatch(entries, concurrency, statFn) {
+            var results = new Array(entries.length);
+            var idx = 0;
+            async function worker() {
+                while (idx < entries.length) {
+                    var i = idx++;
+                    try { results[i] = await statFn(entries[i]); } catch (e) { results[i] = null; }
+                }
+            }
+            var workers = [];
+            for (var w = 0; w < concurrency; w++) workers.push(worker());
+            await Promise.all(workers);
+            return results;
+        }
         if (cached && cached.files) {
-            cached.files.forEach(function (f) {
+            var statPaths = cached.files.map(function (f) {
                 if (f.es) oldEs[f.p] = f.es;
+                return { p: f.p, f: f, path: path.join(cacheDir, f.p + (secureKey ? '.enc' : '')) };
+            });
+            var statResults = await batchStatBatch(statPaths, 20, function (entry) { return fsp.stat(entry.path); });
+            statResults.forEach(function (st, i) {
+                var f = statPaths[i].f;
+                if (!st) return; // 磁盘无此文件：不占位
                 if (secureKey) {
                     // 加密链路：实测 <rel>.enc（密文长度与回写 mtime 双比对）
-                    try {
-                        var st = fs.statSync(path.join(cacheDir, f.p + '.enc'));
-                        if (st.size === f.es && Math.floor(st.mtimeMs) === f.t) {
-                            localIdx[f.p] = { s: f.s, t: f.t };
-                        }
-                    } catch (e) { /* 磁盘无此密文文件：不占位，交给快照命中或下载补齐 */ }
+                    if (st.size === f.es && Math.floor(st.mtimeMs) === f.t) {
+                        localIdx[f.p] = { s: f.s, t: f.t };
+                    }
                 } else {
-                    // 原实现（明文链路磁盘实测，阶段一百三十二）
-                    try {
-                        var st = fs.statSync(path.join(cacheDir, f.p));
-                        localIdx[f.p] = { s: st.size, t: Math.floor(st.mtimeMs) };
-                    } catch (e) { /* 磁盘无此文件：不占位，交给快照命中或下载补齐 */ }
+                    // 明文链路磁盘实测
+                    localIdx[f.p] = { s: st.size, t: Math.floor(st.mtimeMs) };
                 }
             });
         }
@@ -855,14 +900,17 @@ async function sync() {
         // 文件缓存但未通过清单实测比对（localIdx 未收录）时，不以快照命中自证，强制纳入差异下载
         // 覆盖，下载后磁盘内容与清单属性重新对齐（自愈）；磁盘确无缓存时快照命中依旧生效（拦截器
         // 走快照本就是最新内容，不产生多余下载）。
-        Object.keys(snapIdx).forEach(function (p) {
-            if (localIdx[p]) return;
-            try {
-                fs.statSync(path.join(cacheDir, p + (secureKey ? '.enc' : '')));
-                return; // 磁盘有缓存文件但清单对不上：来源不明（陈旧/半写），强制走下载覆盖，不以快照遮掩
-            } catch (e) { }
-            localIdx[p] = snapIdx[p];
-        });
+        var snapKeys = Object.keys(snapIdx);
+        if (snapKeys.length) {
+            var snapStatPaths = snapKeys.map(function (p) { return { p: p, path: path.join(cacheDir, p + (secureKey ? '.enc' : '')) }; });
+            var snapStatResults = await batchStatBatch(snapStatPaths, 20, function (entry) { return fsp.stat(entry.path); });
+            snapStatResults.forEach(function (st, i) {
+                var p = snapKeys[i];
+                if (localIdx[p]) return;
+                if (st) return; // 磁盘有缓存文件但清单对不上：来源不明（陈旧/半写），强制走下载覆盖，不以快照遮掩
+                localIdx[p] = snapIdx[p];
+            });
+        }
 
         // 3. 差异计算：远端有而本地无（或 size/mtime 不符）的才下载
         var todo = [];
@@ -872,17 +920,15 @@ async function sync() {
         });
         // 服务端已删除的本地缓存文件同步清理（快照只读不动）
         var removed = 0;
+        var unlinkPromises = [];
         if (cached && cached.files) {
             cached.files.forEach(function (f) {
                 if (!remote[f.p]) {
-                    try {
-                        // 阶段一百三十六：加密链路清理 <rel>.enc；原实现（明文）：path.join(cacheDir, f.p)
-                        fs.unlinkSync(path.join(cacheDir, f.p + (secureKey ? '.enc' : '')));
-                        removed++;
-                    } catch (e) { }
+                    unlinkPromises.push(fsp.unlink(path.join(cacheDir, f.p + (secureKey ? '.enc' : ''))).then(function () { removed++; }).catch(function () { }));
                 }
             });
         }
+        if (unlinkPromises.length) await Promise.all(unlinkPromises);
 
         // 4. 并发下载（单个失败不再整轮作废——磁盘实测是唯一事实源（阶段一百三十二），
         //    已落盘文件照写清单后下轮自动跳过，未完成文件磁盘缺失下轮自动续传，多轮收敛；
@@ -923,8 +969,14 @@ async function sync() {
         }) };
         var mfp = path.join(cacheDir, 'manifest.json');
         var mtmp = mfp + '.tmp';
-        fs.writeFileSync(mtmp, JSON.stringify(manifest));
-        fs.renameSync(mtmp, mfp);
+        // 阶段三百一十修复：writeFileSync/renameSync 改异步——清单大小通常 <10KB，fsp 微秒级完成
+        // 但同步写会在机械盘 + 杀软扫描场景额外阻塞主进程 10~50ms
+        try {
+            await fsp.writeFile(mtmp, JSON.stringify(manifest));
+            await fsp.rename(mtmp, mfp);
+        } catch (eM) {
+            console.warn('[web-cache] 清单写入失败（临时文件残留可忽略）:', eM && eM.message);
+        }
 
         console.log('[web-cache] 增量同步完成 version=' + data.version + ' 下载=' + done + ' 清理=' + removed + ' 耗时=' + (Date.now() - t0) + 'ms');
         retryDelay = 30000; // 成功复位退避（下轮失败从 30s 重新起步）

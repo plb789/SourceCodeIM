@@ -6564,13 +6564,18 @@ app.whenReady().then(async function () {
     }
     // 阶段一百四十：同步失败不再死等下次重启（原先 cacheDir 旧副本遮蔽内置新快照、页面时好时坏根因）
     // ——失败后 web-cache 内部定时重试（30s 起指数退避封顶 5 分钟），自愈成功经 onSynced 刷新主窗口
-    // 根因修复（2026-11-14）：原实现在 createWindow() 之后 await sync()——拦截器在 loadURL 时从 cacheDir
-    // 读文件，此时 cacheDir 还是旧版（sync 还没跑），页面从一开始就是旧版。sync 跑完后靠 quietReloadWhenIdle
-    // 换新，但该函数有 15s 宽限期 + 窗口聚焦 + WS 稳定 + 无草稿等多重保护条件，用户正常使用时几乎永不触发，
-    // 导致"重启客户端还是旧页面"。修复：把 sync() 移到 createWindow() 之前，让 cacheDir 在拦截器第一次响应
-    // 请求时就已就位（新版），页面第一次加载就是最新版——根本不需要 reload。
-    var syncResult = await webCache.sync();
-    console.log('[BOOT] 启动增量同步完成 +' + (Date.now() - BOOT_T0) + 'ms');
+    // 阶段三百一十修复（2026-11-14 启动假死根因）：原实现将 sync() 移到 createWindow() 之前并 await——
+    // sync 内部有远端清单拉取（10s 超时）+ 差异下载（总超时 60s），网络慢时会完全阻塞窗口创建。
+    // 现改为不 await，让 sync() 后台运行：
+    //   加密链路下拦截器 blob（内置加密快照）优先级已提升为高于 cacheDir，页面第一次加载一定最新
+    //   （cacheDir 是增量缓存，下次启动拦截器才会优先读它；本轮 sync 跑完后 cacheDir 也会更新成最新）
+    //   这样 createWindow() 在 sync() 开始后的微秒级就执行，用户快速看到主窗口 + 登录界面
+    // 阶段一百四十的"cacheDir 旧副本遮蔽内置新快照"问题已通过 blob 优先彻底解决（无需 sync 前置）
+    webCache.sync().then(function () {
+        console.log('[BOOT] 后台增量同步完成 +' + (Date.now() - BOOT_T0) + 'ms');
+    }).catch(function (err) {
+        console.warn('[BOOT] 后台增量同步失败（自愈重试中）:', err && err.message);
+    });
     createWindow();
     console.log('[BOOT] 主窗口已创建（页面开始加载） +' + (Date.now() - BOOT_T0) + 'ms');
     createTray();
@@ -6654,9 +6659,30 @@ app.whenReady().then(async function () {
     } catch (e) { }
     procElevated = elevatedFlag === 'true'; // 模块层缓存（渲染层据此跳过 getUserMedia 直走 GDI 通道，省去提权下必然失败的尝试）
     mainLog('[boot] 快捷键注册完成，提权运行=' + elevatedFlag);
-    ensureEditorWindow(); // 编辑器窗口预热（启动即创建+加载页）：原实现首次截图/录屏才创建，
-    // 首开整页加载延迟数百 ms~秒级（实测 2026-11-01 "编辑框出现特别慢"主因）；预热后秒开。
-    // 窗口 show:false 常驻隐藏，单例复用逻辑不变（startEditorTask 的 isLoading 分支兼容预热态）
+    // 阶段三百一十修复：编辑器窗口预热从启动主链延迟到主窗口 did-finish-load 后 5s 创建——
+    // 原实现在 whenReady 最后立即 ensureEditorWindow()，低性能机器启动高峰会同时创建 3 个 BrowserWindow
+    // （splash + main + editor），Chromium 进程创建 + 页面加载抢占 CPU/IO，导致"登录界面假死几秒"。
+    // 延迟到用户已看到主窗口、登录态已确定后再创建，编辑器窗口 show:false 常驻隐藏，用户首次截图仍秒开。
+    // 同时注册 did-finish-load 里的延迟任务（5s 够页面加载 + 登录握手）；兜底 setTimeout 确保即使
+    // did-finish-load 不触发（极端环境）编辑器也能在 15s 后创建
+    (function deferEditorWarmup() {
+        var editorWarmedUp = false;
+        var doWarmup = function () {
+            if (editorWarmedUp) return;
+            editorWarmedUp = true;
+            try { ensureEditorWindow(); } catch (e) { /* 编辑器预热失败不影响主流程 */ }
+        };
+        // 主窗口 did-finish-load 后 5s 创建
+        if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.once('did-finish-load', function () {
+                setTimeout(doWarmup, 5000);
+            });
+        }
+        // 兜底 15s 后再检查一次（防止 mainWindow 在极端情况下已销毁）
+        setTimeout(function () {
+            if (!editorWarmedUp) doWarmup();
+        }, 15000);
+    })();
 
     app.on('activate', function () {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -14,7 +14,7 @@ const { app, BrowserWindow, ipcMain, Notification, nativeImage } = require('elec
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const LOG = '[code-updater]';
 
@@ -55,53 +55,140 @@ function resourcesPath() {
 
 // ---- downloadFile 带进度的流式下载 ----
 // returns Promise<{size}>，期间触发 onProgress(percent)
+// 带重试的文件删除（处理 Windows EBUSY/EPERM）
+function rmForceSync(filePath) {
+    if (!fs.existsSync(filePath)) return true;
+    const max = 10;
+    for (let i = 0; i < max; i++) {
+        try { fs.unlinkSync(filePath); return true; } catch (e) {
+            if ((e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES') && i < max - 1) {
+                try { require('child_process').execSync('ping -n 2 127.0.0.1 >nul', { stdio: 'ignore' }); } catch (_) {}
+                continue;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
+// 原子替换：把 src（通常是 .tmp）变成 dest。
+// 策略：先删 dest → rename src→dest；如果 rename 还撞锁，回退到 PowerShell 原生命令。
+function replaceFileAtomicSync(src, dest) {
+    // 先确保 dest 目录存在
+    const parent = path.dirname(dest);
+    if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+
+    // --- 策略 1：先删 dest，再 rename（最快路径） ---
+    rmForceSync(dest);
+    try { fs.renameSync(src, dest); return true; } catch (e) {}
+
+    // --- 策略 2：copyFile 覆盖 + 删 src（Node.js API） ---
+    try {
+        rmForceSync(dest);
+        fs.copyFileSync(src, dest);
+        try { fs.unlinkSync(src); } catch (_) {}
+        return true;
+    } catch (e) {}
+
+    // --- 策略 3：PowerShell Move-Item -Force（调用 Windows 原生 MoveFileEx + COPY_FILE_ALLOW_DECRYPTED_DESTINATION） ---
+    try {
+        const ps = `Move-Item -Force -LiteralPath '${src.replace(/'/g, "''")}' -Destination '${dest.replace(/'/g, "''")}'`;
+        const r = spawnSync('powershell', ['-NoProfile', '-Command', ps], {
+            windowsHide: true, stdio: 'ignore', timeout: 15000
+        });
+        if (r.status === 0 && fs.existsSync(dest)) {
+            try { fs.unlinkSync(src); } catch (_) {}
+            return true;
+        }
+    } catch (e) {}
+
+    // --- 策略 4：PowerShell Copy-Item -Force + Remove-Item -Force ---
+    try {
+        const ps2 = `Copy-Item -Force -LiteralPath '${src.replace(/'/g, "''")}' -Destination '${dest.replace(/'/g, "''")}'; Remove-Item -Force '${src.replace(/'/g, "''")}'`;
+        const r2 = spawnSync('powershell', ['-NoProfile', '-Command', ps2], {
+            windowsHide: true, stdio: 'ignore', timeout: 15000
+        });
+        if (r2.status === 0 && fs.existsSync(dest)) return true;
+    } catch (e) {}
+
+    // 全部失败
+    return false;
+}
+
 function downloadFile(url, destPath, expectedSize, onProgress) {
     return fetch(url).then(function (resp) {
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        // 确保 parent dir 存在
         const parent = path.dirname(destPath);
         if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+
+        // 清理上一次残留的 .tmp（忽略失败，会被新的覆盖）
+        rmForceSync(destPath + '.tmp');
 
         return new Promise(function (resolve, reject) {
             const file = fs.createWriteStream(destPath + '.tmp');
             const reader = resp.body.getReader();
             let received = 0;
+            let streamError = null;
             const total = expectedSize || parseInt(resp.headers.get('content-length') || '0', 10);
 
             function pump() {
                 reader.read().then(function (res) {
+                    if (streamError) return;
                     if (res.done) {
                         file.end(function () {
-                            // rename atomically
-                            fs.rename(destPath + '.tmp', destPath, function (err) {
-                                if (err) { reject(err); return; }
-                                resolve({ size: received });
-                            });
+                            if (streamError) return;
+                            // 原子替换：.tmp → destPath（带 4 种策略逐级回退）
+                            const ok = replaceFileAtomicSync(destPath + '.tmp', destPath);
+                            if (!ok || !fs.existsSync(destPath)) {
+                                reject(new Error('写入目标失败: 无法替换 ' + path.basename(destPath) + '（可能被其他进程占用）'));
+                                return;
+                            }
+                            resolve({ size: received });
                         });
                         return;
                     }
-                    file.write(res.value);
+                    const ok = file.write(res.value);
                     received += res.value.length;
                     if (onProgress && total > 0) {
                         onProgress(Math.round(received / total * 100));
                     }
-                    pump();
-                }).catch(reject);
+                    // 缓冲满时等 drain
+                    if (!ok) { file.once('drain', pump); } else { pump(); }
+                }).catch(function (e) { streamError = e; reject(e); });
             }
             pump();
-            file.on('error', reject);
+            file.on('error', function (e) { streamError = e; reject(e); });
         });
     });
 }
 
 // ---- sha512File 流式计算文件 SHA-512 ----
+// 重要：不能用 fs.createReadStream 读 .asar 后缀文件——Electron 的 asar 感知 fs 会拦截，
+// 把它当作归档内部路径读取导致 ENOENT。用 certutil 完全绕开 Electron fs 补丁。
 function sha512File(filePath) {
     return new Promise(function (resolve, reject) {
-        const hash = crypto.createHash('sha512');
-        const stream = fs.createReadStream(filePath);
-        stream.on('data', function (chunk) { hash.update(chunk); });
-        stream.on('end', function () { resolve('sha512:' + hash.digest('hex')); });
-        stream.on('error', reject);
+        try {
+            if (!fs.existsSync(filePath)) { reject(new Error('文件不存在: ' + filePath)); return; }
+            const out = spawnSync('certutil', ['-hashfile', filePath, 'SHA512'], {
+                encoding: 'utf8', windowsHide: true, maxBuffer: 10 * 1024 * 1024
+            });
+            if (out.status !== 0) { reject(new Error('certutil exit ' + out.status + ': ' + (out.stderr || out.stdout || '').slice(0, 200))); return; }
+            // certutil 输出格式（中文 Windows，两行标题 + 多行 hash）：
+            // SHA512 哈希文件 文件名:
+            // 文件名:          ← 有时候有第二行重复标题
+            // <128 个 hex 字符可能跨行>
+            //
+            // CertUtil: -hashfile 命令成功完成。
+            const hash = (out.stdout || '').split(/\r?\n/)
+                .map(function (l) { return l.trim(); })
+                .filter(function (l) {
+                    // 只保留纯 hex 行（128 字符全小写/大写 hex）
+                    return l.length >= 64 && /^[0-9a-fA-F]+$/.test(l);
+                })
+                .join('').toLowerCase();
+            if (!hash || hash.length !== 128) { reject(new Error('certutil 输出解析失败: 期望 128 hex，得到 ' + (hash ? hash.length : 0))); return; }
+            resolve('sha512:' + hash);
+        } catch (e) { reject(e); }
     });
 }
 
@@ -238,54 +325,94 @@ async function verifyDownload(info) {
     const cache = cacheDir();
     if (!fs.existsSync(cache)) fs.mkdirSync(cache, { recursive: true });
 
-    // 清旧缓存
+    // 清旧缓存（rmForceSync 自带重试，吞掉 EBUSY/EPERM 静默失败）
     const asarDest = path.join(cache, 'app.asar');
-    if (fs.existsSync(asarDest)) try { fs.unlinkSync(asarDest); } catch (e) {}
+    rmForceSync(asarDest);
+    rmForceSync(asarDest + '.tmp');
 
     curState = { phase: 'downloading', percent: 0, msg: '' };
     pushState();
 
     // 下载 app.asar
-    await downloadFile(info.asarUrl, asarDest, info.asarSize, function (p) {
-        curState = { phase: 'downloading', percent: Math.round(p * 0.9), msg: '下载 asar...' };
+    try {
+        await downloadFile(info.asarUrl, asarDest, info.asarSize, function (p) {
+            curState = { phase: 'downloading', percent: Math.round(p * 0.9), msg: '下载 asar...' };
+            pushState();
+        });
+    } catch (e) {
+        var msg = '[下载 asar 失败] ' + ((e && e.message) || String(e));
+        if (e && e.code) msg += ' (' + e.code + ')';
+        if (e && e.path) msg += ' path=' + e.path;
+        console.error('[code-updater] downloadFile asar failed:', msg);
+        curState = { phase: 'error', percent: 0, msg: msg };
         pushState();
-    });
+        return;
+    }
 
     // 校验 asar SHA-512
     curState = { phase: 'downloading', percent: 92, msg: '校验 asar...' };
     pushState();
-    const asarActual = await sha512File(asarDest);
-    if (ciCompare(info.asarHash, asarActual)) {
-        // 格式 mismatch（服务端可能漏了 sha512: 前缀）
-        if (ciCompare(info.asarHash.replace(/^sha512:/i, ''), asarActual.replace(/^sha512:/i, ''))) {
-            // ok
-        } else {
-            try { fs.unlinkSync(asarDest + '.tmp'); } catch (e) {}
-            try { fs.unlinkSync(asarDest); } catch (e) {}
-            throw new Error('asar SHA-512 校验失败');
+    try {
+        if (!fs.existsSync(asarDest)) {
+            throw new Error('asar 文件不存在（' + asarDest + '）');
         }
+        const asarActual = await sha512File(asarDest);
+        if (ciCompare(info.asarHash, asarActual)) {
+            if (!ciCompare(info.asarHash.replace(/^sha512:/i, ''), asarActual.replace(/^sha512:/i, ''))) {
+                rmForceSync(asarDest + '.tmp');
+                rmForceSync(asarDest);
+                throw new Error('asar SHA-512 校验失败');
+            }
+        }
+    } catch (e) {
+        var msg = '[校验 asar 失败] ' + ((e && e.message) || e);
+        if (e && e.code) msg += ' (' + e.code + ')';
+        if (e && e.path) msg += ' path=' + e.path;
+        console.error('[code-updater] verify asar failed:', msg);
+        curState = { phase: 'error', percent: 92, msg: msg };
+        pushState();
+        return;
     }
 
     // 下载 + 解压 unpacked（如有）
     if (info.hasUnpacked && info.unpackedUrl) {
         const zipDest = path.join(cache, 'unpacked.zip');
-        if (fs.existsSync(zipDest)) try { fs.unlinkSync(zipDest); } catch (e) {}
+        rmForceSync(zipDest);
+        rmForceSync(zipDest + '.tmp');
 
-        await downloadFile(info.unpackedUrl, zipDest, info.unpackedSize, function (p) {
-            curState = { phase: 'downloading', percent: Math.round(92 + p * 0.07), msg: '下载 unpacked...' };
+        try {
+            await downloadFile(info.unpackedUrl, zipDest, info.unpackedSize, function (p) {
+                curState = { phase: 'downloading', percent: Math.round(92 + p * 0.07), msg: '下载 unpacked...' };
+                pushState();
+            });
+        } catch (e) {
+            var msg = '[下载 unpacked 失败] ' + ((e && e.message) || e);
+            if (e && e.code) msg += ' (' + e.code + ')';
+            console.error('[code-updater] downloadFile unpacked failed:', msg);
+            curState = { phase: 'error', percent: 92, msg: msg };
             pushState();
-        });
+            return;
+        }
 
         // 校验 unpacked SHA-512
         if (info.unpackedHash) {
             curState = { phase: 'downloading', percent: 98, msg: '校验 unpacked...' };
             pushState();
-            const upActual = await sha512File(zipDest);
-            const cleanHash = (info.unpackedHash || '').replace(/^sha512:/i, '');
-            const cleanActual = upActual.replace(/^sha512:/i, '');
-            if (cleanHash && cleanHash !== cleanActual) {
-                try { fs.unlinkSync(zipDest); } catch (e) {}
-                throw new Error('unpacked.zip SHA-512 校验失败');
+            try {
+                const upActual = await sha512File(zipDest);
+                const cleanHash = (info.unpackedHash || '').replace(/^sha512:/i, '');
+                const cleanActual = upActual.replace(/^sha512:/i, '');
+                if (cleanHash && cleanHash !== cleanActual) {
+                    rmForceSync(zipDest);
+                    throw new Error('unpacked.zip SHA-512 校验失败');
+                }
+            } catch (e) {
+                var msg = '[校验 unpacked 失败] ' + ((e && e.message) || e);
+                if (e && e.code) msg += ' (' + e.code + ')';
+                console.error('[code-updater] verify unpacked failed:', msg);
+                curState = { phase: 'error', percent: 98, msg: msg };
+                pushState();
+                return;
             }
         }
 
@@ -293,10 +420,18 @@ async function verifyDownload(info) {
         curState = { phase: 'downloading', percent: 99, msg: '解压 unpacked...' };
         pushState();
         const unpackedDir = path.join(cache, 'unpacked');
-        if (fs.existsSync(unpackedDir)) { try { fs.rmSync(unpackedDir, { recursive: true }); } catch (e) {} }
+        if (fs.existsSync(unpackedDir)) { try { fs.rmSync(unpackedDir, { recursive: true, force: true }); } catch (e) {} }
         fs.mkdirSync(unpackedDir, { recursive: true });
-        await sevenZipExtract(zipDest, unpackedDir);
-        try { fs.unlinkSync(zipDest); } catch (e) {}
+        try {
+            await sevenZipExtract(zipDest, unpackedDir);
+        } catch (e) {
+            var msg = '[解压 unpacked 失败] ' + ((e && e.message) || e);
+            console.error('[code-updater] extract unpacked failed:', msg);
+            curState = { phase: 'error', percent: 99, msg: msg };
+            pushState();
+            return;
+        }
+        rmForceSync(zipDest);
     }
 
     curState = { phase: 'downloaded', percent: 100, msg: '' };
