@@ -7,7 +7,7 @@
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
     <script src="/js/i18n.js?v=3.34"></script>
-    <script src="/js/branding.js?v=1.1"></script>
+    <script src="/js/branding.js?v=1.2"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -2160,7 +2160,7 @@
                     </div>
                     <div class="settings-card-row">
                         <span class="settings-card-label">功能阶段</span>
-                        <span class="settings-card-value">阶段一百零五</span>
+                        <span class="settings-card-value" id="feature-stage-about">阶段一百零五</span>
                     </div>
                     <!-- 阶段二百九十五：安装目录信息（仅 PC 客户端由 app-update.js 填充并显示，
                          排查"更新装到别的目录"问题；登记目录=NSIS 更新器读取的注册表 InstallLocation） -->

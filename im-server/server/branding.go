@@ -28,6 +28,10 @@ const brandingCompanyDefault = "山西梗阳新能源有限公司"
 // 单位名称长度上限（UTF-8 字符数，防误填超长文本破坏页面排版）
 const brandingCompanyMax = 60
 
+// CURRENT_STAGE 当前功能阶段号（开发里程碑）—— 每次新增功能后更新此常量，
+// 客户端"关于"页通过 /api/branding 拉取并动态展示"阶段 X"
+const CURRENT_STAGE = 295
+
 var (
 	brandingMu      sync.Mutex
 	brandingCompany string
@@ -84,7 +88,10 @@ func handleBrandingPublicGet(w http.ResponseWriter, r *http.Request) {
 	brandingInit()
 	company := brandingCompany
 	brandingMu.Unlock()
-	adminJSON(w, map[string]interface{}{"company": company})
+	adminJSON(w, map[string]interface{}{
+		"company": company,
+		"stage":   CURRENT_STAGE,
+	})
 }
 
 // handleAdminBrandingGet 管理端读取：GET /admin/api/branding
