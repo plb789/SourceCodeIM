@@ -3999,6 +3999,15 @@
         document.addEventListener('mousedown', function (e) {
             if (!card.classList.contains('hidden') && !card.contains(e.target) && !userEl.contains(e.target)) hide();
         });
+        $('gsCardMerchant').addEventListener('click', function () {
+            hide();
+            // 打开商户后台（独立登录系统，权限由商户后台自行校验）
+            try {
+                window.open('/merchant.html', '_blank');
+            } catch (e) {
+                toast(T('打开商户后台失败'));
+            }
+        });
         $('gsCardProfile').addEventListener('click', function () {
             hide();
             toast(T('个人资料页即将开放，可先在主界面查看'));
