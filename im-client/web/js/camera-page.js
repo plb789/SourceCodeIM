@@ -262,7 +262,7 @@
         $('cam-err-msg').textContent = msg;
         var hint;
         if (name === 'NotAllowedError' || name === 'SecurityError') {
-            hint = T('相机/麦克风权限被拒绝：请在系统「设置 → 应用 → 即时通讯 → 权限」中允许相机与麦克风后点重试');
+            hint = T('相机/麦克风权限被拒绝：请在系统「设置 → 应用 → 即时通 → 权限」中允许相机与麦克风后点重试');
         } else if (name === 'NotReadableError' || name === 'TrackStartError') {
             hint = T('摄像头被其他应用占用，请关闭正在使用摄像头的应用后重试');
         } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {

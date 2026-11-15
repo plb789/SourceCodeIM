@@ -177,7 +177,7 @@ const WIN_ICON = (function () {
 // 注册 AUMID 通知图标与展示名：Windows 原生通知（Notification）不读 icon 参数，toast 头部小图标由
 // Shell 按 AUMID 注册表 IconUri 解析（缺失/不可读时回退占位图标）。实测 IconUri 指向 .ico 文件 Shell
 // 不识别（头部仍显示占位方格），必须 PNG：启动时 nativeImage 读 64.ico 转 PNG 落盘 userData 再注册
-// （asar 内路径 Shell 不可读）；ShowName 为 toast 头部展示名（产品名"即时通讯"，DisplayName 供任务栏/
+// （asar 内路径 Shell 不可读）；ShowName 为 toast 头部展示名（产品名"即时通"，DisplayName 供任务栏/
 // 任务管理器分组）。HKCU 无需管理员权限，失败静默（回退不影响运行）。
 try {
     const notifyPng = path.join(app.getPath('userData'), 'im-notify.png');
@@ -189,7 +189,7 @@ try {
     };
     require('child_process').execFile('reg', regArgs('DisplayName', 'im-client'));
     require('child_process').execFile('reg', regArgs('IconUri', notifyPng));
-    require('child_process').execFile('reg', regArgs('ShowName', '即时通讯'));
+    require('child_process').execFile('reg', regArgs('ShowName', '即时通'));
 } catch (e) { }
 
 // ===== 阶段一百三十四：主题持久化（主进程可读，深色启动底色根治）=====
@@ -287,7 +287,7 @@ function createSplash() {
         + ' letter-spacing:4px; color:' + nameColor + '; }'
         + '</style></head><body>'
         + '<img class="splash-logo" src="data:image/x-icon;base64,' + logoB64 + '" alt="">'
-        + '<div class="splash-name">即时通讯</div>'
+        + '<div class="splash-name">即时通</div>'
         + '</body></html>';
     splashWin = new BrowserWindow({
         icon: WIN_ICON,
@@ -331,7 +331,7 @@ function createWindow() {
         height: 720,
         minWidth: 800,
         minHeight: 560,
-        title: '即时通讯',
+        title: '即时通',
         icon: WIN_ICON,
         // 阶段一百五十四：启动闪屏配套——主窗口延迟到页面加载完成后显示（did-finish-load 回调），
         // 加载期由 splash 闪屏窗覆盖（原实现：创建即显示，加载期露出灰黑背景色）
@@ -483,7 +483,7 @@ function createTray() {
     // Tray(nativeImage.createEmpty());
     // tray = new Tray(path.join(__dirname, '64.ico'));
     tray = new Tray(APP_ICON);
-    tray.setToolTip('即时通讯');
+    tray.setToolTip('即时通');
     const contextMenu = Menu.buildFromTemplate([
         { label: '显示主窗口', click: function () { mainWindow.show(); } },
         // 阶段二百六十：托盘手动检查更新（无新版系统通知提示已是最新；有新版弹自绘更新窗）
@@ -572,7 +572,7 @@ function showNotification(title, body, avatarUrl) {
 
 // 阶段六十六：渲染层系统通知转发（Agent 任务完结提醒等场景）
 ipcMain.on('notify', function (event, payload) {
-    showNotification(String((payload && payload.title) || '即时通讯'), String((payload && payload.body) || ''), (payload && payload.avatar) || '');
+    showNotification(String((payload && payload.title) || '即时通'), String((payload && payload.body) || ''), (payload && payload.avatar) || '');
 });
 
 // 阶段七十七：渲染层主题切换时同步原生窗口按钮（titleBarOverlay）配色，浅色/深色跟随主题；
@@ -3165,7 +3165,7 @@ var flashTimer = null;    // 托盘闪动定时器（避免重复起闪）
 var unreadData = { total: 0, detail: '', list: [] }; // 渲染层上报的最新未读数据缓存（面板数据源）
 var panelWin = null;      // 悬停预览面板窗口（惰性创建，显隐复用）
 var panelShowTimer = null;// 托盘悬停节流定时器
-var currentTooltip = '即时通讯'; // 原生 tooltip 文本（面板显示期间临时置空避免与面板重叠）
+var currentTooltip = '即时通'; // 原生 tooltip 文本（面板显示期间临时置空避免与面板重叠）
 
 // 未读数据上报：渲染层推送 {total, detail, icon, list}
 ipcMain.on('tray:unread', function (event, data) {
@@ -3174,7 +3174,7 @@ ipcMain.on('tray:unread', function (event, data) {
     trayBadgeIcon = data.icon || null;
     unreadData = data;
     // 悬停 tooltip：无未读显示应用名，有未读显示明细（渲染层生成，如"admin(2) 群聊(5)"）
-    currentTooltip = total > 0 ? '即时通讯（' + (data.detail || total + ' 条未读') + '）' : '即时通讯';
+    currentTooltip = total > 0 ? '即时通（' + (data.detail || total + ' 条未读') + '）' : '即时通';
     tray.setToolTip(currentTooltip);
     if (total > 0 && trayBadgeIcon) {
         tray.setImage(nativeImage.createFromDataURL(trayBadgeIcon));
@@ -3217,7 +3217,7 @@ function ensureTrayPanel() {
 function showTrayPanel() {
     if (!tray) return;
     // 无未读时不弹面板（用户反馈：没消息时悬停弹"暂无新消息"多余，有消息才显示）；
-    // 此时保留原生 tooltip"即时通讯"即可
+    // 此时保留原生 tooltip"即时通"即可
     // 原实现：无未读也弹面板并显示"暂无新消息"空态
     if (!(unreadData.list && unreadData.list.length)) return;
     var p = ensureTrayPanel();

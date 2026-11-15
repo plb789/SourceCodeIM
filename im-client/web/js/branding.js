@@ -4,7 +4,7 @@
  * 拉取成功后按元素 id 就地替换（textContent 渲染无注入面）：
  *   - brand-unit-foot    登录/注册页「安全接入」单位名称
  *   - brand-unit-about   设置页「关于-单位」单位名称（index.html 独有）
- *   - brand-copy         登录/注册页版权行「© 2026 即时通讯 · <单位>」
+ *   - brand-copy         登录/注册页版权行「© 2026 即时通 · <单位>」
  *   - feature-stage-about 设置页「关于-功能阶段」阶段号（数字自动转中文大写）
  * 经 I18N.t() 归口：默认文案命中语言包反查英文（与原静态行为一致），
  * 后台自定义的单位名三层兜底回退原样显示（专有名词不翻译为合理预期）。
@@ -61,7 +61,7 @@
             var about = document.getElementById('brand-unit-about');
             if (about) about.textContent = t(company);
             var copy = document.getElementById('brand-copy');
-            if (copy) copy.textContent = t(I18N.t('© 2026 即时通讯 · ') + company);
+            if (copy) copy.textContent = t(I18N.t('© 2026 即时通 · ') + company);
         }
         if (typeof stage === 'number' && stage > 0) {
             var stageEl = document.getElementById('feature-stage-about');

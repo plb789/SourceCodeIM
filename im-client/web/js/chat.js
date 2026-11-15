@@ -25412,7 +25412,7 @@
             chatStatus.textContent = '';
             // 微信 PC 同款：未选中会话时整个聊天区显示居中 logo + 应用名（隐藏顶栏/消息区/输入框的观感）
             if (chatEmptyState) {
-                chatEmptyName.textContent = I18N.t('即时通讯');
+                chatEmptyName.textContent = I18N.t('即时通');
                 chatEmptyState.classList.remove('hidden');
             }
         } else if (isGroupTarget(currentChatUser)) {

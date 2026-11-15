@@ -1,13 +1,13 @@
 {
   "name": "im-client-pc-win7",
   "version": "1.0.1",
-  "description": "即时通讯 PC 桌面客户端",
+  "description": "即时通 PC 桌面客户端",
   "author": {
     "name": "山西梗阳新能源有限公司"
   },
   "winExeMeta": {
-    "fileDescription": "即时通讯 PC 桌面客户端",
-    "productName": "即时通讯"
+    "fileDescription": "即时通 PC 桌面客户端",
+    "productName": "即时通"
   },
   "main": "loader.min.js",
   "scripts": {

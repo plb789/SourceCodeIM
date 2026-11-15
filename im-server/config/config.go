@@ -645,7 +645,7 @@ type AgentConfig struct {
 	AutoCommands          []string `yaml:"auto_commands"`           // run_command 命令前缀白名单（命中自动放行，其余强制审批）
 	WorkspaceRoot         string   `yaml:"workspace_root"`          // 工作区根目录（空=exe目录/agent_workspace，按 username 隔离子目录）
 	// PcExecutor 阶段六十：本地执行器开关——true 时用户 PC 端在线，文件/命令工具下放到其电脑本地执行
-	// （文件直接落在用户磁盘 %APPDATA%/即时通讯/agent_workspace/<用户名>/；PC 离线或执行超时自动回退服务端工作区）
+	// （文件直接落在用户磁盘 %APPDATA%/即时通/agent_workspace/<用户名>/；PC 离线或执行超时自动回退服务端工作区）
 	PcExecutor bool `yaml:"pc_executor"`
 	// Concurrency 阶段六十七：每用户同时运行任务数上限（0=1；超过上限的新任务进入排队）
 	Concurrency int `yaml:"concurrency"`

@@ -218,7 +218,7 @@ const qrLandingHTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="ut
 	`display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f5f5f5;color:#333}` +
 	`.card{text-align:center;padding:40px 28px}.icon{font-size:52px;margin-bottom:16px}` +
 	`h1{font-size:18px;font-weight:600;margin:0 0 8px}p{font-size:14px;color:#888;margin:0;line-height:1.6}</style></head>` +
-	`<body><div class="card"><div class="icon">📱</div><h1>请使用即时通讯 APP 扫一扫</h1>` +
+	`<body><div class="card"><div class="icon">📱</div><h1>请使用即时通 APP 扫一扫</h1>` +
 	`<p>打开手机 APP，在「+」菜单中使用扫一扫<br>扫描电脑上的登录二维码</p></div></body></html>`
 
 // HandleQRLanding 系统相机扫码落地页（提示改用 APP 扫一扫）

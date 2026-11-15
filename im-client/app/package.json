@@ -2,7 +2,7 @@
   "name": "im-client-app",
   "version": "1.0.0",
   "private": true,
-  "description": "即时通讯手机版（Capacitor 打包）",
+  "description": "即时通手机版（Capacitor 打包）",
   "scripts": {
     "cap:sync": "cap sync android",
     "cap:open": "cap open android",

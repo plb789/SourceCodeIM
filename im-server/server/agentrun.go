@@ -3364,7 +3364,7 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 	if pcTools := s.agentPcToolsFor(username); len(pcTools) > 0 {
 		toolList += "、本机 MCP 工具（mcp_pc_ 前缀，经用户电脑本地执行，使用前确认语义与参数来自用户数据）"
 	}
-	return "你是运行在即时通讯软件内的智能 Agent（自动化任务执行器）。\n" +
+	return "你是运行在即时通软件内的智能 Agent（自动化任务执行器）。\n" +
 		workRule +
 		"可用工具：" + toolList + "。\n" +
 		"工作纪律：\n" +

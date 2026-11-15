@@ -260,7 +260,7 @@ ai:
     # 保留头 2/3 + 尾 1/3 后再进历史，前端执行控制台与留痕仍显示全量）。0=默认 8000，负数=不截断
     tool_result_max_chars: 8000
     # 阶段六十：本地执行器——true 时用户 PC 客户端（Electron）在线，文件/命令工具自动下放到其电脑本地执行，
-    # 文件直接落在用户磁盘（%APPDATA%/即时通讯/agent_workspace/<用户名>/）；
+    # 文件直接落在用户磁盘（%APPDATA%/即时通/agent_workspace/<用户名>/）；
     # PC 离线或本地执行超时自动回退服务端工作区执行，任务不中断。false 时全部在服务端执行（阶段五十九行为）
     pc_executor: true
     # 阶段九十一：内置浏览器工具开关（默认开启，nil 视为 true）——TRAE CN 同款内置浏览区，
@@ -346,7 +346,7 @@ ai:
   agents:
     - name: "AI助手"                   # 全局唯一，会话列表展示名
       provider: deepseek               # 绑定上面的 provider name
-      system_prompt: "你是一个即时通讯软件内的智能助手，回答简洁、准确、友好，使用中文回复。"
+      system_prompt: "你是一个即时通软件内的智能助手，回答简洁、准确、友好，使用中文回复。"
       avatar: ""                       # 头像 URL，留空时前端显示 🤖 占位
     - name: "翻译助手"
       provider: zhipu

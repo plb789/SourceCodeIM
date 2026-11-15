@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>即时通讯</title>
+    <title>即时通</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
     <script src="/js/i18n.js?v=3.34"></script>
@@ -74,7 +74,7 @@
          window.bootStage 由脚本标签间的内联上报更新（真实执行阶段，非伪造进度条） -->
     <div id="bootSplash" class="boot-splash">
         <div class="boot-splash-logo"><svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M12 3C6.48 3 2 6.94 2 11.8c0 2.62 1.34 4.97 3.5 6.59-.13 1.06-.56 2.12-1.25 2.92-.2.24-.03.61.29.61 1.63 0 3.11-.62 4.23-1.45 1.02.28 2.11.43 3.23.43 5.52 0 10-3.94 10-8.8S17.52 3 12 3z"/></svg></div>
-        <div class="boot-splash-name">即时通讯</div>
+        <div class="boot-splash-name">即时通</div>
         <div class="boot-splash-ring"></div>
         <div class="boot-splash-status" id="bootStatus">正在加载资源…</div>
     </div>
@@ -83,7 +83,7 @@
          默认不显示，仅 index.html 头部引导脚本给根节点挂 pc-titlebar 类（Electron 壳内）时由 CSS 启用 -->
     <div id="app-titlebar" class="app-titlebar">
         <svg class="app-titlebar-logo" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 3C6.48 3 2 6.94 2 11.8c0 2.62 1.34 4.97 3.5 6.59-.13 1.06-.56 2.12-1.25 2.92-.2.24-.03.61.29.61 1.63 0 3.11-.62 4.23-1.45 1.02.28 2.11.43 3.23.43 5.52 0 10-3.94 10-8.8S17.52 3 12 3z"/></svg>
-        <span class="app-titlebar-title">即时通讯</span>
+        <span class="app-titlebar-title">即时通</span>
         <!-- 阶段七十八：标题栏用户区（头像+账号，点击打开个人资料面板）。登录成功后显示，
              PC 端（pc-titlebar）nav-rail 顶部用户区随之隐藏；Web/手机端整个标题栏不显示互不影响 -->
         <div id="titlebar-user" class="titlebar-user hidden">
@@ -108,7 +108,7 @@
     <!-- 登录视图（阶段四十七：参考图风格左右分栏卡片，主题色跟随现有设定；旧单卡片结构注释保留）
     <div id="login-view" class="login-view">
         <div class="login-box">
-            <h1>即时通讯</h1>
+            <h1>即时通</h1>
             <p class="login-subtitle">山西梗阳新能源有限公司</p>
             <input type="text" id="login-username" placeholder="用户名" autocomplete="off">
             <input type="password" id="login-password" placeholder="密码" autocomplete="off">
@@ -124,7 +124,7 @@
                 <div class="login-brand-ring" aria-hidden="true"></div>
                 <div class="login-brand-body">
                     <p class="login-brand-caption">INSTANT MESSENGER PLATFORM</p>
-                    <h1 class="login-brand-title">即时通讯</h1>
+                    <h1 class="login-brand-title">即时通</h1>
                     <p class="login-brand-desc">以即时沟通、文件传输和 AI 协作为核心，构建更安全、更高效的企业数字化沟通平台。</p>
                     <div class="login-brand-tags">
                         <span class="login-tag">即时沟通</span>
@@ -210,7 +210,7 @@
                     </div>
                     <p class="login-qr-tip">请使用手机 APP「+」菜单中的「扫一扫」扫描二维码登录</p>
                 </div>
-                <p class="login-form-foot" id="brand-copy">© 2026 即时通讯 · 山西梗阳新能源有限公司</p>
+                <p class="login-form-foot" id="brand-copy">© 2026 即时通 · 山西梗阳新能源有限公司</p>
             </div>
         </div>
     </div>
@@ -304,7 +304,7 @@
             <!-- 阶段一百九十九：手机 APP 端微信式首页顶栏（仅 html.m 显示，PC/WEB 端 CSS 恒隐藏）：
                  居中标题 + 右侧搜索/加号；搜索点击展开既有搜索框，加号打开下拉菜单（添加好友/发起群聊） -->
             <div class="m-home-topbar">
-                <span class="m-home-title">即时通讯</span>
+                <span class="m-home-title">即时通</span>
                 <span class="m-home-actions">
                     <button id="m-home-search" class="m-home-btn" title="搜索">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
@@ -804,7 +804,7 @@
                  覆盖顶栏/消息区/输入框；显隐归口 updateChatTitle 的会话空态分支） -->
             <div id="chat-empty-state" class="chat-empty-state hidden">
                 <div class="chat-empty-logo"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 3C6.48 3 2 6.94 2 11.8c0 2.62 1.34 4.97 3.5 6.59-.13 1.06-.56 2.12-1.25 2.92-.2.24-.03.61.29.61 1.63 0 3.11-.62 4.23-1.45 1.02.28 2.11.43 3.23.43 5.52 0 10-3.94 10-8.8S17.52 3 12 3z"/></svg></div>
-                <div id="chat-empty-name" class="chat-empty-name">即时通讯</div>
+                <div id="chat-empty-name" class="chat-empty-name">即时通</div>
             </div>
 
             <!-- 表情面板（自定义，禁止系统默认弹窗） -->
@@ -2152,7 +2152,7 @@
                 <div class="settings-card">
                     <div class="settings-card-row">
                         <span class="settings-card-label">应用</span>
-                        <span class="settings-card-value">即时通讯平台</span>
+                        <span class="settings-card-value">即时通平台</span>
                     </div>
                     <div class="settings-card-row">
                         <span class="settings-card-label">单位</span>

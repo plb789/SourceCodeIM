@@ -914,7 +914,7 @@
         var fields = [
             { key: 'name', label: '智能体名称（全局唯一，会话列表展示名）', placeholder: '如：AI助手' },
             { key: 'provider', label: '绑定模型服务', type: 'select', options: providerOptions() },
-            { key: 'system_prompt', label: '系统提示词（人设/能力定义）', type: 'textarea', placeholder: '你是一个即时通讯软件内的智能助手...' },
+            { key: 'system_prompt', label: '系统提示词（人设/能力定义）', type: 'textarea', placeholder: '你是一个即时通软件内的智能助手...' },
             { key: 'avatar', label: '头像 URL（留空显示 🤖 占位）', placeholder: 'https://... 或 /static/avatar/...' },
             // 阶段五十一：绑定知识库多选（RAG 检索注入；公共库对全体用户生效，个人库仅归属者生效）
             // 原实现：fields 漏配 kb_ids 字段，导致表单无知识库绑定入口（服务端与收集逻辑均已就绪）

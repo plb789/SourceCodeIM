@@ -1416,7 +1416,7 @@ func aiCompressSummarize(ctx context.Context, agent *AIRunAgent, prevSummary str
 	// 未配置回退传入模型（维持现状）
 	agent = aiLightAgent(agent)
 	var b strings.Builder
-	b.WriteString("你是即时通讯系统的对话上下文压缩器。请把提供的历史对话记录蒸馏为一份紧凑摘要，供 AI 在后续对话中作为较早历史的记忆使用。要求：\n" +
+	b.WriteString("你是即时通系统的对话上下文压缩器。请把提供的历史对话记录蒸馏为一份紧凑摘要，供 AI 在后续对话中作为较早历史的记忆使用。要求：\n" +
 		"1. 保留关键事实、结论、决定、数字、文件/路径/命令及其结果、未解决的问题；\n" +
 		"2. 合并重复内容，省略寒暄与无信息量语句；\n" +
 		"3. 只输出摘要正文本身，使用中文，不要任何开场白或解释。")

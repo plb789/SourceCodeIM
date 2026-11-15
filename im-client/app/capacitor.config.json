@@ -1,6 +1,6 @@
 {
   "appId": "com.gengyang.im",
-  "appName": "即时通讯",
+  "appName": "即时通",
   "webDir": "../web",
   "webContentsDebuggingEnabled": true,
   "android": {
