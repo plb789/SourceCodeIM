@@ -1557,6 +1557,36 @@
         }
         .gs-desc-img.gm-broken { display: none; }
 
+        /* ===== 富文本 HTML 样式（与服务端 gameDescContentClean 放行标签对应） ===== */
+        .gs-desc h1 { font-size: 18px; font-weight: 600; margin: 12px 0 6px; color: var(--text); }
+        .gs-desc h2 { font-size: 16px; font-weight: 600; margin: 10px 0 4px; color: var(--text); }
+        .gs-desc h3 { font-size: 14px; font-weight: 600; margin: 8px 0 4px; color: var(--accent); }
+        .gs-desc p { margin: 0 0 8px; line-height: 1.6; }
+        .gs-desc ul, .gs-desc ol { margin: 4px 0 8px 18px; padding: 0; line-height: 1.7; }
+        .gs-desc ul { list-style: disc; }
+        .gs-desc ol { list-style: decimal; }
+        .gs-desc li { margin: 2px 0; }
+        .gs-desc a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted transparent; transition: border-color .15s; }
+        .gs-desc a:hover { border-bottom-color: currentColor; }
+        .gs-desc blockquote {
+            margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--accent);
+            background: var(--placeholder-bg); border-radius: 0 4px 4px 0; font-style: italic;
+        }
+        .gs-desc blockquote p:last-child { margin-bottom: 0; }
+        .gs-desc hr { border: none; border-top: 1px solid var(--divider); margin: 10px 0; }
+        .gs-desc strong, .gs-desc b { font-weight: 600; }
+        .gs-desc em, .gs-desc i { font-style: italic; }
+        .gs-desc u { text-decoration: underline; }
+        .gs-desc del, .gs-desc s { text-decoration: line-through; opacity: .7; }
+        .gs-desc mark { background: var(--accent); color: var(--text-on-accent); padding: 0 3px; border-radius: 2px; }
+        .gs-desc small { font-size: 11px; opacity: .7; }
+        .gs-desc code { font-family: var(--mono, Consolas, monospace); font-size: 11px; background: var(--placeholder-bg); padding: 1px 4px; border-radius: 3px; }
+        .gs-desc pre { font-family: var(--mono, Consolas, monospace); font-size: 11px; background: var(--placeholder-bg); padding: 8px; border-radius: 6px; overflow-x: auto; margin: 6px 0; white-space: pre-wrap; }
+        .gs-desc pre code { background: none; padding: 0; font-size: inherit; }
+        .gs-desc table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 12px; }
+        .gs-desc th, .gs-desc td { border: 1px solid var(--divider); padding: 4px 8px; text-align: left; }
+        .gs-desc th { background: var(--placeholder-bg); font-weight: 600; }
+
         .gs-version { padding: 10px 0; border-bottom: 1px solid var(--divider); }
 
         .gs-version:last-child { border-bottom: none; }
@@ -3893,7 +3923,8 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=78"></script>
+    <script src="js/game-common.js?v=1.0"></script>
+    <script src="js/game-store.js?v=79"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

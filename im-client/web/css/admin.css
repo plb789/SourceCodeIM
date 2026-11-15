@@ -3089,3 +3089,401 @@ td .skel-line {
     color: #ffa500;
     margin-top: 6px;
 }
+
+/* ===== 富文本分屏编辑器（Game 详细介绍） ===== */
+.gm-desc-split {
+    display: flex;
+    height: 320px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--panel-bg);
+}
+.gm-desc-split-pane {
+    flex: 1;
+    min-width: 120px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.gm-desc-split-left .gm-desc-input {
+    flex: 1;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    resize: none;
+    padding: 10px;
+    font-family: var(--mono, Consolas, monospace);
+}
+
+/* ===== 阶段五十二：Game / 公告 富文本编辑器（分屏 flex 容器 + 拖拽条 + 右侧实时预览 + 安全提示面板） ===== */
+.desc-editor-split {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--panel-bg, #fff);
+}
+.desc-editor-split .desc-editor-left {
+    flex: 50%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+.desc-editor-split .desc-editor-left textarea {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    padding: 10px;
+    resize: none;
+    outline: none;
+    font-family: var(--mono, Consolas, monospace);
+    font-size: 13px;
+    line-height: 1.6;
+    box-sizing: border-box;
+    min-height: 140px;
+    max-height: 320px;
+}
+.desc-editor-resizer {
+    width: 6px;
+    cursor: col-resize;
+    background: var(--border, #e0e0e0);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--text-muted, #999);
+    user-select: none;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.desc-editor-resizer:hover {
+    background: var(--accent, #07c160);
+    color: #fff;
+}
+.desc-editor-split .desc-editor-right {
+    flex: 50%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--desc-preview-bg, #f3f4f6);
+    border-left: 1px solid var(--border, #e0e0e0);
+}
+.desc-editor-right-head {
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted, #666);
+    border-bottom: 1px solid var(--border, #e0e0e0);
+    background: var(--panel-bg, #fff);
+    flex-shrink: 0;
+}
+.desc-editor-preview {
+    flex: 1;
+    padding: 10px;
+    font-size: 13px;
+    line-height: 1.7;
+    overflow-y: auto;
+    color: var(--text, #333);
+    word-break: break-word;
+}
+.desc-editor-preview:empty::before {
+    content: '输入内容后此处实时预览...';
+    color: var(--text-muted, #bbb);
+    font-style: italic;
+}
+/* 公告预览里的图片网格（复用 game-store 样式类） */
+.desc-editor-preview .gs-notice-card-grid {
+    margin-top: 10px;
+    display: grid;
+    gap: 4px;
+}
+.desc-editor-preview .gs-notice-card-grid.n1 { grid-template-columns: 1fr; }
+.desc-editor-preview .gs-notice-card-grid.n2 { grid-template-columns: 1fr 1fr; }
+.desc-editor-preview .gs-notice-card-grid.n3 { grid-template-columns: repeat(3, 1fr); }
+.desc-editor-preview .gs-notice-card-cell {
+    position: relative;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 4px;
+    background: var(--border, #eee);
+}
+.desc-editor-preview .gs-notice-card-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.desc-editor-preview .gs-notice-card-more {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,.55);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+}
+/* 公告富文本里的链接 */
+.desc-editor-preview a {
+    color: var(--accent, #07c160);
+    text-decoration: underline;
+}
+/* 安全提示面板 */
+.desc-editor-issues {
+    border-top: 1px solid var(--border, #e0e0e0);
+    background: var(--panel-bg, #fff);
+    flex-shrink: 0;
+    max-height: 160px;
+    display: flex;
+    flex-direction: column;
+}
+.desc-editor-issues.hidden { display: none; }
+.desc-editor-issues-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border, #e0e0e0);
+    flex-shrink: 0;
+}
+.desc-editor-issues-count {
+    font-weight: 600;
+}
+.desc-editor-issues.error .desc-editor-issues-count {
+    color: #e53935;
+}
+.desc-editor-issues-collapse {
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-muted, #666);
+    padding: 2px 6px;
+}
+.desc-editor-issues-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 10px;
+}
+.desc-editor-issues-item {
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    background: var(--bg-soft, #f5f5f5);
+}
+.desc-editor-issues-item.error {
+    background: rgba(229, 57, 53, 0.08);
+    border-left: 3px solid #e53935;
+}
+.desc-editor-issues-item.warning {
+    background: rgba(255, 152, 0, 0.08);
+    border-left: 3px solid #ff9800;
+}
+.desc-editor-issues-item.info {
+    background: rgba(33, 150, 243, 0.08);
+    border-left: 3px solid #2196f3;
+}
+.desc-editor-issues-item .level-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    margin-right: 6px;
+}
+.desc-editor-issues-item.error .level-tag { background: #e53935; }
+.desc-editor-issues-item.warning .level-tag { background: #ff9800; }
+.desc-editor-issues-item.info .level-tag { background: #2196f3; }
+.desc-editor-issues-item .warn-reason {
+    color: var(--text-muted, #888);
+    margin-top: 2px;
+    font-size: 11px;
+}
+.desc-editor-issues-item .warn-suggestion {
+    color: var(--accent, #07c160);
+    margin-top: 2px;
+    font-size: 11px;
+}
+.desc-editor-issues-item .warn-actions {
+    margin-top: 4px;
+}
+.desc-editor-issues-item .warn-actions button {
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid var(--accent, #07c160);
+    background: var(--panel-bg, #fff);
+    color: var(--accent, #07c160);
+    border-radius: 3px;
+    cursor: pointer;
+}
+.desc-editor-issues-item .warn-actions button:hover {
+    background: var(--accent, #07c160);
+    color: #fff;
+}
+/* Modal 里的分屏编辑器（高度受限） */
+.desc-editor-split.notice-editor-split {
+    min-height: 200px;
+    max-height: 360px;
+}
+.desc-editor-split.notice-editor-split .desc-editor-left textarea {
+    max-height: none;
+    height: 100%;
+}
+.gm-desc-split-left .gm-desc-input:focus { outline: none; }
+.gm-desc-split-bar {
+    width: 4px;
+    background: var(--border);
+    cursor: col-resize;
+    flex-shrink: 0;
+    transition: background .1s;
+}
+.gm-desc-split-bar:hover,
+.gm-desc-split-bar:active {
+    background: var(--primary);
+}
+.gm-desc-split-right {
+    border-left: 1px solid var(--border);
+    min-width: 150px;
+}
+.gm-desc-preview-label {
+    font-size: 11px;
+    padding: 4px 8px;
+    color: var(--text-muted, var(--text));
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,0,0,.04);
+    flex-shrink: 0;
+}
+.gm-desc-preview {
+    flex: 1;
+    padding: 10px;
+    overflow: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+}
+/* 富文本内联样式（与 game-store.html 里 .gs-desc 富文本样式同口径） */
+.gm-desc-preview h1 { font-size: 18px; font-weight: 600; margin: 12px 0 6px; }
+.gm-desc-preview h2 { font-size: 16px; font-weight: 600; margin: 10px 0 4px; }
+.gm-desc-preview h3 { font-size: 14px; font-weight: 600; margin: 8px 0 4px; color: var(--primary); }
+.gm-desc-preview p { margin: 0 0 8px; }
+.gm-desc-preview ul, .gm-desc-preview ol { margin: 4px 0 8px 18px; padding: 0; }
+.gm-desc-preview ul { list-style: disc; }
+.gm-desc-preview ol { list-style: decimal; }
+.gm-desc-preview li { margin: 2px 0; }
+.gm-desc-preview a { color: var(--primary); text-decoration: underline; }
+.gm-desc-preview blockquote {
+    margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--primary);
+    background: rgba(0,0,0,.03); border-radius: 0 4px 4px 0; font-style: italic;
+}
+.gm-desc-preview hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.gm-desc-preview strong, .gm-desc-preview b { font-weight: 600; }
+.gm-desc-preview em, .gm-desc-preview i { font-style: italic; }
+.gm-desc-preview code { font-family: var(--mono, Consolas, monospace); font-size: 11px; background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 3px; }
+.gm-desc-preview pre { font-family: var(--mono, Consolas, monospace); font-size: 11px; background: rgba(0,0,0,.05); padding: 8px; border-radius: 6px; overflow-x: auto; margin: 6px 0; white-space: pre-wrap; }
+.gm-desc-preview table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 12px; }
+.gm-desc-preview th, .gm-desc-preview td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.gm-desc-preview th { background: rgba(0,0,0,.04); font-weight: 600; }
+.gm-desc-preview img { max-width: 100%; border-radius: 4px; margin: 4px 0; background: rgba(0,0,0,.03); min-height: 20px; }
+
+/* ===== 安全提示面板 ===== */
+.gm-desc-warnings {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    overflow: hidden;
+}
+.gm-desc-warnings-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    background: rgba(255, 165, 0, .08);
+    border-bottom: 1px solid var(--border);
+}
+.gm-desc-warnings.error .gm-desc-warnings-head {
+    background: rgba(255, 80, 80, .08);
+}
+.gm-desc-warnings-count {
+    flex: 1;
+    font-weight: 600;
+    color: #e67e22;
+}
+.gm-desc-warnings.error .gm-desc-warnings-count {
+    color: #c0392b;
+}
+.gm-desc-warnings-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--text);
+}
+.gm-desc-warnings-body {
+    max-height: 260px;
+    overflow-y: auto;
+}
+.gm-desc-warning-item {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.gm-desc-warning-item:last-child { border-bottom: none; }
+.gm-desc-warning-item.error { border-left: 3px solid #e74c3c; }
+.gm-desc-warning-item.warning { border-left: 3px solid #f39c12; }
+.gm-desc-warning-item.info { border-left: 3px solid #3498db; }
+.gm-desc-warning-item .level-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    margin-right: 6px;
+    font-weight: 600;
+}
+.gm-desc-warning-item.error .level-tag { background: #e74c3c; color: #fff; }
+.gm-desc-warning-item.warning .level-tag { background: #f39c12; color: #fff; }
+.gm-desc-warning-item.info .level-tag { background: #3498db; color: #fff; }
+.gm-desc-warning-item .warn-reason {
+    color: var(--text-muted, var(--text));
+    margin-top: 2px;
+}
+.gm-desc-warning-item .warn-suggestion {
+    margin-top: 4px;
+    padding: 4px 6px;
+    background: rgba(0,0,0,.04);
+    border-radius: 3px;
+    font-family: var(--mono, Consolas, monospace);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.gm-desc-warning-item .warn-actions {
+    margin-top: 6px;
+    display: flex;
+    gap: 6px;
+}
+.gm-desc-warning-item .warn-actions button {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--panel-bg);
+    font-size: 11px;
+    cursor: pointer;
+}
+.gm-desc-warning-item .warn-actions button:hover { background: var(--border); }
+.gm-desc-warning-item .warn-actions button.fixable {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+}

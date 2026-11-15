@@ -1523,12 +1523,30 @@
                     <input id="gm-f-slug" class="admin-input gm-slug-input" placeholder="slug（小写字母/数字/_/-）" maxlength="64">
                 </div>
                 <input id="gm-f-short" class="admin-input" placeholder="一句话简介（列表卡片展示，可空）" maxlength="255">
-                <textarea id="gm-f-desc" class="admin-input gm-desc-input" rows="4" placeholder="详细介绍（详情页图文混排：正文任意换行，插入的图片单独成行自动展示，支持 GIF 动图；可空）"></textarea>
-                <!-- 图文混排：插入图片行（[img]URL 独立成行协议，详情页渲染为配图块） -->
+                <!-- 富文本分屏编辑器：左侧 textarea 编辑 + 右侧实时预览 + 底部安全提示面板 -->
+                <div class="gm-desc-split">
+                    <div class="gm-desc-split-pane gm-desc-split-left">
+                        <textarea id="gm-f-desc" class="admin-input gm-desc-input" rows="10" placeholder="详细介绍（支持富文本 HTML：标题/列表/粗体/图片/链接等，也可纯文本）"></textarea>
+                    </div>
+                    <div class="gm-desc-split-bar" title="拖动调节宽度"></div>
+                    <div class="gm-desc-split-pane gm-desc-split-right">
+                        <div class="gm-desc-preview-label">实时预览</div>
+                        <div id="gm-desc-preview" class="gm-desc-preview gs-desc"></div>
+                    </div>
+                </div>
+                <!-- 安全提示面板（默认折叠，有问题时自动展开） -->
+                <div id="gm-desc-warnings" class="gm-desc-warnings" hidden>
+                    <div class="gm-desc-warnings-head">
+                        <span id="gm-desc-warnings-count"></span>
+                        <button id="gm-desc-warnings-toggle" type="button">展开 ▼</button>
+                    </div>
+                    <div id="gm-desc-warnings-body" class="gm-desc-warnings-body"></div>
+                </div>
+                <!-- 图文混排：插入图片行（支持旧 [img]URL 协议 + 新 HTML <img> 标签） -->
                 <div class="gm-form-row">
                     <button id="gm-desc-img-btn" class="admin-btn small" type="button">插入图片</button>
                     <input id="gm-desc-img-file" type="file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple hidden>
-                    <span class="admin-field-hint">图片按选择顺序插入到光标处，详情页单独成行展示（png/jpg/jpeg/gif/webp，单张 ≤20MB）</span>
+                    <span class="admin-field-hint">图片按选择顺序插入到光标处（兼容 [img]URL 旧语法和 HTML 新语法，两种都支持）</span>
                 </div>
                 <!-- 已插入图片预览：解析正文 [img]URL 行渲染缩略图（与截图列表同款），上传后即时可见 -->
                 <div id="gm-desc-imgs" class="gm-shots-list"></div>
@@ -1958,7 +1976,23 @@
                                 </select>
                             </div>
                             <input id="gm-np-title" class="admin-input" placeholder="公告标题（可空，纯图片公告留空）" maxlength="64">
-                            <textarea id="gm-np-content" class="admin-input gm-np-content" rows="3" placeholder="公告内容（支持换行，可空）" maxlength="2000"></textarea>
+                            <div class="desc-editor-split notice-editor-split" data-textarea="gm-np-content" data-preview="gm-np-preview" data-layout-select="gm-np-layout" data-imgs="gm-np-imgs">
+                                <div class="desc-editor-left">
+                                    <textarea id="gm-np-content" class="admin-input" rows="5" placeholder="公告内容（支持换行、支持 <a href> 链接）" maxlength="2000"></textarea>
+                                </div>
+                                <div class="desc-editor-resizer" title="拖拽调整宽度">◀▶</div>
+                                <div class="desc-editor-right">
+                                    <div class="desc-editor-right-head">实时预览</div>
+                                    <div id="gm-np-preview" class="desc-editor-preview"></div>
+                                    <div class="desc-editor-issues hidden">
+                                        <div class="desc-editor-issues-head">
+                                            <span id="gm-np-issues-count" class="desc-editor-issues-count">0</span> 项提示
+                                            <button class="desc-editor-issues-collapse" type="button" title="折叠/展开">▾</button>
+                                        </div>
+                                        <div class="desc-editor-issues-body"></div>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="gm-np-row">
                                 <button id="gm-np-img-btn" class="admin-btn small" type="button">添加图片</button>
                                 <input type="file" id="gm-np-img-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
@@ -2651,7 +2685,23 @@
                     </select>
                 </div>
                 <input id="gn-f-title" class="admin-input" placeholder="公告标题（可空，纯图片公告留空）" maxlength="64">
-                <textarea id="gn-f-content" class="admin-input gm-np-content" rows="4" placeholder="公告内容（支持换行，可空）" maxlength="2000"></textarea>
+                <div class="desc-editor-split notice-editor-split" data-textarea="gn-f-content" data-preview="gn-f-preview" data-layout-select="gn-f-layout" data-imgs="gn-f-imgs">
+                    <div class="desc-editor-left">
+                        <textarea id="gn-f-content" class="admin-input" rows="5" placeholder="公告内容（支持换行、支持 <a href> 链接）" maxlength="2000"></textarea>
+                    </div>
+                    <div class="desc-editor-resizer" title="拖拽调整宽度">◀▶</div>
+                    <div class="desc-editor-right">
+                        <div class="desc-editor-right-head">实时预览</div>
+                        <div id="gn-f-preview" class="desc-editor-preview"></div>
+                        <div class="desc-editor-issues hidden">
+                            <div class="desc-editor-issues-head">
+                                <span id="gn-f-issues-count" class="desc-editor-issues-count">0</span> 项提示
+                                <button class="desc-editor-issues-collapse" type="button" title="折叠/展开">▾</button>
+                            </div>
+                            <div class="desc-editor-issues-body"></div>
+                        </div>
+                    </div>
+                </div>
                 <div class="gm-form-row">
                     <button id="gn-f-img-btn" class="admin-btn small" type="button">添加图片</button>
                     <input type="file" id="gn-f-img-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
@@ -2777,6 +2827,7 @@
     <script src="js/sha256.js?v=1.0"></script>
     <script src="js/official_admin.js?v=1.2"></script>
     <script src="js/official_audit.js?v=1.2"></script>
+    <script src="js/game-common.js?v=1.0"></script>
     <script src="js/admin.js?v=1.85"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>

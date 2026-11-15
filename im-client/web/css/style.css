@@ -13,6 +13,7 @@
     --hover: #d9d9d9;
     --active: #c8c8c8;
     --panel-bg: #ffffff;      /* 面板背景 */
+    --desc-preview-bg: #f3f4f6; /* 富文本编辑器分屏预览区背景（与白色编辑区区分） */
     --search-bg: #ffffff;     /* 搜索框背景（浅色下白色块与侧栏形成对比） */
     --header-bg: #fafafa;     /* 顶栏/输入栏背景 */
     --placeholder-bg: #ccc;   /* 头像占位 */
@@ -46,6 +47,7 @@
     --hover: #2a2a2a;
     --active: #383838;
     --panel-bg: #1e1e1e;
+    --desc-preview-bg: #252526; /* 深色模式下预览区比面板略深（#252526 是 VS Code 侧边栏色） */
     --bg-tertiary: #2a2a2a;      /* admin 分段按钮/次要容器底色 —— 之前漏了导致白色 fallback */
     --search-bg: #2a2a2a;     /* 深色下略浅于侧栏，避免输入框与侧栏同色融为一体 */
     --header-bg: #1a1a1a;
@@ -77,6 +79,7 @@
         --hover: #2a2a2a;
         --active: #383838;
         --panel-bg: #1e1e1e;
+    --desc-preview-bg: #252526; /* 深色模式下预览区比面板略深（#252526 是 VS Code 侧边栏色） */
         --bg-tertiary: #2a2a2a;
         --search-bg: #2a2a2a; /* 跟随系统·深色：同 dark 主题 */
         --header-bg: #1a1a1a;

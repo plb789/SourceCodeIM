@@ -5372,42 +5372,24 @@
         rows.appendChild(row);
     }
 
-    // ===== 游戏简介图文混排渲染：[img]图片URL 独立成行渲染为配图块（GIF 动图原生播放），
-    // 其余行按原文显示；不含 [img] 标记的旧数据走原纯文本路径零变化
+    // ===== 游戏简介富文本 HTML 渲染：兼容旧 [img]URL 语法 + 安全 DOM API 构建 =====
+    // 安全逻辑由 game-common.js 的 window.__descSanitize 提供（game-common.js 先于本文件加载）
     function buildDetailDesc(text) {
+        var ds = window.__descSanitize;
         var raw = String(text || '');
         var frag = document.createDocumentFragment();
-        if (raw.indexOf('[img]') === -1) {
-            frag.appendChild(document.createTextNode(raw));
+        if (!raw) {
+            frag.appendChild(document.createTextNode(T('暂无介绍')));
             return frag;
         }
-        var lines = raw.split('\n');
-        var buf = [];
-        var flush = function () {
-            if (!buf.length) return;
-            frag.appendChild(el('p', 'gs-desc-p', buf.join('\n'))); // 连续文本行聚为段落（空行分段）
-            buf = [];
-        };
-        for (var i = 0; i < lines.length; i++) {
-            var m = lines[i].match(/^\s*\[img\]\s*(\S+)\s*$/);
-            if (m) {
-                flush();
-                var img = document.createElement('img');
-                img.className = 'gs-desc-img';
-                img.src = assetUrl(m[1]);
-                img.loading = 'lazy';
-                img.draggable = false;
-                img.alt = '';
-                img.onload = function () { osbTick($('gsDetailScroll')); }; // 图片异步撑高后刷新自绘滚动条
-                img.onerror = function () { this.classList.add('gm-broken'); osbTick($('gsDetailScroll')); };
-                frag.appendChild(img);
-            } else if (lines[i].trim() === '') {
-                flush();
-            } else {
-                buf.push(lines[i]);
-            }
-        }
-        flush();
+        // Step 1: 兼容旧语法 → [img]URL 替换为安全 <img> 标签
+        raw = ds.normalizeOldImgSyntax(raw, { assetUrl: assetUrl });
+        // Step 2: 安全渲染
+        ds.sanitizeAndBuildHTML(raw, frag, {
+            imgClass: 'gs-desc-img',
+            onImgLoad: function () { osbTick($('gsDetailScroll')); },
+            onImgError: function () { this.classList.add('gm-broken'); osbTick($('gsDetailScroll')); }
+        });
         return frag;
     }
 

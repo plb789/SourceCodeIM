@@ -357,6 +357,7 @@
         $('m-f-slug').disabled = !!g;
         $('m-f-short').value = g ? (g.short_desc || '') : '';
         $('m-f-desc').value = '';
+        $('m-f-desc').dispatchEvent(new Event('input')); // 重置时刷新预览区
         $('m-f-tags').value = '';
         $('m-f-dev').value = '';
         $('m-f-pub').value = '';
@@ -389,6 +390,7 @@
     }
     function fillEditorFromCache(full) {
         $('m-f-desc').value = full.description || '';
+        $('m-f-desc').dispatchEvent(new Event('input')); // 切换游戏时刷新预览区
         $('m-f-tags').value = full.tags || '';
         $('m-f-dev').value = full.developer || '';
         $('m-f-pub').value = full.publisher || '';
@@ -1069,7 +1071,9 @@
         $('m-notice-game').textContent = g.name;
         $('m-no-title').value = '';
         $('m-no-content').value = '';
+        if ($('m-no-layout')) { $('m-no-layout').value = 'thumb'; }
         refreshNoImgs();
+        $('m-no-content').dispatchEvent(new Event('input')); // 清空后触发分屏预览刷新
         $('m-notice-mask').classList.remove('hidden');
         loadNotices();
         osbInit($('m-notice-mask').querySelector('.m-modal'));
@@ -1100,6 +1104,8 @@
                             $('m-no-content').value = list[j].content || '';
                             try { noticeImgs = JSON.parse(list[j].images || '[]') || []; } catch (eP) { noticeImgs = []; }
                             refreshNoImgs();
+                            if ($('m-no-layout')) { $('m-no-layout').value = list[j].layout || 'thumb'; }
+                            $('m-no-content').dispatchEvent(new Event('input')); // 回填后触发分屏预览刷新
                             toast('已载入公告，编辑后点击「发布公告」保存');
                         }
                     }
@@ -1162,12 +1168,13 @@
             game_id: noticeGame.id,
             title: $('m-no-title').value.trim(),
             content: $('m-no-content').value.trim(),
-            images: JSON.stringify(noticeImgs)
+            images: JSON.stringify(noticeImgs),
+            layout: $('m-no-layout') ? $('m-no-layout').value : 'thumb'
         };
         if (!payload.title && !payload.content && !noticeImgs.length) { toast('标题、内容、图片至少填写一项'); return; }
         var p = editingNoticeId
             ? api('PUT', '/api/merchant/notices/' + editingNoticeId, {
-                title: payload.title, content: payload.content, images: payload.images
+                title: payload.title, content: payload.content, images: payload.images, layout: payload.layout
             })
             : api('POST', '/api/merchant/notices', payload);
         p.then(function (res) {
@@ -1176,6 +1183,8 @@
             editingNoticeId = 0;
             $('m-no-title').value = '';
             $('m-no-content').value = '';
+            $('m-no-content').dispatchEvent(new Event('input')); // 清空后刷新预览
+            if ($('m-no-layout')) { $('m-no-layout').value = 'thumb'; }
             noticeImgs = [];
             refreshNoImgs();
             loadNotices();
@@ -2549,8 +2558,241 @@
     document.getElementById('m-off-qr-close').addEventListener('click', function () {
         document.getElementById('m-off-qr-mask').classList.add('hidden');
     });
+
+    // ===== 公告编辑器通用初始化（与 admin.js 同逻辑：分屏拖拽 + 实时预览 + 安全扫描） =====
+    (function initNoticeEditors() {
+        var splits = document.querySelectorAll('.notice-editor-split');
+        if (!splits.length || !window.__descSanitize) return;
+
+        splits.forEach(function (split) {
+            var taId = split.dataset.textarea;
+            var prevId = split.dataset.preview;
+            var layoutSelId = split.dataset.layoutSelect;
+            var imgsId = split.dataset.imgs;
+            var ta = document.getElementById(taId);
+            var preview = document.getElementById(prevId);
+            var layoutSel = layoutSelId ? document.getElementById(layoutSelId) : null;
+            var imgsBox = imgsId ? document.getElementById(imgsId) : null;
+            if (!ta || !preview) return;
+
+            var leftPane = split.querySelector('.desc-editor-left');
+            var rightPane = split.querySelector('.desc-editor-right');
+            var bar = split.querySelector('.desc-editor-resizer');
+            var issuesBox = split.querySelector('.desc-editor-issues');
+            var issuesCount = split.querySelector('.desc-editor-issues-count');
+            var issuesBody = split.querySelector('.desc-editor-issues-body');
+            var issuesToggle = split.querySelector('.desc-editor-issues-collapse');
+
+            if (bar && leftPane && rightPane) {
+                var dragging = false;
+                bar.addEventListener('mousedown', function (e) {
+                    dragging = true;
+                    document.body.style.cursor = 'col-resize';
+                    document.body.style.userSelect = 'none';
+                    e.preventDefault();
+                });
+                document.addEventListener('mousemove', function (e) {
+                    if (!dragging) return;
+                    var rect = split.getBoundingClientRect();
+                    var pct = ((e.clientX - rect.left) / rect.width) * 100;
+                    if (pct < 20) pct = 20; if (pct > 80) pct = 80;
+                    leftPane.style.flex = pct + '%';
+                    rightPane.style.flex = (100 - pct) + '%';
+                });
+                document.addEventListener('mouseup', function () {
+                    if (!dragging) return;
+                    dragging = false;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                });
+            }
+
+            function getImgUrls() {
+                if (!imgsBox) return [];
+                var urls = [];
+                imgsBox.querySelectorAll('img').forEach(function (im) {
+                    if (im.src && !im.classList.contains('hidden')) urls.push(im.src);
+                });
+                return urls;
+            }
+
+            var prevTimer = null;
+            function refreshNoticePreview() {
+                clearTimeout(prevTimer);
+                prevTimer = setTimeout(function () {
+                    if (!window.__descSanitize) return;
+                    preview.innerHTML = '';
+                    var text = ta.value || '';
+                    var layout = layoutSel ? layoutSel.value : 'thumb';
+                    var urls = getImgUrls();
+                    if (text) preview.appendChild(window.__descSanitize.renderNoticeText(text));
+                    if (urls.length) preview.appendChild(window.__descSanitize.renderNoticeImgs(urls, layout));
+                }, 150);
+            }
+
+            var scanTimer = null;
+            var lastWarnings = [];
+            var warningsOpen = true;
+            function scanNotice() {
+                clearTimeout(scanTimer);
+                scanTimer = setTimeout(function () {
+                    if (!window.__descSanitize) return;
+                    lastWarnings = window.__descSanitize.scanSecurity(ta.value || '');
+                    if (!lastWarnings.length) {
+                        issuesBox.classList.add('hidden');
+                        return;
+                    }
+                    var hasErr = lastWarnings.some(function (w) { return w.level === 'error'; });
+                    issuesBox.classList.remove('hidden');
+                    issuesBox.classList.toggle('error', hasErr);
+                    var err = lastWarnings.filter(function (w) { return w.level === 'error'; }).length;
+                    var wrn = lastWarnings.filter(function (w) { return w.level === 'warning'; }).length;
+                    var inf = lastWarnings.filter(function (w) { return w.level === 'info'; }).length;
+                    var parts = [];
+                    if (err) parts.push(err + ' 条错误');
+                    if (wrn) parts.push(wrn + ' 条警告');
+                    if (inf) parts.push(inf + ' 条提示');
+                    issuesCount.textContent = parts.join(' · ') || '无问题';
+                    issuesBody.innerHTML = '';
+                    lastWarnings.forEach(function (w) {
+                        var item = document.createElement('div');
+                        item.className = 'desc-editor-issues-item ' + w.level;
+                        item.innerHTML =
+                            '<span class="level-tag">' + (w.level === 'error' ? '错误' : w.level === 'warning' ? '警告' : '提示') + '</span>' +
+                            '<strong>' + w.message + '</strong>' +
+                            (w.reason ? '<div class="warn-reason">' + w.reason + '</div>' : '') +
+                            (w.suggestion ? '<div class="warn-suggestion">' + w.suggestion + '</div>' : '');
+                        issuesBody.appendChild(item);
+                    });
+                    if (issuesToggle) {
+                        issuesToggle.textContent = warningsOpen ? '▾' : '▴';
+                        issuesBody.style.display = warningsOpen ? '' : 'none';
+                    }
+                }, 300);
+            }
+
+            if (issuesToggle) {
+                issuesToggle.addEventListener('click', function () {
+                    warningsOpen = !warningsOpen;
+                    issuesToggle.textContent = warningsOpen ? '▾' : '▴';
+                    issuesBody.style.display = warningsOpen ? '' : 'none';
+                });
+            }
+
+            ta.addEventListener('input', function () { refreshNoticePreview(); scanNotice(); });
+            ta.addEventListener('paste', function () { setTimeout(function () { refreshNoticePreview(); scanNotice(); }, 50); });
+            if (layoutSel) layoutSel.addEventListener('change', refreshNoticePreview);
+            if (imgsBox) {
+                var mo = new MutationObserver(refreshNoticePreview);
+                mo.observe(imgsBox, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'class'] });
+            }
+
+            refreshNoticePreview();
+            scanNotice();
+        });
+    })();
     document.getElementById('m-off-qr-mask').addEventListener('click', function (e) {
         if (e.target === this) this.classList.add('hidden');
     });
+
+    // ===== 富文本分屏编辑器（与 admin.js 同口径，复用 window.__descSanitize） =====
+    (function initMerchantDescEditor() {
+        var split = document.querySelector('.gm-desc-split');
+        if (!split) return;
+        var leftPane = split.querySelector('.gm-desc-split-left');
+        var rightPane = split.querySelector('.gm-desc-split-right');
+        var bar = split.querySelector('.gm-desc-split-bar');
+        var ta = $('m-f-desc');
+        if (!ta) return;
+        var preview = $('m-desc-preview');
+        var warningsBox = $('m-desc-warnings');
+        if (!preview) return;
+
+        // 分隔条拖拽
+        var dragging = false;
+        bar.addEventListener('mousedown', function (e) {
+            dragging = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var rect = split.getBoundingClientRect();
+            var pct = ((e.clientX - rect.left) / rect.width) * 100;
+            if (pct < 20) pct = 20; if (pct > 80) pct = 80;
+            leftPane.style.flex = pct + '%';
+            rightPane.style.flex = (100 - pct) + '%';
+        });
+        document.addEventListener('mouseup', function () {
+            if (!dragging) return;
+            dragging = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        });
+
+        // 实时预览 (150ms debounce)
+        var prevTimer = null;
+        function refreshPreview() {
+            clearTimeout(prevTimer);
+            prevTimer = setTimeout(function () {
+                if (!window.__descSanitize) return;
+                var html = window.__descSanitize.normalizeOldImgSyntax(ta.value || '');
+                window.__descSanitize.renderInto(html, preview);
+            }, 150);
+        }
+
+        // 实时安全扫描 (300ms debounce，复用 admin.js 里的 scanDescSecurity)
+        var scanTimer = null;
+        function scanSecurity() {
+            clearTimeout(scanTimer);
+            scanTimer = setTimeout(function () {
+                if (!window.__descSanitize) return;
+                var warnings = window.__descSanitize.scanSecurity(ta.value || '');
+                if (!warningsBox) return;
+                if (!warnings.length) {
+                    warningsBox.hidden = true;
+                    warningsBox.classList.remove('error');
+                    return;
+                }
+                var hasErr = warnings.some(function (w) { return w.level === 'error'; });
+                warningsBox.classList.toggle('error', hasErr);
+                warningsBox.hidden = false;
+                var err = warnings.filter(function (w) { return w.level === 'error'; }).length;
+                var wrn = warnings.filter(function (w) { return w.level === 'warning'; }).length;
+                var inf = warnings.filter(function (w) { return w.level === 'info'; }).length;
+                var parts = [];
+                if (err) parts.push(err + ' 条错误');
+                if (wrn) parts.push(wrn + ' 条警告');
+                if (inf) parts.push(inf + ' 条提示');
+                $('m-desc-warnings-count').textContent = '⚠️ ' + parts.join(' · ');
+                var body = $('m-desc-warnings-body');
+                body.innerHTML = '';
+                warnings.forEach(function (w) {
+                    var item = document.createElement('div');
+                    item.className = 'gm-desc-warning-item ' + w.level;
+                    item.innerHTML =
+                        '<span class="level-tag">' + (w.level === 'error' ? '错误' : w.level === 'warning' ? '警告' : '提示') + '</span>' +
+                        '<strong>' + w.message + '</strong>' +
+                        '<div class="warn-reason">' + w.reason + '</div>' +
+                        (w.suggestion ? '<div class="warn-suggestion">' + w.suggestion + '</div>' : '') +
+                        (w.fixable ? '<div class="warn-actions"><button class="fixable">自动修复</button></div>' : '');
+                    var fixBtn = item.querySelector('button.fixable');
+                    if (fixBtn && w.fix) {
+                        fixBtn.addEventListener('click', function () {
+                            w.fix(ta);
+                            ta.dispatchEvent(new Event('input'));
+                        });
+                    }
+                    body.appendChild(item);
+                });
+            }, 300);
+        }
+
+        ta.addEventListener('input', function () { refreshPreview(); scanSecurity(); });
+        ta.addEventListener('paste', function () { setTimeout(function () { refreshPreview(); scanSecurity(); }, 50); });
+        refreshPreview();
+        scanSecurity();
+    })();
 
 })();

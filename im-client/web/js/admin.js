@@ -6304,6 +6304,7 @@
         $('gm-f-slug').disabled = !!gmEditingId; // slug=安装目录锚点，创建后不可改（与服务端校验一致）
         $('gm-f-short').value = d ? (d.short_desc || '') : '';
         $('gm-f-desc').value = d ? (d.description || '') : '';
+        $('gm-f-desc').dispatchEvent(new Event('input')); // 触发分屏预览 + 安全扫描刷新（编程式赋值不自动触发 input）
         // 分类标签回填（详情/列表均返回数组；兼容历史逗号串）
         var rawTags = d ? d.tags : [];
         if (!Array.isArray(rawTags)) rawTags = String(rawTags || '').split(',');
@@ -6795,6 +6796,7 @@
         $('gn-f-title').value = n.title || '';
         $('gn-f-content').value = n.content || '';
         gnEdRenderImgs();
+        $('gn-f-content').dispatchEvent(new Event('input')); // 回填后触发分屏预览 + 安全扫描刷新
         $('gn-edit-mask').classList.remove('hidden');
     }
 
@@ -6891,6 +6893,7 @@
                 var lines = String($('gm-f-desc').value || '').split('\n');
                 lines.splice(it.line, 1);
                 $('gm-f-desc').value = lines.join('\n');
+                $('gm-f-desc').dispatchEvent(new Event('input')); // 同步刷新预览区
                 gmRenderDescImgs();
             });
             item.appendChild(img);
@@ -7931,6 +7934,284 @@
     // 多选按顺序逐张上传，全部完成后统一插入光标处（保序，失败项跳过并提示）
     $('gm-desc-img-btn').addEventListener('click', function () { $('gm-desc-img-file').click(); });
     // 正文手改（增删 [img] 行）时预览区跟随刷新
+    // ===== 富文本分屏编辑器：左侧 textarea + 中间拖拽条 + 右侧实时预览 + 安全提示 =====
+    // 前置条件：game-store.js 必须先于 admin.js 加载（window.__descSanitize 已注入）
+    (function initDescEditor() {
+        var split = document.querySelector('.gm-desc-split');
+        if (!split) return; // 页面无此编辑器则跳过（如公告编辑页）
+        var leftPane = split.querySelector('.gm-desc-split-left');
+        var rightPane = split.querySelector('.gm-desc-split-right');
+        var bar = split.querySelector('.gm-desc-split-bar');
+        var ta = $('gm-f-desc');
+        var preview = $('gm-desc-preview');
+        var warningsBox = $('gm-desc-warnings');
+        var warningsCount = $('gm-desc-warnings-count');
+        var warningsBody = $('gm-desc-warnings-body');
+        var warningsToggle = $('gm-desc-warnings-toggle');
+
+        // ===== 1) 分隔条拖拽 =====
+        var dragging = false;
+        bar.addEventListener('mousedown', function (e) {
+            dragging = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var rect = split.getBoundingClientRect();
+            var pct = ((e.clientX - rect.left) / rect.width) * 100;
+            if (pct < 20) pct = 20; if (pct > 80) pct = 80;
+            leftPane.style.flex = pct + '%';
+            rightPane.style.flex = (100 - pct) + '%';
+        });
+        document.addEventListener('mouseup', function () {
+            if (!dragging) return;
+            dragging = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        });
+
+        // ===== 2) 实时预览（150ms debounce） =====
+        var prevTimer = null;
+        function refreshPreview() {
+            clearTimeout(prevTimer);
+            prevTimer = setTimeout(function () {
+                if (!window.__descSanitize) return;
+                var text = ta.value || '';
+                // 兼容旧 [img] 语法 + 安全 HTML 渲染
+                var html = window.__descSanitize.normalizeOldImgSyntax(text);
+                window.__descSanitize.renderInto(html, preview);
+            }, 150);
+        }
+
+        // ===== 3) 实时安全扫描（300ms debounce，从 window.__descSanitize 取全局统一版本） =====
+        var scanTimer = null;
+        var lastWarnings = [];
+        function scanSecurity() {
+            clearTimeout(scanTimer);
+            scanTimer = setTimeout(function () {
+                if (!window.__descSanitize) return;
+                lastWarnings = window.__descSanitize.scanSecurity(ta.value || '');
+                renderWarningsPanel();
+                // 4) 保存按钮状态联动
+                var saveBtn = document.querySelector('button[data-gm-save], button[onclick*="gmSaveGame"], #gm-save-btn');
+                // admin.js 里保存按钮是 gmSaveGame — 找到所有 type=submit 或带 admin-btn 的按钮
+                var saveButtons = document.querySelectorAll('#gm-edit-form button[type="submit"], .gm-save-btn');
+                var hasError = lastWarnings.some(function (w) { return w.level === 'error'; });
+                saveButtons.forEach(function (b) {
+                    b.disabled = !!hasError;
+                    b.title = hasError ? '存在 ' + lastWarnings.filter(function (w) { return w.level === 'error'; }).length + ' 条安全错误，必须修复后才能保存' : '';
+                });
+            }, 300);
+        }
+
+        // 事件绑定
+        ta.addEventListener('input', function () {
+            gmRenderDescImgs(); // 旧逻辑（[img] 缩略图预览）
+            refreshPreview();   // 新增：右侧富文本预览
+            scanSecurity();     // 新增：安全扫描
+        });
+        ta.addEventListener('paste', function () {
+            setTimeout(function () { refreshPreview(); scanSecurity(); }, 50); // paste 后立即扫描
+        });
+
+        // ===== 5) 安全提示面板渲染 =====
+        function renderWarningsPanel() {
+            if (!lastWarnings.length) {
+                warningsBox.hidden = true;
+                warningsBox.classList.remove('error');
+                return;
+            }
+            var hasErr = lastWarnings.some(function (w) { return w.level === 'error'; });
+            warningsBox.classList.toggle('error', hasErr);
+            warningsBox.hidden = false;
+            var err = lastWarnings.filter(function (w) { return w.level === 'error'; }).length;
+            var wrn = lastWarnings.filter(function (w) { return w.level === 'warning'; }).length;
+            var inf = lastWarnings.filter(function (w) { return w.level === 'info'; }).length;
+            var parts = [];
+            if (err) parts.push(err + ' 条错误');
+            if (wrn) parts.push(wrn + ' 条警告');
+            if (inf) parts.push(inf + ' 条提示');
+            warningsCount.textContent = '⚠️ ' + parts.join(' · ');
+
+            warningsBody.innerHTML = '';
+            lastWarnings.forEach(function (w, idx) {
+                var item = document.createElement('div');
+                item.className = 'gm-desc-warning-item ' + w.level;
+                item.innerHTML =
+                    '<span class="level-tag">' + (w.level === 'error' ? '错误' : w.level === 'warning' ? '警告' : '提示') + '</span>' +
+                    '<strong>' + w.message + '</strong>' +
+                    '<div class="warn-reason">' + w.reason + '</div>' +
+                    (w.suggestion ? '<div class="warn-suggestion">' + w.suggestion + '</div>' : '') +
+                    (w.fixable ? '<div class="warn-actions"><button class="fixable">自动修复</button></div>' : '');
+                var fixBtn = item.querySelector('button.fixable');
+                if (fixBtn && w.fix) {
+                    fixBtn.addEventListener('click', function () {
+                        w.fix(ta, idx);
+                        ta.dispatchEvent(new Event('input')); // 触发重新扫描
+                    });
+                }
+                warningsBody.appendChild(item);
+            });
+        }
+
+        // 折叠/展开
+        var warningsOpen = true;
+        warningsToggle.addEventListener('click', function () {
+            warningsOpen = !warningsOpen;
+            warningsBody.style.display = warningsOpen ? '' : 'none';
+            warningsToggle.textContent = warningsOpen ? '展开 ▼' : '收起 ▲';
+        });
+
+        // 初始状态：表单已回填内容（从服务端加载）→ 首次 input 事件后扫描
+        refreshPreview();
+        scanSecurity();
+    })();
+
+    // ===== 公告编辑器通用初始化：遍历所有 .notice-editor-split，给每个加分屏拖拽 + 实时预览 + 安全扫描 =====
+    (function initNoticeEditors() {
+        var splits = document.querySelectorAll('.notice-editor-split');
+        if (!splits.length || !window.__descSanitize) return;
+
+        splits.forEach(function (split) {
+            var taId = split.dataset.textarea;
+            var prevId = split.dataset.preview;
+            var layoutSelId = split.dataset.layoutSelect;
+            var imgsId = split.dataset.imgs;
+            var ta = document.getElementById(taId);
+            var preview = document.getElementById(prevId);
+            var layoutSel = layoutSelId ? document.getElementById(layoutSelId) : null;
+            var imgsBox = imgsId ? document.getElementById(imgsId) : null;
+            if (!ta || !preview) return;
+
+            var leftPane = split.querySelector('.desc-editor-left');
+            var rightPane = split.querySelector('.desc-editor-right');
+            var bar = split.querySelector('.desc-editor-resizer');
+            var issuesBox = split.querySelector('.desc-editor-issues');
+            var issuesCount = split.querySelector('.desc-editor-issues-count');
+            var issuesBody = split.querySelector('.desc-editor-issues-body');
+            var issuesToggle = split.querySelector('.desc-editor-issues-collapse');
+
+            // 1) 拖拽条
+            if (bar && leftPane && rightPane) {
+                var dragging = false;
+                bar.addEventListener('mousedown', function (e) {
+                    dragging = true;
+                    document.body.style.cursor = 'col-resize';
+                    document.body.style.userSelect = 'none';
+                    e.preventDefault();
+                });
+                document.addEventListener('mousemove', function (e) {
+                    if (!dragging) return;
+                    var rect = split.getBoundingClientRect();
+                    var pct = ((e.clientX - rect.left) / rect.width) * 100;
+                    if (pct < 20) pct = 20; if (pct > 80) pct = 80;
+                    leftPane.style.flex = pct + '%';
+                    rightPane.style.flex = (100 - pct) + '%';
+                });
+                document.addEventListener('mouseup', function () {
+                    if (!dragging) return;
+                    dragging = false;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                });
+            }
+
+            // 2) 取图片列表（从 imgsBox DOM 容器的 img src）
+            function getImgUrls() {
+                if (!imgsBox) return [];
+                var urls = [];
+                imgsBox.querySelectorAll('img').forEach(function (im) {
+                    if (im.src && !im.classList.contains('hidden')) urls.push(im.src);
+                });
+                return urls;
+            }
+
+            // 3) 渲染公告预览（content + layout + imgs）
+            var prevTimer = null;
+            function refreshNoticePreview() {
+                clearTimeout(prevTimer);
+                prevTimer = setTimeout(function () {
+                    if (!window.__descSanitize) return;
+                    preview.innerHTML = '';
+                    var text = ta.value || '';
+                    var layout = layoutSel ? layoutSel.value : 'thumb';
+                    var urls = getImgUrls();
+                    // content 渲染（支持 <a> 链接 + \n 换行）
+                    if (text) preview.appendChild(window.__descSanitize.renderNoticeText(text));
+                    // 图片网格渲染
+                    if (urls.length) preview.appendChild(window.__descSanitize.renderNoticeImgs(urls, layout));
+                }, 150);
+            }
+
+            // 4) 安全扫描（复用 window.__descSanitize.scanSecurity）
+            var scanTimer = null;
+            var lastWarnings = [];
+            var warningsOpen = true;
+            function scanNotice() {
+                clearTimeout(scanTimer);
+                scanTimer = setTimeout(function () {
+                    if (!window.__descSanitize) return;
+                    lastWarnings = window.__descSanitize.scanSecurity(ta.value || '');
+                    if (!lastWarnings.length) {
+                        issuesBox.classList.add('hidden');
+                        return;
+                    }
+                    var hasErr = lastWarnings.some(function (w) { return w.level === 'error'; });
+                    issuesBox.classList.remove('hidden');
+                    issuesBox.classList.toggle('error', hasErr);
+                    var err = lastWarnings.filter(function (w) { return w.level === 'error'; }).length;
+                    var wrn = lastWarnings.filter(function (w) { return w.level === 'warning'; }).length;
+                    var inf = lastWarnings.filter(function (w) { return w.level === 'info'; }).length;
+                    var parts = [];
+                    if (err) parts.push(err + ' 条错误');
+                    if (wrn) parts.push(wrn + ' 条警告');
+                    if (inf) parts.push(inf + ' 条提示');
+                    issuesCount.textContent = parts.join(' · ') || '无问题';
+                    issuesBody.innerHTML = '';
+                    lastWarnings.forEach(function (w) {
+                        var item = document.createElement('div');
+                        item.className = 'desc-editor-issues-item ' + w.level;
+                        item.innerHTML =
+                            '<span class="level-tag">' + (w.level === 'error' ? '错误' : w.level === 'warning' ? '警告' : '提示') + '</span>' +
+                            '<strong>' + w.message + '</strong>' +
+                            (w.reason ? '<div class="warn-reason">' + w.reason + '</div>' : '') +
+                            (w.suggestion ? '<div class="warn-suggestion">' + w.suggestion + '</div>' : '');
+                        issuesBody.appendChild(item);
+                    });
+                    if (issuesToggle) {
+                        issuesToggle.textContent = warningsOpen ? '▾' : '▴';
+                        issuesBody.style.display = warningsOpen ? '' : 'none';
+                    }
+                }, 300);
+            }
+
+            // 折叠/展开
+            if (issuesToggle) {
+                issuesToggle.addEventListener('click', function () {
+                    warningsOpen = !warningsOpen;
+                    issuesToggle.textContent = warningsOpen ? '▾' : '▴';
+                    issuesBody.style.display = warningsOpen ? '' : 'none';
+                });
+            }
+
+            // 5) 事件绑定
+            ta.addEventListener('input', function () { refreshNoticePreview(); scanNotice(); });
+            ta.addEventListener('paste', function () { setTimeout(function () { refreshNoticePreview(); scanNotice(); }, 50); });
+            if (layoutSel) layoutSel.addEventListener('change', refreshNoticePreview);
+            // 图片增删后通知预览刷新（通过 MutationObserver 监听 imgsBox 的 img 变化）
+            if (imgsBox) {
+                var mo = new MutationObserver(refreshNoticePreview);
+                mo.observe(imgsBox, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'class'] });
+            }
+
+            // 初始渲染
+            refreshNoticePreview();
+            scanNotice();
+        });
+    })();
+
     $('gm-f-desc').addEventListener('input', gmRenderDescImgs);
     $('gm-desc-img-file').addEventListener('change', function () {
         var files = Array.prototype.slice.call(this.files || []);
@@ -7975,6 +8256,7 @@
             if (!result.ok) { showToast(result.msg || '发布失败'); return; }
             $('gm-np-title').value = '';
             $('gm-np-content').value = '';
+            $('gm-np-content').dispatchEvent(new Event('input')); // 清空后刷新预览
             gmNpImgs = [];
             gmNpRenderImgs();
             showToast('公告已发布');

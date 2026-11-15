@@ -719,6 +719,8 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	g.SaveExclude = gameSavePathsClean(req.SaveExclude)
 	g.Slug = strings.ToLower(strings.TrimSpace(g.Slug))
 	g.Name = strings.TrimSpace(g.Name)
+	g.ShortDesc = strings.TrimSpace(g.ShortDesc)
+	g.Description = gameDescContentClean(req.Description) // 富文本消毒（白名单标签放行 + 危险标签/事件属性剥离）
 	if !gameSlugRe.MatchString(g.Slug) {
 		adminFail(w, http.StatusBadRequest, "slug 仅允许小写字母/数字/下划线/中划线（1-64 位）")
 		return
@@ -958,6 +960,8 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	u.SavePaths = gameSavePathsClean(req.SavePaths)
 	u.SaveExclude = gameSavePathsClean(req.SaveExclude)
 	u.Slug = strings.ToLower(strings.TrimSpace(u.Slug))
+	u.ShortDesc = strings.TrimSpace(u.ShortDesc)
+	u.Description = gameDescContentClean(req.Description) // 富文本消毒（同 Create 口径）
 	if u.Slug != "" && u.Slug != g.Slug {
 		adminFail(w, http.StatusBadRequest, "slug 不可修改（已作为安装目录锚点）")
 		return

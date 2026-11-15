@@ -499,7 +499,25 @@
                 <div class="m-row"><label>游戏名称 *</label><input id="m-f-name" class="admin-input" maxlength="128"></div>
                 <div class="m-row"><label>slug（安装目录名，小写字母/数字/_/-，创建后不可改）*</label><input id="m-f-slug" class="admin-input" maxlength="64"></div>
                 <div class="m-row"><label>一句话简介</label><input id="m-f-short" class="admin-input" maxlength="255"></div>
-                <div class="m-row"><label>详细介绍</label><textarea id="m-f-desc" class="admin-input" rows="4"></textarea></div>
+                <div class="m-row"><label>详细介绍（支持富文本 HTML，也可纯文本）</label>
+                    <div class="gm-desc-split">
+                        <div class="gm-desc-split-pane gm-desc-split-left">
+                            <textarea id="m-f-desc" class="admin-input gm-desc-input" rows="10" placeholder="支持 HTML：h1/h2/h3 标题、ul/ol 列表、b/strong 粗体、a 链接、img 图片、blockquote 引用、table 表格；也可纯文本；兼容 [img]URL 旧语法"></textarea>
+                        </div>
+                        <div class="gm-desc-split-bar" title="拖动调节宽度"></div>
+                        <div class="gm-desc-split-pane gm-desc-split-right">
+                            <div class="gm-desc-preview-label">实时预览</div>
+                            <div id="m-desc-preview" class="gm-desc-preview gs-desc"></div>
+                        </div>
+                    </div>
+                    <div id="m-desc-warnings" class="gm-desc-warnings" hidden>
+                        <div class="gm-desc-warnings-head">
+                            <span id="m-desc-warnings-count"></span>
+                            <button id="m-desc-warnings-toggle" type="button">展开 ▼</button>
+                        </div>
+                        <div id="m-desc-warnings-body" class="gm-desc-warnings-body"></div>
+                    </div>
+                </div>
                 <div class="m-row"><label>标签（逗号分隔）</label><input id="m-f-tags" class="admin-input" maxlength="255" placeholder="动作,单人"></div>
                 <div class="m-row"><label>开发商 / 发行商</label>
                     <div style="display:flex;gap:8px;"><input id="m-f-dev" class="admin-input" maxlength="64" placeholder="开发商"><input id="m-f-pub" class="admin-input" maxlength="64" placeholder="发行商"></div>
@@ -624,7 +642,32 @@
             <h3 class="m-modal-title">公告管理 — <span id="m-notice-game"></span></h3>
             <div class="m-form">
                 <div class="m-row"><label>标题</label><input id="m-no-title" class="admin-input" maxlength="64"></div>
-                <div class="m-row"><label>正文（可空=纯图片公告）</label><textarea id="m-no-content" class="admin-input" rows="4" maxlength="2000"></textarea></div>
+                <div class="m-row"><label>排版</label>
+                    <select id="m-no-layout" class="admin-input" title="公告卡片布局样式">
+                        <option value="thumb">横向缩略图（左图右文）</option>
+                        <option value="grid">图片网格（横排多图）</option>
+                        <option value="banner">通栏大图（图上文下）</option>
+                    </select>
+                </div>
+                <div class="m-row"><label>正文（可空=纯图片公告）</label>
+                    <div class="desc-editor-split notice-editor-split" data-textarea="m-no-content" data-preview="m-no-preview" data-layout-select="m-no-layout" data-imgs="m-no-imgs">
+                        <div class="desc-editor-left">
+                            <textarea id="m-no-content" class="admin-input" rows="5" placeholder="公告内容（支持换行、支持 <a href> 链接）" maxlength="2000"></textarea>
+                        </div>
+                        <div class="desc-editor-resizer" title="拖拽调整宽度">◀▶</div>
+                        <div class="desc-editor-right">
+                            <div class="desc-editor-right-head">实时预览</div>
+                            <div id="m-no-preview" class="desc-editor-preview"></div>
+                            <div class="desc-editor-issues hidden">
+                                <div class="desc-editor-issues-head">
+                                    <span id="m-no-issues-count" class="desc-editor-issues-count">0</span> 项提示
+                                    <button class="desc-editor-issues-collapse" type="button" title="折叠/展开">▾</button>
+                                </div>
+                                <div class="desc-editor-issues-body"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="m-row"><label>图片（最多 9 张，首图兼作头图）</label>
                     <div style="display:flex;gap:8px;align-items:center;">
                         <input type="file" id="m-no-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
@@ -712,6 +755,7 @@
 
     <script src="js/sha256.js?v=1.0"></script>
     <script src="js/lib/qrcode.min.js?v=1.4.4"></script>
+    <script src="js/game-common.js?v=1.0"></script>
     <script src="js/merchant.js?v=2.1"></script>
 </body>
 </html>

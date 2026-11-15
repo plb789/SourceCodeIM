@@ -115,7 +115,7 @@ func (s *Server) merchantGameBaseClean(g *model.Game, req *merchantGameReq) erro
 	if utf8.RuneCountInString(req.Description) > 20000 {
 		return fmt.Errorf("详细介绍过长（最多 20000 字）")
 	}
-	g.Description = strings.TrimSpace(req.Description)
+	g.Description = gameDescContentClean(req.Description) // 富文本消毒（同管理端口径：白名单标签放行 + 危险标签/事件属性剥离）
 	if utf8.RuneCountInString(req.Tags) > 255 {
 		return fmt.Errorf("标签过长（最多 255 字）")
 	}
