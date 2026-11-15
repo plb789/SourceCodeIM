@@ -973,6 +973,14 @@
         // 旧横向滚动条滑块销毁（滑块挂 body，innerHTML 重建后会变孤儿）
         var olds = host.querySelectorAll('.gs-frow');
         for (var i = 0; i < olds.length; i++) destroyOsb(olds[i]);
+        // 旧区块销毁钩子：榜单预览面板等有挂 __destroy 的区块先清理定时器和视频解码器
+        var blocks = host.querySelectorAll('.gs-fblock');
+        for (var i = 0; i < blocks.length; i++) { if (blocks[i].__destroy) blocks[i].__destroy(); }
+        stopHoverPreview(); // 精选卡悬停预览也可能残留视频和定时器
+        // 最后安全网：直接卸载 host 内所有 video 的解码器资源
+        // 覆盖顶部 carousel（buildCarouselCore）的 chprev 视频、榜单预览面板视频、
+        // capsule 区块轮播视频等所有可能残留的解码器 — 比依赖各区块私有 __destroy 更彻底
+        unloadVideos(host);
         host.innerHTML = '';
         // 所有轮播定时器统一销毁（顶部轮播与 capsule/promo 区块各自持有定时器）
         gsTimers.forEach(function (t) { clearInterval(t); });
@@ -1106,7 +1114,9 @@
             clearInterval(chprev.cyc);
             chprev.cyc = null;
             if (chprev.el) {
-                if (chprev.el.tagName === 'VIDEO') chprev.el.pause();
+                if (chprev.el.tagName === 'VIDEO') {
+                    try { chprev.el.pause(); chprev.el.removeAttribute('src'); chprev.el.load(); } catch (e) {}
+                }
                 chprev.el.remove();
                 chprev.el = null;
             }
@@ -1467,7 +1477,15 @@
         var block = el('div', 'gs-fblock');
         block.appendChild(el('div', 'gs-fblock-title', title));
         if (list.length === 1) {
-            block.appendChild(buildListHero(list[0]));
+            var singleWrap = buildListHero(list[0]);
+            block.appendChild(singleWrap);
+            // 单游戏大卡也有媒体网格（视频+截图），销毁时需要清理解码器
+            block.__destroy = function () {
+                var vids = block.querySelectorAll('video');
+                for (var i = 0; i < vids.length; i++) {
+                    try { vids[i].pause(); vids[i].removeAttribute('src'); vids[i].load(); } catch (e) {}
+                }
+            };
             return block;
         }
         var wrap = el('div', 'gs-lrows');
@@ -1475,31 +1493,42 @@
         // 右侧预览面板：悬停行重建内容（innerHTML 清空即中止旧媒体下载/播放，⑯ 同源约定）
         var pv = el('div', 'gs-lpv');
         pv.__gid = 0;
-        function lpvRender(g) {
-            if (pv.__gid === g.id) return; // 同游戏重复悬停不重建（防视频重载闪烁）
-            pv.__gid = g.id;
-            pv.innerHTML = '';
-            pv.appendChild(el('div', 'gs-lpv-name', g.name || (T('游戏 #') + g.id)));
-            if (g.review_summary) {
-                var rev = el('div', 'gs-lpv-rev');
-                rev.appendChild(document.createTextNode(T('玩家评测: ')));
-                rev.appendChild(el('b', '', g.review_summary));
-                rev.appendChild(document.createTextNode(' · ' + fmtCount(g.review_total) + T(' 篇')));
-                pv.appendChild(rev);
+        var pvTimer = null;
+        // 榜单预览面板切换：先正确卸载旧视频释放解码器，再加 60ms 防抖减少快速扫过时的资源竞争
+        function lpvRender(g, immediate) {
+            clearTimeout(pvTimer);
+            pvTimer = null;
+            if (pv.__gid === g.id && !immediate) return; // 同游戏重复悬停不重建（防视频重载闪烁）
+            function doRender() {
+                // 关键：清空前先正确卸载旧视频（pause + 清 src + load），释放解码器资源
+                // 否则 innerHTML='' 只是从 DOM 移除，浏览器解码器不会立即释放，快速切换时多个解码器竞争导致卡顿
+                unloadVideos(pv);
+                pv.__gid = g.id;
+                pv.innerHTML = '';
+                pv.appendChild(el('div', 'gs-lpv-name', g.name || (T('游戏 #') + g.id)));
+                if (g.review_summary) {
+                    var rev = el('div', 'gs-lpv-rev');
+                    rev.appendChild(document.createTextNode(T('玩家评测: ')));
+                    rev.appendChild(el('b', '', g.review_summary));
+                    rev.appendChild(document.createTextNode(' · ' + fmtCount(g.review_total) + T(' 篇')));
+                    pv.appendChild(rev);
+                }
+                if (g.short_desc) pv.appendChild(el('div', 'gs-lpv-desc', g.short_desc));
+                if ((g.tags || []).length) {
+                    var tg = el('div', 'gs-lpv-tags');
+                    g.tags.slice(0, 5).forEach(function (t) { tg.appendChild(el('span', 'gs-car-tag', t)); });
+                    pv.appendChild(tg);
+                }
+                pv.appendChild(lpvMediaEl(g, 4));
             }
-            if (g.short_desc) pv.appendChild(el('div', 'gs-lpv-desc', g.short_desc));
-            if ((g.tags || []).length) {
-                var tg = el('div', 'gs-lpv-tags');
-                g.tags.slice(0, 5).forEach(function (t) { tg.appendChild(el('span', 'gs-car-tag', t)); });
-                pv.appendChild(tg);
-            }
-            pv.appendChild(lpvMediaEl(g, 4));
+            if (immediate) { doRender(); return; }
+            pvTimer = setTimeout(doRender, 60);
         }
-        lpvRender(list[0]); // 默认展示首款（Steam 同款进场即有预览）
+        lpvRender(list[0], true); // 默认展示首款（Steam 同款进场即有预览）
         list.forEach(function (g) {
             var r = el('div', 'gs-lrow');
-            r.addEventListener('click', function () { openDetail(g.id); });
-            // 悬停即切右侧预览（Steam 同款无延迟即时跟随）
+            r.addEventListener('click', function () { clearTimeout(pvTimer); openDetail(g.id); });
+            // 悬停即切右侧预览：带 60ms 防抖减少快速扫过时的视频资源竞争
             r.addEventListener('mouseenter', function () { lpvRender(g); });
             var th = el('div', 'gs-lrow-thumb');
             var pic = g.cover || (g.screenshots && g.screenshots[0]) || '';
@@ -1528,6 +1557,18 @@
         });
         wrap.appendChild(rows);
         wrap.appendChild(pv);
+        // 鼠标离开榜单区域时暂停预览视频（保留 DOM 和最后状态，节省解码器资源）
+        wrap.addEventListener('mouseleave', function () {
+            clearTimeout(pvTimer);
+            var vids = pv.querySelectorAll('video');
+            for (var i = 0; i < vids.length; i++) { try { vids[i].pause(); } catch (e) {} }
+        });
+        // 区块销毁钩子：父容器 innerHTML 重建时先清理定时器和视频解码器
+        block.__destroy = function () {
+            clearTimeout(pvTimer);
+            pvTimer = null;
+            unloadVideos(pv);
+        };
         block.appendChild(wrap);
         return block;
     }
@@ -1566,7 +1607,9 @@
         clearInterval(hprev.cyc);
         hprev.cyc = null;
         if (hprev.el) {
-            if (hprev.el.tagName === 'VIDEO') hprev.el.pause();
+            if (hprev.el.tagName === 'VIDEO') {
+                try { hprev.el.pause(); hprev.el.removeAttribute('src'); hprev.el.load(); } catch (e) {}
+            }
             hprev.el.remove();
             hprev.el = null;
         }
