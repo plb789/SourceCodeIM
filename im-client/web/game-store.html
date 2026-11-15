@@ -2650,6 +2650,36 @@
 
         .gs-notice-card.expanded .gs-notice-card-text { display: block; -webkit-line-clamp: unset; }
 
+        /* 悬停提示层：鼠标悬停卡片时在顶部日期标签左侧淡入"点击展开/收起"小标签，移出淡出；
+           只在有 content 可展开的卡片上追加此元素；pointer-events:none 防拦截点击；
+           作为 .gs-notice-card-top flex 子元素自然排列（与 tag/date 同行） */
+        .gs-notice-card-expand-hint {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            font-size: 11px;
+            line-height: 1.4;
+            color: var(--text-on-accent, #fff);
+            background: var(--accent, #4a9eff);
+            border-radius: 10px;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-2px);
+            transition: opacity .18s ease, transform .18s ease;
+            flex-shrink: 0;
+            white-space: nowrap;
+            box-shadow: 0 1px 4px rgba(0,0,0,.2);
+            margin-right: 4px;
+        }
+        .gs-notice-card:hover .gs-notice-card-expand-hint {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        /* 展开态显示"点击收起"，折叠态（默认）显示"点击展开查看更多" */
+        .gs-notice-card-expand-hint .hint-collapse { display: none; }
+        .gs-notice-card.expanded .gs-notice-card-expand-hint .hint-expand { display: none; }
+        .gs-notice-card.expanded .gs-notice-card-expand-hint .hint-collapse { display: inline; }
+
         /* 公告图片网格（Steam 同款横排）：1 图全宽大图 / 2 图两列 / ≥3 图三列；
            16:9 统一比例裁切，尾张可叠 "+N" 余图角标，GIF 动图原生播放 */
         .gs-notice-card-grid {

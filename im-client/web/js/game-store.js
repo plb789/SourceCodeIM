@@ -2536,7 +2536,8 @@
         var card = el('div', 'gs-notice-card' + (layout === 'thumb' ? ' row' : ''));
         var top = el('div', 'gs-notice-card-top');
         top.appendChild(el('div', 'gs-notice-card-tag', T('公告')));
-        top.appendChild(el('div', 'gs-notice-card-date', fmtDate(n.create_time || '')));
+        var dateEl = el('div', 'gs-notice-card-date', fmtDate(n.create_time || ''));
+        top.appendChild(dateEl);
         // 头图地址归口（thumb 左图 / banner 大图共用；公告图空回退游戏 banner→cover）
         var headUrl = imgs[0] || n.cover || g.banner || g.cover || '';
         // 可查看的图片列表：优先 imgs，退化为 headUrl
@@ -2621,17 +2622,34 @@
             }
         }
         if (n.content) {
-            // 事件委托：只在点击非图片/非链接区域时触发展开/收起
-            card.style.cursor = 'pointer';
-            card.addEventListener('click', function (e) {
-                // 向上查找目标链：若任何一级被标记为交互元素或 <a> 标签，跳过
-                var t = e.target;
-                while (t && t !== card) {
-                    if (t.dataset && t.dataset.noticeInteractive === '1') return;
-                    if (t.tagName === 'A') return;
-                    t = t.parentNode;
-                }
-                card.classList.toggle('expanded');
+            // buildNoticeCard 此时 card 还在 Fragment 里（未进入文档），无法测 scrollHeight。
+            // 等 mkPager step 把 card 插入 container 后，下一帧再检测正文是否真的被 line-clamp 截断：
+            // scrollHeight > clientHeight + 2（防亚像素误差）才是真溢出 → 追加 hint、加 cursor、加 click。
+            // 这样短公告（无截断）不会显示多余的"点击展开"提示和小手光标。
+            requestAnimationFrame(function () {
+                if (!card.isConnected) return;
+                var textEl = card.querySelector('.gs-notice-card-text');
+                if (!textEl) return;
+                // 检测是否真被截断：scrollHeight（完整内容高度）比 clientHeight（可见高度）大
+                var overflow = textEl.scrollHeight - textEl.clientHeight;
+                if (overflow <= 2) return; // 短公告无截断，跳过全部
+                // 有截断：才加 hint / cursor / click 展开逻辑
+                card.style.cursor = 'pointer';
+                card.addEventListener('click', function (e) {
+                    var t = e.target;
+                    while (t && t !== card) {
+                        if (t.dataset && t.dataset.noticeInteractive === '1') return;
+                        if (t.tagName === 'A') return;
+                        t = t.parentNode;
+                    }
+                    card.classList.toggle('expanded');
+                });
+                var hint = el('div', 'gs-notice-card-expand-hint');
+                var hintExpand = el('span', 'hint-expand', T('点击展开查看更多'));
+                var hintCollapse = el('span', 'hint-collapse', T('点击收起'));
+                hint.appendChild(hintExpand);
+                hint.appendChild(hintCollapse);
+                top.insertBefore(hint, dateEl);
             });
         }
         return card;
