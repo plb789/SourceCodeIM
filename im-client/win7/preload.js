@@ -126,6 +126,25 @@ contextBridge.exposeInMainWorld('desktop', {
     pickP2PDir: function () {
         return ipcRenderer.invoke('p2pfile:pickDir');
     },
+    // ===== P0 修复：P2P 接收文件**流式**落盘（分片直接写磁盘，内存恒定 ≈ 16KB） =====
+    p2pStreamOpen: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamOpen', data);
+    },
+    p2pStreamAppend: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamAppend', data);
+    },
+    p2pStreamClose: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamClose', data);
+    },
+    p2pStreamAbort: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamAbort', data);
+    },
+    p2pRenameMsg: function (data) {
+        return ipcRenderer.invoke('p2pfile:renameMsg', data);
+    },
+    p2pOpenOrSave: function (data) {
+        return ipcRenderer.invoke('p2pfile:openOrSave', data);
+    },
     // ===== 阶段一百六十五：网盘挂载（WinFsp+rclone 盘符映射，阿里云盘挂载盘同原理；仅 PC 端生效）=====
     // 状态查询（返回 {ok, winfsp, engineReady, msiReady, mounted, letter, enabled, username, letters:{used,free}}）
     getDavStatus: function () {

@@ -4431,6 +4431,23 @@
                 a.click();
                 return;
             }
+            // ===== P0 修复补充：磁盘流模式下 P2P 直传文件在本地磁盘，url=file:/// =====
+            // 原来 downloadWithProgress 对 file:/// 无效（需要 fetch 服务器 URL），
+            // 改为主进程 shell.openPath 直接用系统关联应用打开 / dialog.showSaveDialog 另存为
+            if (url.indexOf('file:///') === 0 && window.desktop && window.desktop.p2pOpenOrSave) {
+                // file:///C:/path/my%20file.zip → C:\path\my file.zip
+                // 注意：URL 可能包含 %20 / %2F 等编码字符，必须 decodeURIComponent
+                try { var localPath = decodeURIComponent(url.replace(/^file:\/\//, '').replace(/\//g, '\\')); }
+                catch (e) { localPath = url.replace(/^file:\/\//, '').replace(/\//g, '\\'); }
+                var mode = saveMode ? 'saveAs' : 'open';
+                window.desktop.p2pOpenOrSave({ path: localPath, mode: mode }).then(function (r) {
+                    if (!r || !r.ok) {
+                        if (r && r.err === 'not_found') showToast(I18N.t('文件不存在'));
+                        else showToast(I18N.t('打开文件失败'));
+                    }
+                }).catch(function () { showToast(I18N.t('打开文件失败')); });
+                return;
+            }
             downloadWithProgress(url, name);
         }, delayMs || 0);
     }
@@ -5964,14 +5981,43 @@
         // 添加时校验（原发送时校验前置——发不出去的文件不进待发区）
         if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
         if (f.size > maxFile) { showToast(I18N.t('文件超过大小上限（') + formatSize(maxFile) + '）'); return; }
+        // ===== 微信同款 1GB 建议上限：超过弹自绘确认窗二次确认 =====
+        var LOCAL_MAX_SEND = 1073741824;
+        if (f.size > LOCAL_MAX_SEND) {
+            showConfirm(
+                I18N.t('文件较大'),
+                I18N.t('当前文件大小为 ') + formatSize(f.size) + I18N.t('，可能需要较长时间传输。是否仍然发送？'),
+                function () {
+                    if (isAIAgent(currentChatUser)) {
+                        if (isImg) {
+                            if (!aiAgentSupportsImage(currentChatUser)) { showToast(I18N.t('该助手不支持图片识别')); return; }
+                            agentTaskAddImage(f);
+                        } else if (!/\.(docx|xlsx|xlsm|csv|md|txt|pdf|pptx)$/i.test(f.name)) {
+                            showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt/pdf/pptx 文档')); return;
+                        } else {
+                            sendAIDoc(f);
+                        }
+                    } else {
+                        pendingFileAdd(f);
+                    }
+                },
+                I18N.t('仍然发送'),
+                I18N.t('取消')
+            );
+            return;
+        }
         if (isAIAgent(currentChatUser)) {
             if (isImg) {
                 if (!aiAgentSupportsImage(currentChatUser)) { showToast(I18N.t('该助手不支持图片识别')); return; }
+                agentTaskAddImage(f);
             } else if (!/\.(docx|xlsx|xlsm|csv|md|txt|pdf|pptx)$/i.test(f.name)) {
                 showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt/pdf/pptx 文档')); return;
+            } else {
+                sendAIDoc(f);
             }
+        } else {
+            pendingFileAdd(f);
         }
-        pendingFileAdd(f);
     });
     // ===== 阶段一百九十六：普通好友聊天恢复独立图片/文件入口（微信同款） =====
     // 阶段一百九十二曾把本两按钮与 change 分流合并进「+」附件菜单，但输入区为普通聊天与 AI
@@ -6463,22 +6509,52 @@
             });
             return;
         }
+        // ===== 微信同款 1GB 建议上限：超过弹自绘确认窗二次确认（防止误发大文件；确认后允许发送） =====
+        // LOCAL_MAX_SEND = 1GB（1024*1024*1024），服务端硬上限 maxDirect 仍保留（默认 2GB）——
+        // 超过 LOCAL_MAX_SEND 但未超 maxDirect → 弹 confirm；超过 maxDirect → 直接拒绝
+        var LOCAL_MAX_SEND = 1073741824;
         var threshold = (IMSocket.getUploadThreshold && IMSocket.getUploadThreshold()) || 1048576;
-        // 阶段三十二：三层分流——超过分片直传上限直接拒绝；超过单请求直传上限走分片直传（进度回显可取消）；
-        // 超过 WS 分片阈值走单请求 HTTP 直传；小文件仍走 WS 分片协议（协议不变）
         var maxDirect = (IMSocket.getMaxDirectSize && IMSocket.getMaxDirectSize()) || 2147483648;
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
         if (file.size > maxDirect) {
             showToast(I18N.t('文件超过大小上限（') + formatSize(maxDirect) + I18N.t('），无法发送'));
             return;
         }
+        if (file.size > LOCAL_MAX_SEND) {
+            // 自绘确认弹窗（禁止系统 confirm）
+            showConfirm(
+                I18N.t('文件较大'),
+                I18N.t('当前文件大小为 ') + formatSize(file.size) + I18N.t('，可能需要较长时间传输。是否仍然发送？'),
+                function () { doSendFile(file, threshold, maxDirect, maxFile); },
+                I18N.t('仍然发送'),
+                I18N.t('取消')
+            );
+            return;
+        }
+        doSendFile(file, threshold, maxDirect, maxFile);
+    }
+    // sendFile 实际执行体（二次确认后复用同一分流逻辑，保持原代码零改动）
+    function doSendFile(file, threshold, maxDirect, maxFile) {
+        // ===== 微信同款：离线守卫 =====
+        // 1) 好友离线 + 文件 <= maxFile（默认 20MB）→ 允许走 HTTP 上传（服务端落离线库，好友上线推送）
+        // 2) 好友离线 + 文件 > maxFile（HTTP 分片直传上限）→ 允许走 sendFileChunked（分片直传不依赖接收方在线）
+        //    —— 这两种 HTTP 链路都经过服务端落库，离线也能发，上线后好友自动收到
+        // 3) 好友在线才走 P2P 直传（WebRTC DataChannel 必须双方同时在线才能建链，离线直接禁）
+        // 4) 好友离线 + 文件超大（>maxDirect）→ toast 直接拒绝（微信同款）
+        var isOnline = !!onlineUsers[currentChatUser];
+        if (!isOnline && file.size > maxDirect) {
+            showToast(I18N.t('对方离线，无法发送此文件（') + formatSize(file.size) + '）');
+            return;
+        }
         // ===== 阶段一百五十六：好友文件 P2P 直传分流（大文件优先点对点，失败无缝回退现有链路） =====
         // 决策参数服务端归口（登录响应 file_p2p_* 下发）；仅私聊生效；图片/视频排除
-        // （内联渲染链路依赖服务端 url）；群聊/小文件/关闭开关/环境不支持一律走原有三层分流（原逻辑零改动）
+        // （内联渲染链路依赖服务端 url）；群聊/小文件/关闭开关/环境不支持/好友离线一律走原有三层分流
+        // （原逻辑零改动，仅新增在线守卫）
         var p2p = (IMSocket.getP2PConfig && IMSocket.getP2PConfig()) || null;
         if (p2p && p2p.enabled && file.size > (p2p.threshold || 1048576) &&
             currentChatUser !== '' && !isGroupTarget(currentChatUser) &&
             !isImageName(file.name) && !isVideoName(file.name) &&
+            isOnline &&   // ← 微信同款：好友离线不走 P2P，直接走 HTTP 上传（服务端落离线库，上线推送）
             window.P2PFile && P2PFile.available() && P2PFile.localEnabled()) {
             sendFileP2P(file, currentChatUser);
             return;
@@ -7232,6 +7308,16 @@
     // abort：双方移除气泡；对端主动中止时 Toast 提示（同 FILE_CANCEL 口径）
     var p2pPending = {}; // nonce -> {file, toUser}（发送方 accept 建气泡 / 回退重发 / done_ack 共用）
     function sendFileP2P(file, toUser) {
+        // ===== 防御性在线守卫：边缘情况——doSendFile 通过检查后，调这里瞬间好友掉线 =====
+        if (!onlineUsers[toUser]) {
+            // 直接走 HTTP 上传（服务端落离线库）：复用 doSendFile 里的 maxFile 分流
+            var maxFile2 = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+            var maxDirect2 = (IMSocket.getMaxDirectSize && IMSocket.getMaxDirectSize()) || 2147483648;
+            if (file.size > maxDirect2) { showToast(I18N.t('对方离线，无法发送此文件')); return; }
+            if (file.size > maxFile2) sendFileChunked(file, toUser);
+            else sendFileDirect(file, toUser).catch(function () {});
+            return;
+        }
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         p2pPending[nonce] = { file: file, toUser: toUser };
         // 阶段一百六十：气泡提前到 probe 阶段（点击即建"直传连接中"，发送即刻有反馈）——
@@ -7352,7 +7438,22 @@
         txt.textContent = base + Math.floor(info.percent) + '%' + spd + ' · ' + I18N.t('直传');
     };
 
-    IMSocket.on(MSG.FILE_P2P_SIGNAL, function (msg) {
+    // ✅ Bugfix：cacheReceived renameMsg.then 完成后主动通知 chat.js 用正式 URL 回填气泡 data-url
+    // （双保险：done_ack handler 已经 await cacheReceived，但 renameMsg 执行瞬间磁盘文件被改走，
+    // 如果气泡 data-url 还指向旧的 pending 路径就会"文件不存在"）
+    P2PFile.onCached = function (info) {
+        try {
+            var el = messageList.querySelector('.message[data-nonce="' + info.nonce + '"]');
+            if (!el) return;
+            var bf = el.querySelector('.bubble-file');
+            if (bf && info.url) {
+                bf.setAttribute('data-url', info.url);
+                console.log('[P2P onCached] 气泡 data-url 已更新:', info.nonce, '→', info.url);
+            }
+        } catch (e) {}
+    };
+
+    IMSocket.on(MSG.FILE_P2P_SIGNAL, async function (msg) {
         var meta = {};
         try { meta = JSON.parse(msg.content || '{}'); } catch (e) { return; }
         var nonce = meta.nonce || '';
@@ -7394,9 +7495,12 @@
             var el = messageList.querySelector('.message[data-nonce="' + nonce + '"]');
             if (!el || !meta.msg_id) return;
             el.setAttribute('data-msg-id', meta.msg_id);
-            // 阶段一百五十九：接收端本地缓存写入（IndexedDB/PC 磁盘按设置页双开关；发送端无接收 blob，引擎判空跳过）
-            if (window.P2PFile && P2PFile.cacheReceived) P2PFile.cacheReceived(nonce, meta.msg_id);
-            // 接收方：回填内存 blob 地址（引擎组装完成前 done_ack 先到时由 saved 阶段补齐）
+            // ✅ Bugfix：cacheReceived 内部 renameMsg 是异步的，必须 await 它完成（rename 磁盘文件到 <msg_id>_<name>）
+            // 再读 recvUrl 回填 data-url——否则 rename 把磁盘文件改走后气泡还指向旧的 pending 临时路径！
+            if (window.P2PFile && P2PFile.cacheReceived) {
+                try { await P2PFile.cacheReceived(nonce, meta.msg_id); } catch (e) {}
+            }
+            // 接收方：回填 blob 地址（引擎组装完成前 done_ack 先到时由 saved 阶段补齐）
             var recvUrl = P2PFile.receivedURL(nonce);
             var bf = el.querySelector('.bubble-file');
             if (bf && recvUrl) bf.setAttribute('data-url', recvUrl);
@@ -7458,12 +7562,25 @@
     // 服务端校验危险文件拦截+大小上限）→ 落库 msg_type=5 → 广播 MSG.GROUP_FILE → nonce 回填 msg_id
     // suppressLocal：转发复用时抑制本地气泡与输入清理（与 sendGroupImage 的 suppressLocal 同语义）
     function sendGroupFile(file, suppressLocal, groupTarget) {
+        // ===== 微信同款 1GB 建议上限：群聊同私聊一致 =====
+        var LOCAL_MAX_SEND = 1073741824;
         // 阶段一百五十七：群聊文件大小上限独立归口（group_file_max_size 服务端登录响应下发，
         // 与私聊单请求直传上限 max_file_size 解耦——私聊调整不联动群聊）
-        // 原代码：var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
-        //         if (file.size > maxFile) { showToast(I18N.t('文件超过大小上限（') + formatSize(maxFile) + I18N.t('），无法发送')); return; }
         var maxFile = (IMSocket.getGroupFileMaxSize && IMSocket.getGroupFileMaxSize()) || 20971520;
         if (file.size > maxFile) { showToast(I18N.t('群聊文件超过大小上限（') + formatSize(maxFile) + I18N.t('），无法发送')); return; }
+        if (file.size > LOCAL_MAX_SEND) {
+            showConfirm(
+                I18N.t('文件较大'),
+                I18N.t('当前文件大小为 ') + formatSize(file.size) + I18N.t('，可能需要较长时间传输。是否仍然发送？'),
+                function () { doSendGroupFile(file, suppressLocal, groupTarget); },
+                I18N.t('仍然发送'),
+                I18N.t('取消')
+            );
+            return;
+        }
+        doSendGroupFile(file, suppressLocal, groupTarget);
+    }
+    function doSendGroupFile(file, suppressLocal, groupTarget) {
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         var bubble = null;
         if (!suppressLocal) {

@@ -126,6 +126,32 @@ contextBridge.exposeInMainWorld('desktop', {
     pickP2PDir: function () {
         return ipcRenderer.invoke('p2pfile:pickDir');
     },
+    // ===== P0 修复：P2P 接收文件**流式**落盘（分片直接写磁盘，内存恒定 ≈ 16KB） =====
+    // streamOpen: 打开临时文件，返回 {stream_id, path}
+    p2pStreamOpen: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamOpen', data);
+    },
+    // streamAppend: 追加写一片（{stream_id, buf|b64}），返回 {ok, written, total_bytes, pending}
+    p2pStreamAppend: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamAppend', data);
+    },
+    // streamClose: flush + 关闭 + rename 成正式文件（{stream_id, username, msg_id, name}），返回 {ok, path, size}
+    p2pStreamClose: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamClose', data);
+    },
+    // streamAbort: 放弃（删除临时文件）
+    p2pStreamAbort: function (data) {
+        return ipcRenderer.invoke('p2pfile:streamAbort', data);
+    },
+    // ===== P0 修复补充：磁盘流 rename（done_ack 拿到 msg_id 后把 pending_<transfer_id> 重命名为 <msg_id>_<name>） =====
+    p2pRenameMsg: function (data) {
+        return ipcRenderer.invoke('p2pfile:renameMsg', data);
+    },
+    // ===== P0 修复补充：磁盘流模式下文件已在本地磁盘，主进程直接用系统关联应用打开或另存为 =====
+    // {path, mode:'open'|'saveAs'} → {ok, path?, err?}
+    p2pOpenOrSave: function (data) {
+        return ipcRenderer.invoke('p2pfile:openOrSave', data);
+    },
     // ===== 阶段一百六十五：网盘挂载（WinFsp+rclone 盘符映射，阿里云盘挂载盘同原理；仅 PC 端生效）=====
     // 状态查询（返回 {ok, winfsp, engineReady, msiReady, mounted, letter, enabled, username, letters:{used,free}}）
     getDavStatus: function () {

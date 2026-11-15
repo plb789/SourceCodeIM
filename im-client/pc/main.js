@@ -4369,6 +4369,174 @@ ipcMain.handle('p2pfile:pickDir', async function () {
     return { ok: true, dir: r.filePaths[0] };
 });
 
+// ===== P2P 接收文件**流式**落盘（P0 修复：解决大文件接收端卡死/OOM） =====
+// 问题：原 save 接口要求渲染层把完整 ArrayBuffer 一次性传过来，接收端 chunks 数组常驻内存，
+// 收齐瞬间 new Blob(全部分片) 叠加冲爆 V8 堆 → 进程 crash。
+// 改造：接收端每到 16KB 分片就 streamAppend 写磁盘，内存恒定 = 单分片 ≈ 16KB，
+// 任意大小文件安全。
+//
+// 流式会话表（stream_id -> {path, ws, writePromises[]}）：
+var p2pStreams = {};
+var P2P_STREAM_MAX = 8; // 单进程并发流式会话上限（超限拒绝，防御 DoS）
+ipcMain.handle('p2pfile:streamOpen', async function (event, data) {
+    try {
+        if (!data || !data.username) return { ok: false, err: 'missing username' };
+        if (Object.keys(p2pStreams).length >= P2P_STREAM_MAX) {
+            return { ok: false, err: 'too_many_streams' };
+        }
+        var safeUser = String(data.username).replace(/[\\/:*?"<>|]/g, '_');
+        var userDir = path.join(p2pDiskRoot(), safeUser);
+        await fs.promises.mkdir(userDir, { recursive: true });
+        var streamId = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        var tmpPath = path.join(userDir, 'tmp_' + streamId + '.part');
+        var ws = fs.createWriteStream(tmpPath);
+        await new Promise(function (resolve, reject) {
+            ws.once('open', resolve);
+            ws.once('error', reject);
+        });
+        p2pStreams[streamId] = { path: tmpPath, ws: ws, pending: 0, bytes: 0 };
+        return { ok: true, stream_id: streamId, path: tmpPath };
+    } catch (e) {
+        console.warn('[p2pfile] streamOpen 失败:', e && e.message);
+        return { ok: false, err: e && e.message };
+    }
+});
+ipcMain.handle('p2pfile:streamAppend', async function (event, data) {
+    try {
+        if (!data || !data.stream_id) return { ok: false };
+        var s = p2pStreams[data.stream_id];
+        if (!s || !s.ws) return { ok: false, err: 'no_stream' };
+        var buf;
+        if (data.buf) {
+            // ArrayBuffer 直传路径（渲染层 Uint8Array.buffer）
+            buf = Buffer.from(data.buf);
+        } else if (data.b64) {
+            // base64 回退路径
+            buf = Buffer.from(data.b64, 'base64');
+        } else {
+            return { ok: false, err: 'no_data' };
+        }
+        if (s.pending > 32) {
+            // 反压保护：超过 32 片未确认写，暂停（发送方 ACK 驱动背压会自动降速）
+            return { ok: false, err: 'backpressure', pending: s.pending };
+        }
+        s.pending++;
+        var written = buf.length;
+        await new Promise(function (resolve, reject) {
+            s.ws.write(buf, function (err) {
+                s.pending--;
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        s.bytes += written;
+        return { ok: true, written: written, total_bytes: s.bytes, pending: s.pending };
+    } catch (e) {
+        console.warn('[p2pfile] streamAppend 失败:', e && e.message);
+        return { ok: false, err: e && e.message };
+    }
+});
+ipcMain.handle('p2pfile:streamClose', async function (event, data) {
+    try {
+        if (!data || !data.stream_id || !data.msg_id) return { ok: false };
+        var s = p2pStreams[data.stream_id];
+        if (!s) return { ok: false, err: 'no_stream' };
+        // 等所有 pending write 完成
+        await new Promise(function (resolve) {
+            function tick() { if (s.pending <= 0) resolve(); else setImmediate(tick); }
+            tick();
+        });
+        await new Promise(function (resolve, reject) {
+            s.ws.end(function (err) { err ? reject(err) : resolve(); });
+        });
+        // rename tmp → 正式文件
+        var safeUser = String(data.username || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+        var safeName = String(data.name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+        var finalPath = path.join(p2pDiskRoot(), safeUser, String(data.msg_id) + '_' + safeName);
+        await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
+        await fs.promises.rename(s.path, finalPath);
+        var size = (await fs.promises.stat(finalPath)).size;
+        delete p2pStreams[data.stream_id];
+        return { ok: true, path: finalPath, size: size };
+    } catch (e) {
+        console.warn('[p2pfile] streamClose 失败:', e && e.message);
+        // 尽量清理
+        if (data && data.stream_id && p2pStreams[data.stream_id]) {
+            try { p2pStreams[data.stream_id].ws.end(); } catch (e2) {}
+            delete p2pStreams[data.stream_id];
+        }
+        return { ok: false, err: e && e.message };
+    }
+});
+ipcMain.handle('p2pfile:streamAbort', async function (event, data) {
+    try {
+        if (!data || !data.stream_id) return { ok: false };
+        var s = p2pStreams[data.stream_id];
+        if (!s) return { ok: true }; // 已清理过，幂等
+        try {
+            await new Promise(function (resolve) {
+                try { s.ws.destroy(); } catch (e) {}
+                resolve();
+            });
+            await fs.promises.unlink(s.path).catch(function () {});
+        } catch (e) {}
+        delete p2pStreams[data.stream_id];
+        return { ok: true };
+    } catch (e) { return { ok: false }; }
+});
+// P0 修复补充：磁盘流模式下 onRecvEof 用 pending_<transfer_id> 临时名存文件，
+// done_ack 拿到 msg_id 后调用此 handler rename 成 <msg_id>_<name> 正式名
+ipcMain.handle('p2pfile:renameMsg', async function (event, data) {
+    try {
+        if (!data || !data.username || !data.from_msg_id || !data.to_msg_id) return { ok: false };
+        var safeUser = String(data.username).replace(/[\\/:*?"<>|]/g, '_');
+        var fromName = String(data.name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+        var fromPath = path.join(p2pDiskRoot(), safeUser, String(data.from_msg_id) + '_' + fromName);
+        var toName = String(data.name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+        var toPath = path.join(p2pDiskRoot(), safeUser, String(data.to_msg_id) + '_' + toName);
+        await fs.promises.mkdir(path.dirname(toPath), { recursive: true });
+        await fs.promises.rename(fromPath, toPath);
+        return { ok: true, path: toPath };
+    } catch (e) {
+        // ✅ Bugfix：ENOENT 不再兜底成 ok:true（假成功会让渲染层以为 rename 了其实没有，
+        // 导致 cacheGet/diskGet 用 <msg_id> 拼路径找不到文件 → 用户点历史气泡提示"文件不存在"）
+        if (e && e.code === 'ENOENT') {
+            console.warn('[p2pfile] renameMsg 源文件不存在 ENOENT:', fromPath,
+                '（可能已被外部清理/磁盘满/Disk Cleanup 清理 AppData 目录）');
+            return { ok: false, err: 'enoent', path: fromPath };
+        }
+        console.warn('[p2pfile] renameMsg 失败:', e && e.message);
+        return { ok: false };
+    }
+});
+// P0 修复补充：磁盘流模式下文件已经在本地磁盘，渲染层传 path 让主进程直接打开或另存为
+// open: shell.openPath 用系统默认关联应用打开（微信 PC 同款"点开即用"）
+// saveAs: dialog.showSaveDialog 弹另存为 → fs.copyFile 到用户选的位置
+ipcMain.handle('p2pfile:openOrSave', async function (event, data) {
+    try {
+        if (!data || !data.path) return { ok: false };
+        var mode = data.mode || 'open'; // 'open' | 'saveAs'
+        var exists = await fs.promises.access(data.path, fs.constants.R_OK).then(function () { return true; }).catch(function () { return false; });
+        if (!exists) return { ok: false, err: 'not_found' };
+        if (mode === 'open') {
+            var r = shell.openPath(data.path);
+            // Windows 上 shell.openPath 返回空串=成功，非空=错误消息
+            return { ok: r === '' || !r, path: data.path, err: r || '' };
+        } else {
+            var saveR = await dialog.showSaveDialog({
+                title: '另存为',
+                defaultPath: path.basename(data.path)
+            });
+            if (saveR.canceled || !saveR.filePath) return { ok: false, err: 'canceled' };
+            await fs.promises.copyFile(data.path, saveR.filePath);
+            return { ok: true, path: saveR.filePath };
+        }
+    } catch (e) {
+        console.warn('[p2pfile] openOrSave 失败:', e && e.message);
+        return { ok: false, err: e && e.message };
+    }
+});
+
 // ===== 阶段一百六十五：网盘挂载（WinFsp + rclone 引擎，阿里云盘挂载盘同原理） =====
 // 把网盘空间映射成本地盘符（"我的电脑"直接可见、可读写）：rclone 以 WebDAV 模式挂载服务端 /dav/，
 // 数据与 /api/drive/* 完全同源（同配额/同回收站/同对象存储）。归口：

@@ -34,6 +34,14 @@
     function available() { return typeof RTCPeerConnection !== 'undefined'; }
     function platform() { return window.desktop ? (window.__webCallBridge ? 'web' : 'pc') : ''; }
     function genId() { return 'p' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10); }
+    // ===== P0 修复：磁盘流式落盘能力探测（PC Electron 端才有 desktop.p2pStream* 桥） =====
+    // 有磁盘能力：onRecvChunk 每片直接 streamAppend 写磁盘 → 内存恒定 ≈ 16KB（单分片），
+    // 任意大小文件安全。WEB/手机端自动降级为 chunks 数组 + new Blob（大文件仍有风险但 P2P
+    // threshold 默认 1MB+，超阈值在"无磁盘能力"场景可走 WS 分片/HTTP 兜底链路）。
+    function hasDiskStream() {
+        var d = window.desktop;
+        return !!(d && d.p2pStreamOpen && d.p2pStreamAppend && d.p2pStreamClose && d.p2pStreamAbort);
+    }
     // 接收端落地文件名风控（设计 §8.5：清洗路径穿越与非法字符）
     function safeName(name) {
         return String(name || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '_') || 'file';
@@ -261,6 +269,12 @@
         }
         if (sess.pc) { try { sess.pc.close(); } catch (e) {} sess.pc = null; }
         sess.dc = null;
+        sess._pump = null;
+        // ===== P0 修复：接收方异常终止时 abort 磁盘流（避免残留 tmp_*.part 文件占磁盘） =====
+        if (sess.diskStream && window.desktop && window.desktop.p2pStreamAbort) {
+            window.desktop.p2pStreamAbort({ stream_id: sess.diskStream }).catch(function () {});
+            sess.diskStream = null;
+        }
         if (sessions[sess.id] === sess) delete sessions[sess.id];
         if (nonceIndex[sess.nonce] === sess.id) delete nonceIndex[sess.nonce];
     }
@@ -366,8 +380,11 @@
     }
 
     // ack 推进（累计确认）：校正进度并按速率估算速度（EMA 平滑）
+    // ===== P0 修复：ack 携带 next_write_seq 更准确反映接收方消费速度；
+    // 发送方收到 ack 后主动解阻塞 pump（原来只有 bufferedamountlow 才触发） =====
     function onAck(sess, m) {
-        var next = m.next_seq || 0;
+        // 优先用 next_write_seq（接收方"已收到并入队"的消费位置），无则回退 next_seq
+        var next = m.next_write_seq || m.next_seq || 0;
         if (next <= sess.acked) return;
         sess.acked = next;
         var now = Date.now();
@@ -379,13 +396,20 @@
             sess.lastAckBytes = next * cfg.chunkSize;
         }
         emit(sess, 'sending', Math.min(99, (sess.sent / sess.file.size) * 100), sess.speed);
+        // 接收方 ack 推进了 → 主动触发 pump 解滑窗阻塞
+        if (typeof sess._pump === 'function') { try { sess._pump(); } catch (e) {} }
     }
 
     // 分片泵：读盘 → SHA-256 增量 → 入通道；bufferedAmount 超高水位暂停，低水位回调恢复
+    // ===== P0 修复：加入**接收方 ACK 驱动的真正滑窗背压** =====
+    // 原来只看 bufferedAmount（自己发得太快的自我约束），完全不反馈接收方消费速度。
+    // 局域网发送方 100MB/s 猛发，接收方内存爆 → OOM crash。
+    // 现在：只有 `seq <= sess.acked + WINDOW` 才继续发，接收方 ack 慢 → 发送方自动等，
+    // 形成真实的"发送方按接收方消费速度发"的闭环背压。
     function startPump(sess) {
         var dc = sess.dc;
         if (!dc || sess.state !== 'sending') return;
-        var seq = 0, paused = false;
+        var seq = 0, paused = false, PUMP_WINDOW = 256;
         dc.bufferedAmountLowThreshold = cfg.lowWater;
         dc.addEventListener('bufferedamountlow', function () {
             if (paused) { paused = false; pump(); }
@@ -393,7 +417,12 @@
         function pump() {
             if (!sess.dc || sess.state !== 'sending') return;
             if (seq >= sess.total) { finishEof(sess); return; }
-            if (dc.bufferedAmount >= cfg.highWater) { paused = true; return; } // 等 bufferedamountlow 恢复
+            // 自我背压：bufferedAmount 超高水位 → 等 bufferedamountlow
+            if (dc.bufferedAmount >= cfg.highWater) { paused = true; return; }
+            // ===== 接收方驱动的真正滑窗背压 =====
+            // seq 领先 acked 超过 WINDOW → 等接收方 ack 推进（onAck 里主动调 pump）
+            // 初始 acked=0，WINDOW=256 允许发前 256 片；之后必须等 ack 回来
+            if (sess.acked + PUMP_WINDOW <= seq) return;
             var start = seq * cfg.chunkSize;
             sess.file.slice(start, Math.min(start + cfg.chunkSize, sess.file.size)).arrayBuffer().then(function (buf) {
                 if (!sess.dc || sess.state !== 'sending') return;
@@ -405,6 +434,8 @@
                 pump();
             }).catch(function () { fail(sess, 'read_error'); });
         }
+        // 把 pump 存到 sess，onAck 里能调用解阻塞
+        sess._pump = pump;
         pump();
     }
 
@@ -454,21 +485,53 @@
         sess.mime = m.mime || '';
         try { dc.send(JSON.stringify({ t: 'ready' })); } catch (e) { fail(sess, 'channel_lost'); return; }
         sess.state = 'receiving';
+        // ===== P0 修复：有磁盘能力时立刻 open 流，onRecvChunk 每片直接 append =====
+        // open 失败（too_many_streams 等）自动降级为 chunks 数组（内存模式），不会阻塞传输
+        if (hasDiskStream()) {
+            window.desktop.p2pStreamOpen({ username: myUsername() }).then(function (r) {
+                if (r && r.ok && r.stream_id) {
+                    sess.diskStream = r.stream_id;
+                } else {
+                    console.warn('[P2P] streamOpen 失败，降级为内存模式:', r && r.err);
+                }
+            }).catch(function (e) {
+                console.warn('[P2P] streamOpen 异常，降级为内存模式:', e && e.message);
+            });
+        }
         emit(sess, 'receiving', 0, 0);
     }
     function onRecvChunk(sess, dc, buf) {
         if (sess.state !== 'receiving') return;
         var u8 = new Uint8Array(buf);
-        // 阶段一百五十八修复：分片必须推入 chunks 数组供 eof 后 blob 组装——原实现漏推入，
-        // new Blob(空数组) 恒 0 字节（SHA-256 校验通过只证明传输面数据正确，内容并未留存，
-        // 另存为落盘即空文件）
-        sess.chunks.push(u8);
         sess.hasher.update(u8);
         sess.received += u8.length;
         sess.count++;
-        // 累计 ACK：每 64 片回一帧（简化滑窗，发送方据此推进与判速）
-        if (sess.count % 64 === 0) {
-            try { dc.send(JSON.stringify({ t: 'ack', next_seq: sess.count })); } catch (e) {}
+        // ===== P0 修复：有磁盘流时分片直接 append，不再推 chunks 数组（内存恒定 ≈ 单分片 16KB） =====
+        // 无磁盘流（WEB/手机端或 open 失败降级）时仍走 chunks 数组（原路径保留）
+        if (sess.diskStream) {
+            // fire-and-forget：不 await，主线程立即返回；主进程 pending>32 回压时返回 backpressure
+            // → 接收方暂停发 ack（backpressure 标记） → 发送方无 ack 自然减速（真正的滑窗背压）
+            var arrayBuf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+            window.desktop.p2pStreamAppend({
+                stream_id: sess.diskStream,
+                buf: arrayBuf
+            }).then(function (r) {
+                if (r && !r.ok && r.err === 'backpressure') {
+                    sess.backpressure = true;
+                } else if (sess.backpressure && r && r.ok) {
+                    sess.backpressure = false;
+                }
+            }).catch(function () {});
+        } else {
+            // 降级路径：内存数组（WEB/手机端或 open 失败）
+            sess.chunks.push(u8);
+        }
+        // 累计 ACK：每 WINDOW(64) 片回一帧；backpressure 时暂停 ack（让发送方自然减速）
+        // ack 携带 next_write_seq（接收方"已收到并入队"的片数，区别于"已写完磁盘"但此处近似相同）
+        var WINDOW = 64;
+        if (!sess.backpressure && (sess.count - sess.lastAckSent >= WINDOW || sess.count === sess.total)) {
+            sess.lastAckSent = sess.count;
+            try { dc.send(JSON.stringify({ t: 'ack', next_seq: sess.count, next_write_seq: sess.count })); } catch (e) {}
         }
         var now = Date.now();
         var dt = now - (sess.lastSpdAt || 0);
@@ -483,33 +546,74 @@
     function onRecvEof(sess, dc, m) {
         if (sess.state !== 'receiving') return;
         sess.state = 'verifying';
-        try { dc.send(JSON.stringify({ t: 'ack', next_seq: sess.count })); } catch (e) {} // 最后一片补 ack
+        try { dc.send(JSON.stringify({ t: 'ack', next_seq: sess.count, next_write_seq: sess.count })); } catch (e) {} // 最后一片补 ack
         var local = sess.hasher.hex();
         if (m.sha256 && m.sha256 !== local) {
+            // ===== P0 修复：SHA 不匹配时要 abort 磁盘流（避免留 tmp 文件） =====
+            if (sess.diskStream) {
+                window.desktop.p2pStreamAbort({ stream_id: sess.diskStream }).catch(function () {});
+                sess.diskStream = null;
+            }
             fail(sess, 'sha_mismatch'); // 终验失败：通知发送方 abort 回退 HTTP 全量重传（设计 §7）
             return;
         }
         try { dc.send(JSON.stringify({ t: 'complete' })); } catch (e) {}
-        sig(sess.peer, { action: 'done', transfer_id: sess.id, sha256: local });
         sess.state = 'done';
         emit(sess, 'sent', 100, 0);
-        // 组装 blob（异步大文件可能耗时），完成后内存留存（阶段一百五十八：不再自动触发下载）
-        var blob = new Blob(sess.chunks, { type: sess.mime || 'application/octet-stream' });
-        sess.chunks = null; // 释放分片数组引用（Blob 由浏览器接管，大文件自动落盘托管）
-        var url = '';
-        try { url = URL.createObjectURL(blob); } catch (e2) {}
-        recvFiles[sess.nonce] = { url: url, name: safeName(sess.metaName), blob: blob, mime: sess.mime || '', size: sess.size };
-        emit(sess, 'saved', 100, 0);
-        // 原代码：接收完成立即自动创建 <a download> 触发下载（弹出系统保存框）——用户反馈不符合
-        // 微信逻辑（对方还在传输中无任何提示就直接弹系统框）；现改为内存 blob 留存 + 聊天框
-        // 微信同款文件卡片，接收方点击卡片"另存为"按钮才弹保存框（chat.js addP2PSaveBtn 归口）
-        // if (url) {
-        //     var a = document.createElement('a');
-        //     a.href = url;
-        //     a.download = recvFiles[sess.nonce].name;
-        //     a.click();
-        // }
-        cleanup(sess);
+
+        // ===== P0 修复：有磁盘流时 streamClose → 生成 file:/// URL，完全跳过 new Blob 组装 =====
+        // 这步是"大文件卡死"的关键：原来收齐瞬间 new Blob(全部分片) 主线程卡 + 内存爆。
+        // 现在磁盘已经存好了，直接把磁盘路径包装成 file:/// URL 给气泡点击打开/另存为。
+        //
+        // sig(done) 必须等 finalize 完成（recvFiles 填充好 diskPath）后再发——否则 done_ack
+        // 回来时 cacheReceived 发现 f.diskPath 为空，rename 不会执行，磁盘上就留着 pending_xxx 临时名。
+        var finalize = function () {
+            var url = '', blob = null, diskPath = '';
+            if (sess.diskStream) {
+                return window.desktop.p2pStreamClose({
+                    stream_id: sess.diskStream,
+                    username: myUsername(),
+                    msg_id: 'pending_' + sess.id,   // 临时名，done_ack 回来后 cacheReceived 再 rename 成正式 msg_id
+                    name: safeName(sess.metaName)
+                }).then(function (r) {
+                    sess.diskStream = null;
+                    if (r && r.ok && r.path) {
+                        diskPath = r.path;
+                        sess.diskPath = diskPath;
+                        try { url = 'file:///' + diskPath.replace(/\\/g, '/'); } catch (e) {}
+                    } else {
+                        console.warn('[P2P] streamClose 失败，降级为内存模式:', r && r.err);
+                        if (window.desktop && window.desktop.p2pStreamAbort) {
+                            window.desktop.p2pStreamAbort({ stream_id: sess.diskStream }).catch(function () {});
+                        }
+                    }
+                    sess.chunks = null;
+                    recvFiles[sess.nonce] = { url: url, name: safeName(sess.metaName), blob: blob, mime: sess.mime || '', size: sess.size, diskPath: diskPath, transfer_id: sess.id };
+                    emit(sess, 'saved', 100, 0);
+                    // ===== 关键：recvFiles 就绪后才发 done → done_ack → cacheReceived rename 链路 =====
+                    sig(sess.peer, { action: 'done', transfer_id: sess.id, sha256: local });
+                    cleanup(sess);
+                }).catch(function (e) {
+                    console.warn('[P2P] streamClose 异常:', e && e.message);
+                    sess.chunks = null;
+                    recvFiles[sess.nonce] = { url: '', name: safeName(sess.metaName), blob: null, mime: sess.mime || '', size: sess.size, diskPath: '', transfer_id: sess.id };
+                    emit(sess, 'saved', 100, 0);
+                    sig(sess.peer, { action: 'done', transfer_id: sess.id, sha256: local });
+                    cleanup(sess);
+                });
+            } else {
+                // 降级路径：内存 Blob 组装（WEB/手机端）—— 大文件仍有风险但走兜底链路
+                try { blob = new Blob(sess.chunks, { type: sess.mime || 'application/octet-stream' }); } catch (e2) {}
+                sess.chunks = null;
+                try { url = URL.createObjectURL(blob); } catch (e2) {}
+                recvFiles[sess.nonce] = { url: url, name: safeName(sess.metaName), blob: blob, mime: sess.mime || '', size: sess.size, transfer_id: sess.id };
+                emit(sess, 'saved', 100, 0);
+                sig(sess.peer, { action: 'done', transfer_id: sess.id, sha256: local });
+                cleanup(sess);
+                return Promise.resolve();
+            }
+        };
+        finalize();
     }
 
     // ===== 信令入口（socket.js dispatch 分发全部 91 帧） =====
@@ -531,6 +635,12 @@
                     conf: iceConfOf(p), pc: null, dc: null,
                     hasher: new Sha256(), chunks: [], received: 0, count: 0, speed: 0,
                     size: p.size || 0, total: 0, chunkSize: cfg.chunkSize, mime: p.mime || '',
+                    // ===== P0 修复：磁盘流式落盘相关字段 =====
+                    diskStream: null,      // stream_id（有磁盘能力时在 onRecvHead 里 open）
+                    diskPath: '',          // 关闭后正式文件路径
+                    backpressure: false,   // 主进程 pending>32 回压标记（触发暂停 ack → 发送方降速）
+                    // 发送方 ACK 驱动真正背压（接收方 track 收到的 ack seq，每 WINDOW 片回一帧 ack）
+                    lastAckSent: 0,        // 最后一次 ack 发送时的 count
                     timers: { negotiate: null, watch: null, keep: null }
                 };
                 sessions[rs.id] = rs;
@@ -648,9 +758,44 @@
         try { return (window.IMSocket && window.IMSocket.getUsername && window.IMSocket.getUsername()) || ''; } catch (e) { return ''; }
     }
     // 接收端缓存写入：chat.js done_ack（msg_id 已知）调用；发送端无接收 blob 引擎内部判空跳过
+    // ✅ 返回 Promise：chat.js done_ack handler 必须 await 后再回填 data-url（否则气泡会指向旧的 pending 临时路径）
     function cacheReceived(nonce, msgId) {
         var f = recvFiles[nonce];
-        if (!f || !f.blob || !msgId) return;
+        if (!f || !msgId) return Promise.resolve(null);
+        // ===== P0 修复：磁盘流模式下 f.blob 为 null（没有内存 Blob），跳过 dbPut 和 saveP2PFile =====
+        // 改为 rename pending_<transfer_id> → <msg_id>_<name>（文件已经在磁盘上了，重命名即可）
+        // ✅ Bugfix：之前用正则从 f.diskPath 里猜 transfer_id 会失败（sess.id 本身带下划线 p<hex>_<hex>），
+        // 现在 recvFiles 里直接存 transfer_id 字段，构造 from_msg_id 100% 正确
+        // ✅ Bugfix：renameMsg.then 必须同步通知 chat.js 更新气泡 data-url，否则气泡被回填成旧 pending 路径
+        if (f.diskPath && f.transfer_id && window.desktop && window.desktop.p2pRenameMsg) {
+            return window.desktop.p2pRenameMsg({
+                username: myUsername(),
+                from_msg_id: 'pending_' + f.transfer_id,
+                to_msg_id: msgId,
+                name: f.name
+            }).then(function (r) {
+                if (r && r.ok && r.path) {
+                    f.diskPath = r.path;
+                    try { f.url = 'file:///' + r.path.replace(/\\/g, '/'); } catch (e) {}
+                    console.log('P2P 接收文件已 rename 为正式名: ' + r.path);
+                    // ===== 关键：主动通知 chat.js 用正式 URL 回填气泡 data-url =====
+                    // 否则 chat.js done_ack handler L7486 在 cacheReceived fire-and-forget 时已经读了
+                    // 旧的 pending URL 回填到气泡上了，导致 renameMsg 把磁盘文件改走后气泡指向不存在的路径
+                    if (typeof window.P2PFile.onCached === 'function') {
+                        try { window.P2PFile.onCached({ nonce: nonce, msg_id: msgId, url: f.url, diskPath: f.diskPath }); } catch (e) {}
+                    }
+                } else {
+                    console.warn('[P2P] renameMsg 失败:', r && r.err, '磁盘文件留在 pending 临时名');
+                    return { ok: false };
+                }
+                return r;
+            }).catch(function (e) {
+                console.warn('[P2P] renameMsg 异常:', e && e.message);
+                return { ok: false };
+            });
+        }
+        // 原有路径：内存 Blob 模式（WEB/手机端或 open 失败降级）
+        if (!f.blob) return Promise.resolve(null);
         // IndexedDB 缓存（开关 im_p2p_idb_cache，默认开）
         if (cacheOn('im_p2p_idb_cache')) {
             dbPut(msgId, f.blob, f.name, f.mime, f.size).catch(function () {});
@@ -663,6 +808,7 @@
                 if (r && r.ok) console.log('P2P 接收文件已落盘: ' + r.path);
             }).catch(function () {});
         }
+        return Promise.resolve({ ok: true });
     }
     // 历史渲染回填：IndexedDB 命中 → 内存 blob url；未命中且 PC 端 → 磁盘读回 blob url
     // 返回 Promise<{url, name} | null>，chat.js 命中后回填 data-url 恢复"另存为"/预览
@@ -1086,6 +1232,7 @@
         send: send,
         onSignal: onSignal,
         onProgress: null, // chat.js 注入（function(info)）
+        onCached: null,   // chat.js 注入（function(info)）—— cacheReceived renameMsg 完成后通知 chat.js 回填气泡 data-url
         config: function (c) {
             if (!c || typeof c !== 'object') return;
             if (typeof c.enabled === 'boolean') cfg.enabled = c.enabled;

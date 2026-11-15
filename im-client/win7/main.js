@@ -1540,6 +1540,158 @@ ipcMain.handle('p2pfile:pickDir', async function () {
     return { ok: true, dir: r.filePaths[0] };
 });
 
+// ===== P2P 接收文件**流式**落盘（P0 修复：解决大文件接收端卡死/OOM） =====
+// 与 pc/main.js 实现完全一致：每 16KB 分片直接 streamAppend 写磁盘，内存恒定 ≈ 16KB，
+// 任意大小文件安全。
+var p2pStreams = {};
+var P2P_STREAM_MAX = 8;
+ipcMain.handle('p2pfile:streamOpen', async function (event, data) {
+    try {
+        if (!data || !data.username) return { ok: false, err: 'missing username' };
+        if (Object.keys(p2pStreams).length >= P2P_STREAM_MAX) {
+            return { ok: false, err: 'too_many_streams' };
+        }
+        var safeUser = String(data.username).replace(/[\\/:*?"<>|]/g, '_');
+        var userDir = path.join(p2pDiskRoot(), safeUser);
+        await fs.promises.mkdir(userDir, { recursive: true });
+        var streamId = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        var tmpPath = path.join(userDir, 'tmp_' + streamId + '.part');
+        var ws = fs.createWriteStream(tmpPath);
+        await new Promise(function (resolve, reject) {
+            ws.once('open', resolve);
+            ws.once('error', reject);
+        });
+        p2pStreams[streamId] = { path: tmpPath, ws: ws, pending: 0, bytes: 0 };
+        return { ok: true, stream_id: streamId, path: tmpPath };
+    } catch (e) {
+        console.warn('[p2pfile] streamOpen 失败:', e && e.message);
+        return { ok: false, err: e && e.message };
+    }
+});
+ipcMain.handle('p2pfile:streamAppend', async function (event, data) {
+    try {
+        if (!data || !data.stream_id) return { ok: false };
+        var s = p2pStreams[data.stream_id];
+        if (!s || !s.ws) return { ok: false, err: 'no_stream' };
+        var buf;
+        if (data.buf) {
+            buf = Buffer.from(data.buf);
+        } else if (data.b64) {
+            buf = Buffer.from(data.b64, 'base64');
+        } else {
+            return { ok: false, err: 'no_data' };
+        }
+        if (s.pending > 32) {
+            return { ok: false, err: 'backpressure', pending: s.pending };
+        }
+        s.pending++;
+        var written = buf.length;
+        await new Promise(function (resolve, reject) {
+            s.ws.write(buf, function (err) {
+                s.pending--;
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        s.bytes += written;
+        return { ok: true, written: written, total_bytes: s.bytes, pending: s.pending };
+    } catch (e) {
+        console.warn('[p2pfile] streamAppend 失败:', e && e.message);
+        return { ok: false, err: e && e.message };
+    }
+});
+ipcMain.handle('p2pfile:streamClose', async function (event, data) {
+    try {
+        if (!data || !data.stream_id || !data.msg_id) return { ok: false };
+        var s = p2pStreams[data.stream_id];
+        if (!s) return { ok: false, err: 'no_stream' };
+        await new Promise(function (resolve) {
+            function tick() { if (s.pending <= 0) resolve(); else setImmediate(tick); }
+            tick();
+        });
+        await new Promise(function (resolve, reject) {
+            s.ws.end(function (err) { err ? reject(err) : resolve(); });
+        });
+        var safeUser = String(data.username || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+        var safeName = String(data.name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+        var finalPath = path.join(p2pDiskRoot(), safeUser, String(data.msg_id) + '_' + safeName);
+        await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
+        await fs.promises.rename(s.path, finalPath);
+        var size = (await fs.promises.stat(finalPath)).size;
+        delete p2pStreams[data.stream_id];
+        return { ok: true, path: finalPath, size: size };
+    } catch (e) {
+        console.warn('[p2pfile] streamClose 失败:', e && e.message);
+        if (data && data.stream_id && p2pStreams[data.stream_id]) {
+            try { p2pStreams[data.stream_id].ws.end(); } catch (e2) {}
+            delete p2pStreams[data.stream_id];
+        }
+        return { ok: false, err: e && e.message };
+    }
+});
+ipcMain.handle('p2pfile:streamAbort', async function (event, data) {
+    try {
+        if (!data || !data.stream_id) return { ok: false };
+        var s = p2pStreams[data.stream_id];
+        if (!s) return { ok: true };
+        try {
+            await new Promise(function (resolve) {
+                try { s.ws.destroy(); } catch (e) {}
+                resolve();
+            });
+            await fs.promises.unlink(s.path).catch(function () {});
+        } catch (e) {}
+        delete p2pStreams[data.stream_id];
+        return { ok: true };
+    } catch (e) { return { ok: false }; }
+});
+// P0 修复补充：磁盘流模式下 onRecvEof 用 pending_<transfer_id> 临时名存文件，
+// done_ack 拿到 msg_id 后调用此 handler rename 成 <msg_id>_<name> 正式名
+ipcMain.handle('p2pfile:renameMsg', async function (event, data) {
+    try {
+        if (!data || !data.username || !data.from_msg_id || !data.to_msg_id) return { ok: false };
+        var safeUser = String(data.username).replace(/[\\/:*?"<>|]/g, '_');
+        var fromName = String(data.name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+        var fromPath = path.join(p2pDiskRoot(), safeUser, String(data.from_msg_id) + '_' + fromName);
+        var toName = String(data.name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+        var toPath = path.join(p2pDiskRoot(), safeUser, String(data.to_msg_id) + '_' + toName);
+        await fs.promises.mkdir(path.dirname(toPath), { recursive: true });
+        await fs.promises.rename(fromPath, toPath);
+        return { ok: true, path: toPath };
+    } catch (e) {
+        if (e && e.code === 'ENOENT') {
+            console.warn('[p2pfile] renameMsg 源文件不存在 ENOENT:', fromPath);
+            return { ok: false, err: 'enoent', path: fromPath };
+        }
+        console.warn('[p2pfile] renameMsg 失败:', e && e.message);
+        return { ok: false };
+    }
+});
+// P0 修复补充：磁盘流模式下文件已经在本地磁盘，渲染层传 path 让主进程直接打开或另存为
+ipcMain.handle('p2pfile:openOrSave', async function (event, data) {
+    try {
+        if (!data || !data.path) return { ok: false };
+        var mode = data.mode || 'open';
+        var exists = await fs.promises.access(data.path, fs.constants.R_OK).then(function () { return true; }).catch(function () { return false; });
+        if (!exists) return { ok: false, err: 'not_found' };
+        if (mode === 'open') {
+            var r = shell.openPath(data.path);
+            return { ok: r === '' || !r, path: data.path, err: r || '' };
+        } else {
+            var saveR = await dialog.showSaveDialog({
+                title: '另存为',
+                defaultPath: path.basename(data.path)
+            });
+            if (saveR.canceled || !saveR.filePath) return { ok: false, err: 'canceled' };
+            await fs.promises.copyFile(data.path, saveR.filePath);
+            return { ok: true, path: saveR.filePath };
+        }
+    } catch (e) {
+        console.warn('[p2pfile] openOrSave 失败:', e && e.message);
+        return { ok: false, err: e && e.message };
+    }
+});
+
 // ===== 阶段一百六十五：网盘挂载（WinFsp + rclone 引擎，阿里云盘挂载盘同原理） =====
 // 把网盘空间映射成本地盘符（"我的电脑"直接可见、可读写）：rclone 以 WebDAV 模式挂载服务端 /dav/，
 // 数据与 /api/drive/* 完全同源（同配额/同回收站/同对象存储）。归口：
