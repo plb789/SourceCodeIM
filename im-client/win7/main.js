@@ -1740,6 +1740,11 @@ ipcMain.handle('p2pfile:openOrSave', async function (event, data) {
         if (!data || !data.path) return { ok: false };
         var mode = data.mode || 'open';
         var p = String(data.path);
+        var diskRoot = p2pDiskRoot().toLowerCase();
+        var absP = path.resolve(p).toLowerCase();
+        if (!absP.startsWith(diskRoot)) {
+            return { ok: false, err: 'path_not_allowed' };
+        }
         if (!fs.existsSync(p)) return { ok: false, err: 'not_found' };
         if (mode === 'open') {
             var r = await shell.openPath(p);

@@ -4590,9 +4590,14 @@ ipcMain.handle('p2pfile:openOrSave', async function (event, data) {
     try {
         if (!data || !data.path) return { ok: false };
         var mode = data.mode || 'open'; // 'open' | 'saveAs'
-        // 同步 fs.existsSync 避免 fs.promises.access 在某些 Electron 内核版本里
-        // 返回不可序列化结果导致 "An object could not be cloned"
         var p = String(data.path);
+        // 路径白名单：只允许访问 P2P 接收目录下的文件（防御纵深）
+        // 渲染层理论上可构造任意本地路径，但实际只由 cacheReceived → statPath → file:/// URL 生成
+        var diskRoot = p2pDiskRoot().toLowerCase();
+        var absP = path.resolve(p).toLowerCase();
+        if (!absP.startsWith(diskRoot)) {
+            return { ok: false, err: 'path_not_allowed' };
+        }
         if (!fs.existsSync(p)) return { ok: false, err: 'not_found' };
         if (mode === 'open') {
             // Electron 14+ shell.openPath 返回 Promise<string>（空串=成功，非空=错误消息）
