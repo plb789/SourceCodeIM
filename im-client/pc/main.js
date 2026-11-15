@@ -4325,6 +4325,19 @@ ipcMain.handle('p2pfile:read', async function (event, data) {
         return { ok: false };
     }
 });
+// ✅ P0 修复：历史回填零内存路径查询 — 只查文件是否存在 + 返回路径，不读文件内容
+// 替代 p2pfile:read（readFile 把整个文件读进内存 → 历史回填 1GB 文件会 OOM crash！）
+// 渲染层 diskGet 用 statPath → 直接拼 file:/// URL → 零内存拷贝
+ipcMain.handle('p2pfile:statPath', async function (event, data) {
+    try {
+        if (!data || !data.msg_id) return { ok: false };
+        var p = p2pCachePathOf(data.username, data.msg_id, data.name);
+        var stat = await fs.promises.stat(p);
+        return { ok: true, path: p, size: stat.size, name: path.basename(p) };
+    } catch (e) {
+        return { ok: false };
+    }
+});
 // 阶段一百五十九补：手动清理磁盘缓存目录（设置-网络"缓存清理"按钮；仅清当前账号目录下的文件）
 ipcMain.handle('p2pfile:clear', async function (event, data) {
     try {
@@ -4406,8 +4419,19 @@ ipcMain.handle('p2pfile:streamAppend', async function (event, data) {
         if (!data || !data.stream_id) return { ok: false };
         var s = p2pStreams[data.stream_id];
         if (!s || !s.ws) return { ok: false, err: 'no_stream' };
+        // ===== 批量优化：兼容 bufs 多片数组 + buf 单片 + b64 单片三种格式 =====
+        // bufs 多片模式下一次性 Buffer.concat + 一次 ws.write（IPC 次数降 64 倍）
+        // ✅ Bugfix：空 bufs（文件总片数正好 BATCH 整数倍时 flush 残留为空）直接返回 ok
         var buf;
-        if (data.buf) {
+        if (Array.isArray(data.bufs)) {
+            if (data.bufs.length === 0) {
+                // 空数组 → 不写任何东西，幂等返回
+                return { ok: true, written: 0, total_bytes: s.bytes, pending: s.pending };
+            }
+            // 批量模式：渲染层攒够 BATCH 片一次性 invoke
+            var list = data.bufs.map(function (ab) { return Buffer.from(ab); });
+            buf = list.length === 1 ? list[0] : Buffer.concat(list);
+        } else if (data.buf) {
             // ArrayBuffer 直传路径（渲染层 Uint8Array.buffer）
             buf = Buffer.from(data.buf);
         } else if (data.b64) {
@@ -4416,8 +4440,9 @@ ipcMain.handle('p2pfile:streamAppend', async function (event, data) {
         } else {
             return { ok: false, err: 'no_data' };
         }
-        if (s.pending > 32) {
-            // 反压保护：超过 32 片未确认写，暂停（发送方 ACK 驱动背压会自动降速）
+        // 反压保护：pending 按 invoke 次数计（批量模式一次 invoke 写 N 片）
+        // 阈值从 32 片 → 8 次 invoke（每次 ≈ 1MB，8MB 积压触发反压，比单片模式阈值更精准）
+        if (s.pending > 8) {
             return { ok: false, err: 'backpressure', pending: s.pending };
         }
         s.pending++;
@@ -4441,9 +4466,16 @@ ipcMain.handle('p2pfile:streamClose', async function (event, data) {
         if (!data || !data.stream_id || !data.msg_id) return { ok: false };
         var s = p2pStreams[data.stream_id];
         if (!s) return { ok: false, err: 'no_stream' };
-        // 等所有 pending write 完成
-        await new Promise(function (resolve) {
-            function tick() { if (s.pending <= 0) resolve(); else setImmediate(tick); }
+        // 等所有 pending write 完成（加 10s 超时保护，防磁盘故障 ws.write callback 不触发 → 死循环卡死主进程）
+        await new Promise(function (resolve, reject) {
+            var timeout = setTimeout(function () {
+                console.warn('[p2pfile] streamClose pending wait 超时（10s），force ws.end 不阻塞');
+                resolve(); // 超时不 reject，继续往下走
+            }, 10000);
+            function tick() {
+                if (s.pending <= 0) { clearTimeout(timeout); resolve(); return; }
+                setImmediate(tick);
+            }
             tick();
         });
         await new Promise(function (resolve, reject) {
@@ -4495,20 +4527,62 @@ ipcMain.handle('p2pfile:renameMsg', async function (event, data) {
         var toName = String(data.name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
         var toPath = path.join(p2pDiskRoot(), safeUser, String(data.to_msg_id) + '_' + toName);
         await fs.promises.mkdir(path.dirname(toPath), { recursive: true });
-        await fs.promises.rename(fromPath, toPath);
-        return { ok: true, path: toPath };
-    } catch (e) {
-        // ✅ Bugfix：ENOENT 不再兜底成 ok:true（假成功会让渲染层以为 rename 了其实没有，
-        // 导致 cacheGet/diskGet 用 <msg_id> 拼路径找不到文件 → 用户点历史气泡提示"文件不存在"）
-        if (e && e.code === 'ENOENT') {
+        // ✅ Windows 杀软/Defender/索引器扫描大文件后会锁住文件 1-3 秒
+        // fs.rename 遇到 EACCES/EPERM 必须重试（经典 Windows 文件锁问题）
+        var MAX_RETRIES = 8;
+        var delay = 300; // 初始 300ms，指数退避 300→600→1200→2400... 最多 15s
+        var lastErr = null;
+        for (var i = 0; i < MAX_RETRIES; i++) {
+            try {
+                await fs.promises.rename(fromPath, toPath);
+                if (i > 0) console.log('[p2pfile] renameMsg 第 ' + i + ' 次重试成功:', fromPath);
+                return { ok: true, path: toPath };
+            } catch (retryErr) {
+                lastErr = retryErr;
+                var code = retryErr && retryErr.code;
+                // EACCES / EPERM = Windows 文件锁（杀软/索引器）；EBUSY = 类似
+                var isLock = (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY');
+                if (!isLock) break; // 其他错误不重试
+                console.warn('[p2pfile] renameMsg 文件锁中，第 ' + (i + 1) + '/' + MAX_RETRIES + ' 次重试 ' + delay + 'ms:', code);
+                await new Promise(function (r) { setTimeout(r, delay); });
+                delay = Math.min(delay * 2, 3000); // 指数退避，封顶 3s
+            }
+        }
+        if (lastErr && lastErr.code === 'ENOENT') {
             console.warn('[p2pfile] renameMsg 源文件不存在 ENOENT:', fromPath,
                 '（可能已被外部清理/磁盘满/Disk Cleanup 清理 AppData 目录）');
             return { ok: false, err: 'enoent', path: fromPath };
         }
-        console.warn('[p2pfile] renameMsg 失败:', e && e.message);
+        console.warn('[p2pfile] renameMsg 最终失败（重试 ' + MAX_RETRIES + ' 次后仍被锁）:',
+            lastErr && lastErr.message, 'from=', fromPath);
+        return { ok: false, err: lastErr && lastErr.code };
+    } catch (e) {
+        console.warn('[p2pfile] renameMsg 异常:', e && e.message);
         return { ok: false };
     }
 });
+
+// SHA-256 校验（渲染层 onRecvEof 调）：Node crypto 流式读磁盘算 SHA-256，原生 C++ 实现，
+// 1GB 文件 ≈ 1s（比渲染层纯 JS 快 30x），主进程不受 Electron watchdog 限制（不会杀进程）
+ipcMain.handle('p2pfile:verifySha', async function (event, data) {
+    try {
+        if (!data || !data.path) return { ok: false, err: 'missing path' };
+        var hash = crypto.createHash('sha256');
+        var input = fs.createReadStream(data.path);
+        var p = new Promise(function (resolve, reject) {
+            input.on('data', function (chunk) { hash.update(chunk); });
+            input.on('end', function () { resolve(hash.digest('hex')); });
+            input.on('error', reject);
+        });
+        var sha256 = await p;
+        var expected = (data.expected || '').toLowerCase();
+        return { ok: true, sha256: sha256, expected: expected, match: expected ? sha256 === expected : true };
+    } catch (e) {
+        console.warn('[p2pfile] verifySha 失败:', e && e.message);
+        return { ok: false, err: e && e.message };
+    }
+});
+
 // P0 修复补充：磁盘流模式下文件已经在本地磁盘，渲染层传 path 让主进程直接打开或另存为
 // open: shell.openPath 用系统默认关联应用打开（微信 PC 同款"点开即用"）
 // saveAs: dialog.showSaveDialog 弹另存为 → fs.copyFile 到用户选的位置
@@ -4516,24 +4590,27 @@ ipcMain.handle('p2pfile:openOrSave', async function (event, data) {
     try {
         if (!data || !data.path) return { ok: false };
         var mode = data.mode || 'open'; // 'open' | 'saveAs'
-        var exists = await fs.promises.access(data.path, fs.constants.R_OK).then(function () { return true; }).catch(function () { return false; });
-        if (!exists) return { ok: false, err: 'not_found' };
+        // 同步 fs.existsSync 避免 fs.promises.access 在某些 Electron 内核版本里
+        // 返回不可序列化结果导致 "An object could not be cloned"
+        var p = String(data.path);
+        if (!fs.existsSync(p)) return { ok: false, err: 'not_found' };
         if (mode === 'open') {
-            var r = shell.openPath(data.path);
-            // Windows 上 shell.openPath 返回空串=成功，非空=错误消息
-            return { ok: r === '' || !r, path: data.path, err: r || '' };
+            // Electron 14+ shell.openPath 返回 Promise<string>（空串=成功，非空=错误消息）
+            var r = await shell.openPath(p);
+            var ok = (r === '' || r == null);
+            return { ok: ok, path: p, err: String(r || '') };
         } else {
             var saveR = await dialog.showSaveDialog({
                 title: '另存为',
-                defaultPath: path.basename(data.path)
+                defaultPath: path.basename(p)
             });
             if (saveR.canceled || !saveR.filePath) return { ok: false, err: 'canceled' };
-            await fs.promises.copyFile(data.path, saveR.filePath);
-            return { ok: true, path: saveR.filePath };
+            await fs.promises.copyFile(p, saveR.filePath);
+            return { ok: true, path: String(saveR.filePath) };
         }
     } catch (e) {
         console.warn('[p2pfile] openOrSave 失败:', e && e.message);
-        return { ok: false, err: e && e.message };
+        return { ok: false, err: String(e && e.message || '') };
     }
 });
 
@@ -6611,6 +6688,12 @@ ipcMain.handle('app:install-dirs', async function () {
 
 app.whenReady().then(async function () {
     console.log('[BOOT] whenReady +' + (Date.now() - BOOT_T0) + 'ms');
+    // ✅ 启动里程碑：打印关键路径，排障直接可见 main.log 在哪
+    mainLog('[BOOT] ======== 应用启动 ========');
+    mainLog('[BOOT] userData=' + app.getPath('userData'));
+    mainLog('[BOOT] main.log=' + path.join(app.getPath('userData'), 'main.log'));
+    mainLog('[BOOT] received_files=' + path.join(app.getPath('userData'), 'received_files'));
+    mainLog('[BOOT] platform=' + process.platform + ' arch=' + process.arch);
     // 阶段一百三十四：单实例锁二次守卫——非首实例 app.quit() 异步执行期间 whenReady 仍会触发，
     // 不建窗口直接返回（否则第二实例闪现一个窗口后被 quit 杀掉，实测 2026-09-16）
     // 原实现：无此守卫（窗口闪现根因）

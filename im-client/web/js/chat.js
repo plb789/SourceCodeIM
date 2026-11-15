@@ -4437,15 +4437,24 @@
             if (url.indexOf('file:///') === 0 && window.desktop && window.desktop.p2pOpenOrSave) {
                 // file:///C:/path/my%20file.zip → C:\path\my file.zip
                 // 注意：URL 可能包含 %20 / %2F 等编码字符，必须 decodeURIComponent
-                try { var localPath = decodeURIComponent(url.replace(/^file:\/\//, '').replace(/\//g, '\\')); }
-                catch (e) { localPath = url.replace(/^file:\/\//, '').replace(/\//g, '\\'); }
+                // 关键：/^file:\/\// 只匹配两个斜杠（正则里的 / 是结束符），
+                //       /^file:\/\/\// 才匹配 file:/// 三个斜杠，
+                //       用 /^file:\/+/ 更稳（1~N 个斜杠都能吃）
+                try { var localPath = decodeURIComponent(url.replace(/^file:\/+/, '').replace(/\//g, '\\')); }
+                catch (e) { localPath = url.replace(/^file:\/+/, '').replace(/\//g, '\\'); }
                 var mode = saveMode ? 'saveAs' : 'open';
+                try { if (window.desktop && window.desktop.log) window.desktop.log('[imDownload] file:/// 分支 url=' + url + ' localPath=' + localPath + ' mode=' + mode); } catch (e) {}
                 window.desktop.p2pOpenOrSave({ path: localPath, mode: mode }).then(function (r) {
+                    try { if (window.desktop && window.desktop.log) window.desktop.log('[imDownload] openOrSave result=' + JSON.stringify(r)); } catch (e) {}
                     if (!r || !r.ok) {
+                        if (r && r.err === 'canceled') return; // 用户主动取消另存为，静默不提示
                         if (r && r.err === 'not_found') showToast(I18N.t('文件不存在'));
                         else showToast(I18N.t('打开文件失败'));
                     }
-                }).catch(function () { showToast(I18N.t('打开文件失败')); });
+                }).catch(function (err) {
+                    try { if (window.desktop && window.desktop.log) window.desktop.log('[imDownload] openOrSave catch err=' + err); } catch (e) {}
+                    showToast(I18N.t('打开文件失败'));
+                });
                 return;
             }
             downloadWithProgress(url, name);
@@ -7448,7 +7457,7 @@
             var bf = el.querySelector('.bubble-file');
             if (bf && info.url) {
                 bf.setAttribute('data-url', info.url);
-                console.log('[P2P onCached] 气泡 data-url 已更新:', info.nonce, '→', info.url);
+                try { if (window.desktop && window.desktop.log) window.desktop.log('[P2P onCached] 气泡 data-url 已更新 nonce=' + info.nonce + ' → ' + info.url); } catch (e) {}
             }
         } catch (e) {}
     };
@@ -7491,16 +7500,26 @@
             return;
         }
         if (meta.action === 'done_ack') {
+            try { if (window.desktop && window.desktop.log) window.desktop.log('[P2P done_ack] raw: ' + JSON.stringify({ nonce: nonce, transfer_id: meta.transfer_id, msg_id: meta.msg_id })); } catch (e) {}
             // 双方：按 nonce 回填 msg_id 转正式文件卡片（done_ack 为服务端归口系统帧，from_user 为空）
+            // ✅ Bugfix 双重防护：先 nonce 找，找不到按 transfer_id fallback（同 abort handler 口径）
             var el = messageList.querySelector('.message[data-nonce="' + nonce + '"]');
-            if (!el || !meta.msg_id) return;
+            if (!el && meta.transfer_id) {
+                el = messageList.querySelector('.message[data-p2p-id="' + meta.transfer_id + '"]');
+            }
+            try { if (window.desktop && window.desktop.log) window.desktop.log('[P2P done_ack] el=' + !!el + ' recvFiles=' + !!P2PFile.receivedURL(nonce)); } catch (e) {}
+            // ✅ Bugfix：即使找不到气泡，cacheReceived 也必须执行（rename 磁盘文件是持久化关键操作）
+            // race condition 场景：done_ack 比 finalize 先到（极罕见），或 nonce 特殊字符 CSS selector 解析失败
+            if (window.P2PFile && P2PFile.cacheReceived && nonce && meta.msg_id) {
+                try {
+                    var r = await P2PFile.cacheReceived(nonce, meta.msg_id);
+                    try { if (window.desktop && window.desktop.log) window.desktop.log('[P2P done_ack] cacheReceived result: ' + JSON.stringify(r)); } catch (e) {}
+                } catch (e) { try { if (window.desktop && window.desktop.log) window.desktop.log('[P2P done_ack] cacheReceived err: ' + e); } catch (ee) {} }
+            }
+            if (!el || !meta.msg_id) { try { if (window.desktop && window.desktop.log) window.desktop.log('[P2P done_ack] EARLY RETURN el=' + !!el + ' msg_id=' + meta.msg_id); } catch (e) {} return; }
             el.setAttribute('data-msg-id', meta.msg_id);
             // ✅ Bugfix：cacheReceived 内部 renameMsg 是异步的，必须 await 它完成（rename 磁盘文件到 <msg_id>_<name>）
             // 再读 recvUrl 回填 data-url——否则 rename 把磁盘文件改走后气泡还指向旧的 pending 临时路径！
-            if (window.P2PFile && P2PFile.cacheReceived) {
-                try { await P2PFile.cacheReceived(nonce, meta.msg_id); } catch (e) {}
-            }
-            // 接收方：回填 blob 地址（引擎组装完成前 done_ack 先到时由 saved 阶段补齐）
             var recvUrl = P2PFile.receivedURL(nonce);
             var bf = el.querySelector('.bubble-file');
             if (bf && recvUrl) bf.setAttribute('data-url', recvUrl);

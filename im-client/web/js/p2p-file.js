@@ -34,6 +34,11 @@
     function available() { return typeof RTCPeerConnection !== 'undefined'; }
     function platform() { return window.desktop ? (window.__webCallBridge ? 'web' : 'pc') : ''; }
     function genId() { return 'p' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10); }
+    // ✅ 渲染层日志同时写 console + main.log（desktop.log 桥），打包后无控制台时 main.log 可查
+    function plog(txt) {
+        console.log(txt);
+        try { if (window.desktop && window.desktop.log) window.desktop.log(txt); } catch (e) {}
+    }
     // ===== P0 修复：磁盘流式落盘能力探测（PC Electron 端才有 desktop.p2pStream* 桥） =====
     // 有磁盘能力：onRecvChunk 每片直接 streamAppend 写磁盘 → 内存恒定 ≈ 16KB（单分片），
     // 任意大小文件安全。WEB/手机端自动降级为 chunks 数组 + new Blob（大文件仍有风险但 P2P
@@ -503,25 +508,37 @@
     function onRecvChunk(sess, dc, buf) {
         if (sess.state !== 'receiving') return;
         var u8 = new Uint8Array(buf);
-        sess.hasher.update(u8);
+        // ✅ SHA-256 主线程瓶颈移除：磁盘流模式下 hasher.update 完全跳过（主进程 verifySha 时再流式读磁盘算）
+        // 降级内存模式保留 hasher.update（文件还没写磁盘，只能纯 JS 算）
+        if (!sess.diskStream) sess.hasher.update(u8);
         sess.received += u8.length;
         sess.count++;
-        // ===== P0 修复：有磁盘流时分片直接 append，不再推 chunks 数组（内存恒定 ≈ 单分片 16KB） =====
-        // 无磁盘流（WEB/手机端或 open 失败降级）时仍走 chunks 数组（原路径保留）
+        // ===== P0 修复 + 批量优化：有磁盘流时分片攒 BATCH(64) 片合并一次 invoke =====
+        // 每 16KB 片 → 攒 64 片 ≈ 1MB → 合并 invoke → 主进程 Buffer.concat 一次 write
+        // IPC 次数降 64 倍（1GB 文件从 62500 次 → 977 次），主进程压力降 98%
         if (sess.diskStream) {
-            // fire-and-forget：不 await，主线程立即返回；主进程 pending>32 回压时返回 backpressure
-            // → 接收方暂停发 ack（backpressure 标记） → 发送方无 ack 自然减速（真正的滑窗背压）
-            var arrayBuf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
-            window.desktop.p2pStreamAppend({
-                stream_id: sess.diskStream,
-                buf: arrayBuf
-            }).then(function (r) {
-                if (r && !r.ok && r.err === 'backpressure') {
-                    sess.backpressure = true;
-                } else if (sess.backpressure && r && r.ok) {
-                    sess.backpressure = false;
-                }
-            }).catch(function () {});
+            sess.pendingChunks = sess.pendingChunks || [];
+            sess.pendingChunks.push(u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength));
+            var BATCH = 64;
+            var BACKPRESSURE_QUEUE = BATCH * 4; // 256 片 ≈ 4MB 积压触发反压
+            // 队列积压过多 → 触发反压（暂停 ack → 发送方自动降速）
+            if (sess.pendingChunks.length >= BACKPRESSURE_QUEUE) {
+                sess.backpressure = true;
+            }
+            // 攒够 BATCH 片才 invoke（最后一批不足 BATCH 由 onRecvEof flush 处理）
+            if (sess.pendingChunks.length >= BATCH) {
+                var bufs = sess.pendingChunks.splice(0, BATCH);
+                window.desktop.p2pStreamAppend({
+                    stream_id: sess.diskStream,
+                    bufs: bufs
+                }).then(function (r) {
+                    if (r && !r.ok && r.err === 'backpressure') {
+                        sess.backpressure = true;
+                    } else if (sess.backpressure && r && r.ok) {
+                        sess.backpressure = sess.pendingChunks.length >= BACKPRESSURE_QUEUE;
+                    }
+                }).catch(function () {});
+            }
         } else {
             // 降级路径：内存数组（WEB/手机端或 open 失败）
             sess.chunks.push(u8);
@@ -547,54 +564,92 @@
         if (sess.state !== 'receiving') return;
         sess.state = 'verifying';
         try { dc.send(JSON.stringify({ t: 'ack', next_seq: sess.count, next_write_seq: sess.count })); } catch (e) {} // 最后一片补 ack
-        var local = sess.hasher.hex();
-        if (m.sha256 && m.sha256 !== local) {
-            // ===== P0 修复：SHA 不匹配时要 abort 磁盘流（避免留 tmp 文件） =====
-            if (sess.diskStream) {
-                window.desktop.p2pStreamAbort({ stream_id: sess.diskStream }).catch(function () {});
-                sess.diskStream = null;
+        // ✅ SHA-256 主线程瓶颈移除：磁盘流模式 hasher.update 已跳过，此处 hasher.hex() 拿不到正确值
+        // 改为等 streamClose 完成后磁盘文件存在时调主进程 p2pVerifySha 流式读磁盘算
+        var local = '';
+        if (!sess.diskStream) {
+            // 降级内存模式（WEB/手机端）：hasher.update 还在走，直接算
+            local = sess.hasher.hex();
+            if (m.sha256 && m.sha256 !== local) {
+                fail(sess, 'sha_mismatch');
+                return;
             }
-            fail(sess, 'sha_mismatch'); // 终验失败：通知发送方 abort 回退 HTTP 全量重传（设计 §7）
-            return;
         }
         try { dc.send(JSON.stringify({ t: 'complete' })); } catch (e) {}
         sess.state = 'done';
         emit(sess, 'sent', 100, 0);
 
         // ===== P0 修复：有磁盘流时 streamClose → 生成 file:/// URL，完全跳过 new Blob 组装 =====
-        // 这步是"大文件卡死"的关键：原来收齐瞬间 new Blob(全部分片) 主线程卡 + 内存爆。
-        // 现在磁盘已经存好了，直接把磁盘路径包装成 file:/// URL 给气泡点击打开/另存为。
-        //
-        // sig(done) 必须等 finalize 完成（recvFiles 填充好 diskPath）后再发——否则 done_ack
-        // 回来时 cacheReceived 发现 f.diskPath 为空，rename 不会执行，磁盘上就留着 pending_xxx 临时名。
+        // 关键：磁盘流模式的 SHA 校验移到 streamClose 后（磁盘文件已存在）调主进程 verifySha
         var finalize = function () {
             var url = '', blob = null, diskPath = '';
             if (sess.diskStream) {
-                return window.desktop.p2pStreamClose({
-                    stream_id: sess.diskStream,
-                    username: myUsername(),
-                    msg_id: 'pending_' + sess.id,   // 临时名，done_ack 回来后 cacheReceived 再 rename 成正式 msg_id
-                    name: safeName(sess.metaName)
+                // ===== 批量优化关键：streamClose 前必须 flush 残留 pendingChunks =====
+                // 否则最后不足 BATCH 的几片永远不会 invoke → streamClose 等 pending=0 会一直卡
+                // ✅ Bugfix：flush 前必须检查 length>0（文件总片数正好是 BATCH 整数倍时
+                // pendingChunks 已在 onRecvChunk 里被最后一次 BATCH invoke splice 清空了）
+                var flushPromise = Promise.resolve();
+                if (sess.pendingChunks && sess.pendingChunks.length > 0) {
+                    var flushBufs = sess.pendingChunks.splice(0);
+                    flushPromise = window.desktop.p2pStreamAppend({
+                        stream_id: sess.diskStream,
+                        bufs: flushBufs
+                    });
+                } else {
+                    // 已全部 invoke 完了（比如总片数 = 64 × N 正好整除），直接 Promise.resolve()
+                    flushPromise = Promise.resolve({ ok: true });
+                }
+                return flushPromise.then(function () {
+                    return window.desktop.p2pStreamClose({
+                        stream_id: sess.diskStream,
+                        username: myUsername(),
+                        msg_id: 'pending_' + sess.id,
+                        name: safeName(sess.metaName)
+                    });
                 }).then(function (r) {
                     sess.diskStream = null;
-                    if (r && r.ok && r.path) {
-                        diskPath = r.path;
-                        sess.diskPath = diskPath;
-                        try { url = 'file:///' + diskPath.replace(/\\/g, '/'); } catch (e) {}
-                    } else {
-                        console.warn('[P2P] streamClose 失败，降级为内存模式:', r && r.err);
+                    if (!r || !r.ok || !r.path) {
+                        console.warn('[P2P] streamClose 失败:', r && r.err);
                         if (window.desktop && window.desktop.p2pStreamAbort) {
                             window.desktop.p2pStreamAbort({ stream_id: sess.diskStream }).catch(function () {});
                         }
+                        return null;
                     }
+                    diskPath = r.path;
+                    sess.diskPath = diskPath;
+                    try { url = 'file:///' + diskPath.replace(/\\/g, '/'); } catch (e) {}
+                    // ✅ SHA-256 移主进程：Node crypto 原生 C++，1GB 文件 ≈ 1s（比纯 JS 快 30x）
+                    // 主进程不受 Electron watchdog 限制（不会杀渲染进程）
+                    if (window.desktop && window.desktop.p2pVerifySha && m.sha256) {
+                        return window.desktop.p2pVerifySha({ path: diskPath, expected: m.sha256 }).then(function (vr) {
+                            if (vr && vr.ok && vr.match) {
+                                // SHA 通过
+                                return { url: url, diskPath: diskPath, sha: vr.sha256 };
+                            } else {
+                                // SHA 不匹配 — 清理磁盘文件 + fail 回退
+                                console.warn('[P2P] SHA 校验失败！disk=' + (vr && vr.sha256) + ' expected=' + m.sha256);
+                                if (window.desktop && window.desktop.p2pStreamAbort) {
+                                    window.desktop.p2pStreamAbort({ stream_id: sess.diskStream }).catch(function () {});
+                                }
+                                fail(sess, 'sha_mismatch');
+                                return null;
+                            }
+                        });
+                    }
+                    // 没有 verifySha 桥（降级环境）或发送方没带 sha256，跳过校验
+                    return { url: url, diskPath: diskPath, sha: '' };
+                }).then(function (res) {
+                    if (!res) return null; // SHA 失败或 streamClose 失败已处理
                     sess.chunks = null;
-                    recvFiles[sess.nonce] = { url: url, name: safeName(sess.metaName), blob: blob, mime: sess.mime || '', size: sess.size, diskPath: diskPath, transfer_id: sess.id };
+                    recvFiles[sess.nonce] = { url: res.url, name: safeName(sess.metaName), blob: blob, mime: sess.mime || '', size: sess.size, diskPath: res.diskPath, transfer_id: sess.id };
+                    plog('[P2P finalize] recvFiles 填充: sess.nonce=' + sess.nonce + ' sess.id(transfer_id)=' + sess.id + ' diskPath=' + res.diskPath);
                     emit(sess, 'saved', 100, 0);
                     // ===== 关键：recvFiles 就绪后才发 done → done_ack → cacheReceived rename 链路 =====
-                    sig(sess.peer, { action: 'done', transfer_id: sess.id, sha256: local });
+                    sig(sess.peer, { action: 'done', transfer_id: sess.id, sha256: res.sha });
                     cleanup(sess);
+                    return true;
                 }).catch(function (e) {
-                    console.warn('[P2P] streamClose 异常:', e && e.message);
+                    console.warn('[P2P] streamClose/verifySha 异常:', e && e.message);
                     sess.chunks = null;
                     recvFiles[sess.nonce] = { url: '', name: safeName(sess.metaName), blob: null, mime: sess.mime || '', size: sess.size, diskPath: '', transfer_id: sess.id };
                     emit(sess, 'saved', 100, 0);
@@ -759,9 +814,22 @@
     }
     // 接收端缓存写入：chat.js done_ack（msg_id 已知）调用；发送端无接收 blob 引擎内部判空跳过
     // ✅ 返回 Promise：chat.js done_ack handler 必须 await 后再回填 data-url（否则气泡会指向旧的 pending 临时路径）
-    function cacheReceived(nonce, msgId) {
+    function cacheReceived(nonce, msgId, _retries) {
         var f = recvFiles[nonce];
-        if (!f || !msgId) return Promise.resolve(null);
+        plog('[P2P cacheReceived] 入参 nonce=' + nonce + ' msgId=' + msgId + ' f=' + JSON.stringify(f ? { diskPath: f.diskPath, transfer_id: f.transfer_id, name: f.name } : null));
+        if (!f || !msgId) {
+            // ✅ race condition 防护：done_ack 可能比 finalize 先到（极罕见，磁盘慢时），
+            // 此时 recvFiles[nonce] 还没填充，需要等 finalize 完成再重试
+            var retries = _retries || 0;
+            if (retries < 5 && nonce && msgId && !f) {
+                console.warn('[P2P] cacheReceived recvFiles miss，retry ' + retries + '/5 nonce=' + nonce);
+                return new Promise(function (resolve) {
+                    setTimeout(function () { resolve(cacheReceived(nonce, msgId, retries + 1)); }, 200);
+                });
+            }
+            if (!f) console.warn('[P2P] cacheReceived recvFiles miss 放弃 nonce=' + nonce);
+            return Promise.resolve(null);
+        }
         // ===== P0 修复：磁盘流模式下 f.blob 为 null（没有内存 Blob），跳过 dbPut 和 saveP2PFile =====
         // 改为 rename pending_<transfer_id> → <msg_id>_<name>（文件已经在磁盘上了，重命名即可）
         // ✅ Bugfix：之前用正则从 f.diskPath 里猜 transfer_id 会失败（sess.id 本身带下划线 p<hex>_<hex>），
@@ -829,18 +897,36 @@
         });
     }
     function diskGet(msgId, name) {
-        if (!cacheOn('im_p2p_disk_save') || !window.desktop || !window.desktop.readP2PFile) {
+        if (!cacheOn('im_p2p_disk_save') || !window.desktop) {
             return Promise.resolve(null);
         }
-        return window.desktop.readP2PFile({ username: myUsername(), msg_id: msgId, name: name || '' }).then(function (r) {
-            if (r && r.ok && r.buf) {
-                try {
-                    var blob = new Blob([r.buf]);
-                    return { url: URL.createObjectURL(blob), name: r.name || name || 'file', blob: blob, mime: '' };
-                } catch (e) {}
-            }
-            return null;
-        }).catch(function () { return null; });
+        // ✅ P0 修复：优先用 statP2PPath（只查路径不读内存）→ 拼 file:/// URL
+        // 原来 readP2PFile 读整个文件到内存 → 1GB 文件历史回填会 OOM crash！
+        if (window.desktop.statP2PPath) {
+            return window.desktop.statP2PPath({ username: myUsername(), msg_id: msgId, name: name || '' }).then(function (r) {
+                if (r && r.ok && r.path) {
+                    try {
+                        var url = 'file:///' + r.path.replace(/\\/g, '/');
+                        return { url: url, name: r.name || name || 'file', blob: null, mime: '' };
+                    } catch (e) {}
+                }
+                // 降级：statPath 失败时走旧 readP2PFile 兜底（某些场景可能需要）
+                return fallbackRead();
+            }).catch(function () { return null; });
+        }
+        return fallbackRead();
+        function fallbackRead() {
+            if (!window.desktop.readP2PFile) return Promise.resolve(null);
+            return window.desktop.readP2PFile({ username: myUsername(), msg_id: msgId, name: name || '' }).then(function (r) {
+                if (r && r.ok && r.buf) {
+                    try {
+                        var blob = new Blob([r.buf]);
+                        return { url: URL.createObjectURL(blob), name: r.name || name || 'file', blob: blob, mime: '' };
+                    } catch (e) {}
+                }
+                return null;
+            }).catch(function () { return null; });
+        }
     }
     // 阶段一百五十九补：手动清理（设置-网络"缓存清理"按钮）——清空 IndexedDB 全部缓存 +
     // PC 端磁盘缓存目录（web 端无桥仅清 IDB，disk 返回 null）；清理后历史卡片回填失效回到原提示

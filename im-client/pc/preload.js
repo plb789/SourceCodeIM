@@ -7,6 +7,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
     platform: process.platform,
+    // ✅ 渲染层日志落盘 main.log（排查 P2P 文件传输链路用）
+    log: function (text) {
+        try { ipcRenderer.send('client:log', String(text == null ? '' : text)); } catch (e) {}
+    },
     // 阶段六十六：系统桌面通知（Agent 任务完结提醒等场景），转发主进程弹系统通知
     // avatar：好友头像地址（/static/upload/xxx 或绝对 URL），主进程下载作通知大图，缺失回退应用图标
     notify: function (title, body, avatar) {
@@ -110,6 +114,10 @@ contextBridge.exposeInMainWorld('desktop', {
     readP2PFile: function (data) {
         return ipcRenderer.invoke('p2pfile:read', data);
     },
+    // ✅ P0 修复：零内存路径查询（历史回填用），不读文件内容，只返回路径
+    statP2PPath: function (data) {
+        return ipcRenderer.invoke('p2pfile:statPath', data);
+    },
     // 阶段一百五十九补：清空 P2P 磁盘缓存目录（data = {username}，返回 {ok, count}）
     clearP2PFiles: function (data) {
         return ipcRenderer.invoke('p2pfile:clear', data);
@@ -146,6 +154,10 @@ contextBridge.exposeInMainWorld('desktop', {
     // ===== P0 修复补充：磁盘流 rename（done_ack 拿到 msg_id 后把 pending_<transfer_id> 重命名为 <msg_id>_<name>） =====
     p2pRenameMsg: function (data) {
         return ipcRenderer.invoke('p2pfile:renameMsg', data);
+    },
+    // SHA-256 校验：主进程 Node crypto 流式读磁盘算（原生 C++，1GB ≈ 1s）
+    p2pVerifySha: function (data) {
+        return ipcRenderer.invoke('p2pfile:verifySha', data);
     },
     // ===== P0 修复补充：磁盘流模式下文件已在本地磁盘，主进程直接用系统关联应用打开或另存为 =====
     // {path, mode:'open'|'saveAs'} → {ok, path?, err?}
