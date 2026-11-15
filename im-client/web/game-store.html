@@ -541,6 +541,12 @@
             background: var(--panel-bg);
             border: 1px solid var(--border);
             overflow: hidden;
+            /* 关键：固定最小高度与左侧 rows-list 对齐。
+               没有这个 min-height 时，.gs-lpv-media(flex:1) 因父容器无确定高度导致 tile(flex:1 + flex-basis:0%) 塌缩 →
+               video 元素在 metadata 加载前无固有尺寸 → tile 高度为 0 → media 塌 → pv 瞬间变矮 →
+               .gs-lrows 容器高度突变 → 下方区块可见抖动（原来就存在的问题，不是本次修复引入的）。
+               设 min-height 后，media flex:1 能分到确定空间 → tile 高度稳定 → video 加载与否都不影响布局。 */
+            min-height: 520px;
         }
 
         .gs-lpv-name {
@@ -2602,7 +2608,7 @@
 
         .gs-notice-card-main .gs-notice-card-text { -webkit-line-clamp: 3; }
 
-        .gs-notice-card-hint { font-size: 11px; color: var(--text-light); margin-top: auto; }
+        .gs-notice-card-hint { font-size: 11px; color: var(--text-light); }
 
         /* banner 通栏大图变体（图上文下）：首图全宽 cover 高封顶 340px，余图缩略网格续排 */
         .gs-notice-card-banner {

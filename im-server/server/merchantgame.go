@@ -428,7 +428,7 @@ func merchantNoticeClean(req *struct {
 	Layout  string `json:"layout"`
 }, me string) (imgs, cover string, errCode int, err error) {
 	req.Title = strings.TrimSpace(req.Title)
-	req.Content = strings.TrimSpace(req.Content)
+	req.Content = gameNoticeContentClean(req.Content)
 	if req.GameID == 0 {
 		return "", "", http.StatusBadRequest, fmt.Errorf("参数错误")
 	}
@@ -518,7 +518,7 @@ func (s *Server) handleMerchantNoticeUpdate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	req.Title = strings.TrimSpace(req.Title)
-	req.Content = strings.TrimSpace(req.Content)
+	req.Content = gameNoticeContentClean(req.Content)
 	if utf8.RuneCountInString(req.Title) > 64 {
 		adminFail(w, http.StatusBadRequest, "公告标题不能超过 64 字")
 		return

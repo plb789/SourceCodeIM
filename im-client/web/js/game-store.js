@@ -1490,45 +1490,40 @@
         }
         var wrap = el('div', 'gs-lrows');
         var rows = el('div', 'gs-lrows-list');
-        // 右侧预览面板：悬停行重建内容（innerHTML 清空即中止旧媒体下载/播放，⑯ 同源约定）
+        // 右侧预览面板：悬停行重建内容
         var pv = el('div', 'gs-lpv');
         pv.__gid = 0;
-        var pvTimer = null;
-        // 榜单预览面板切换：先正确卸载旧视频释放解码器，再加 60ms 防抖减少快速扫过时的资源竞争
-        function lpvRender(g, immediate) {
-            clearTimeout(pvTimer);
-            pvTimer = null;
-            if (pv.__gid === g.id && !immediate) return; // 同游戏重复悬停不重建（防视频重载闪烁）
-            function doRender() {
-                // 关键：清空前先正确卸载旧视频（pause + 清 src + load），释放解码器资源
-                // 否则 innerHTML='' 只是从 DOM 移除，浏览器解码器不会立即释放，快速切换时多个解码器竞争导致卡顿
-                unloadVideos(pv);
-                pv.__gid = g.id;
-                pv.innerHTML = '';
-                pv.appendChild(el('div', 'gs-lpv-name', g.name || (T('游戏 #') + g.id)));
-                if (g.review_summary) {
-                    var rev = el('div', 'gs-lpv-rev');
-                    rev.appendChild(document.createTextNode(T('玩家评测: ')));
-                    rev.appendChild(el('b', '', g.review_summary));
-                    rev.appendChild(document.createTextNode(' · ' + fmtCount(g.review_total) + T(' 篇')));
-                    pv.appendChild(rev);
-                }
-                if (g.short_desc) pv.appendChild(el('div', 'gs-lpv-desc', g.short_desc));
-                if ((g.tags || []).length) {
-                    var tg = el('div', 'gs-lpv-tags');
-                    g.tags.slice(0, 5).forEach(function (t) { tg.appendChild(el('span', 'gs-car-tag', t)); });
-                    pv.appendChild(tg);
-                }
-                pv.appendChild(lpvMediaEl(g, 4));
+        // 关键修复：每次重建前先正确卸载旧视频（pause + 清 src + load）释放解码器
+        // 原代码 innerHTML='' 只是从 DOM 移除，浏览器解码器不会立即释放，
+        // 快速扫过 8 行时多个未释放解码器挤满池 → 新视频排队 → 卡住/白屏
+        // 保持同步执行（原设计），让 innerHTML='' + appendChildren 在同一事件循环内完成，
+        // 浏览器合并成一次 layout，避免容器高度变化导致下方区块可见抖动
+        function lpvRender(g) {
+            if (pv.__gid === g.id) return; // 同游戏重复悬停不重建（防视频重载闪烁）
+            unloadVideos(pv);
+            pv.__gid = g.id;
+            pv.innerHTML = '';
+            pv.appendChild(el('div', 'gs-lpv-name', g.name || (T('游戏 #') + g.id)));
+            if (g.review_summary) {
+                var rev = el('div', 'gs-lpv-rev');
+                rev.appendChild(document.createTextNode(T('玩家评测: ')));
+                rev.appendChild(el('b', '', g.review_summary));
+                rev.appendChild(document.createTextNode(' · ' + fmtCount(g.review_total) + T(' 篇')));
+                pv.appendChild(rev);
             }
-            if (immediate) { doRender(); return; }
-            pvTimer = setTimeout(doRender, 60);
+            if (g.short_desc) pv.appendChild(el('div', 'gs-lpv-desc', g.short_desc));
+            if ((g.tags || []).length) {
+                var tg = el('div', 'gs-lpv-tags');
+                g.tags.slice(0, 5).forEach(function (t) { tg.appendChild(el('span', 'gs-car-tag', t)); });
+                pv.appendChild(tg);
+            }
+            pv.appendChild(lpvMediaEl(g, 4));
         }
-        lpvRender(list[0], true); // 默认展示首款（Steam 同款进场即有预览）
+        lpvRender(list[0]); // 默认展示首款（Steam 同款进场即有预览）
         list.forEach(function (g) {
             var r = el('div', 'gs-lrow');
-            r.addEventListener('click', function () { clearTimeout(pvTimer); openDetail(g.id); });
-            // 悬停即切右侧预览：带 60ms 防抖减少快速扫过时的视频资源竞争
+            r.addEventListener('click', function () { openDetail(g.id); });
+            // 悬停即切右侧预览（同步执行，浏览器合并 layout，无可见抖动）
             r.addEventListener('mouseenter', function () { lpvRender(g); });
             var th = el('div', 'gs-lrow-thumb');
             var pic = g.cover || (g.screenshots && g.screenshots[0]) || '';
@@ -1559,14 +1554,11 @@
         wrap.appendChild(pv);
         // 鼠标离开榜单区域时暂停预览视频（保留 DOM 和最后状态，节省解码器资源）
         wrap.addEventListener('mouseleave', function () {
-            clearTimeout(pvTimer);
             var vids = pv.querySelectorAll('video');
             for (var i = 0; i < vids.length; i++) { try { vids[i].pause(); } catch (e) {} }
         });
-        // 区块销毁钩子：父容器 innerHTML 重建时先清理定时器和视频解码器
+        // 区块销毁钩子：父容器 innerHTML 重建时先清理视频解码器
         block.__destroy = function () {
-            clearTimeout(pvTimer);
-            pvTimer = null;
             unloadVideos(pv);
         };
         block.appendChild(wrap);
@@ -2474,6 +2466,62 @@
         osbTick($('gsLibMain'), 50); // 异步填充后刷新主区自绘滚动条
     }
 
+    // 公告正文安全渲染：纯文本存储 + 有限链接解析。
+    //  - 换行符 \n → <br>
+    //  - <a href="URL">文字</a> 格式 → 安全 <a> 元素（仅 http/https/站内相对路径放行，target=_blank, rel=noopener）
+    //  - 其他 HTML 标签全部转义为纯文本（防 XSS）
+    function renderNoticeText(text) {
+        var safeUrl = function (url) {
+            // URL 必须以 http:// https:// / ./ # 开头，且不含 javascript: 等危险向量
+            var low = url.toLowerCase().replace(/\\/g, '');
+            if (/^(https?:|\/|\.\/|#)/i.test(low) && !/javascript:|vbscript:|data:/i.test(low)) {
+                return url;
+            }
+            return '';
+        };
+        var container = document.createElement('div');
+        // 步骤1：解析 <a href="...">...</a>，其他部分先做 HTML 转义
+        var aRe = /<a\s+href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+        var lastIdx = 0;
+        var match;
+        var fragments = [];
+        while ((match = aRe.exec(text)) !== null) {
+            // 把 <a> 标签前的纯文本部分转义
+            var before = text.substring(lastIdx, match.index);
+            if (before) fragments.push({ type: 'text', data: before });
+            // href URL 安全校验
+            var href = safeUrl(match[1].trim());
+            if (href) {
+                fragments.push({ type: 'link', href: href, label: match[2].trim() });
+            } else {
+                // URL 不安全，降级为纯文本
+                fragments.push({ type: 'text', data: match[0] });
+            }
+            lastIdx = match.index + match[0].length;
+        }
+        // 最后一段纯文本
+        if (lastIdx < text.length) fragments.push({ type: 'text', data: text.substring(lastIdx) });
+        // 步骤2：逐片段渲染（纯文本先转义再处理换行）
+        fragments.forEach(function (f) {
+            if (f.type === 'link') {
+                var a = document.createElement('a');
+                a.href = f.href;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                a.textContent = f.label || f.href;
+                container.appendChild(a);
+            } else {
+                // 纯文本：先转义（浏览器 DOM 接口自动做），再按 \n 分割插入 <br>
+                var lines = f.data.split(/\r?\n/);
+                lines.forEach(function (line, i) {
+                    if (i > 0) container.appendChild(document.createElement('br'));
+                    container.appendChild(document.createTextNode(line));
+                });
+            }
+        });
+        return container;
+    }
+
     // 公告卡（多布局，管理端发布时自选样式）：
     // thumb=横向缩略图（左图右文，Steam 库动态紧凑卡）；
     // grid=图片网格（Steam 事件卡同款纵向流：1 图全宽 / 2 图两列 / ≥3 图三列最多 6 张尾张 +N）；
@@ -2491,15 +2539,26 @@
         top.appendChild(el('div', 'gs-notice-card-date', fmtDate(n.create_time || '')));
         // 头图地址归口（thumb 左图 / banner 大图共用；公告图空回退游戏 banner→cover）
         var headUrl = imgs[0] || n.cover || g.banner || g.cover || '';
+        // 可查看的图片列表：优先 imgs，退化为 headUrl
+        var viewableImgs = imgs.length ? imgs : (headUrl ? [headUrl] : []);
+        // 给元素加"图片元素"标记——card 展开事件用事件委托跳过它们
+        var markInteractive = function (el) { el.dataset.noticeInteractive = '1'; };
+
         if (layout === 'thumb') {
-            // 横向缩略图：左侧首图 200x112，右侧标签/日期/标题/摘要
+            // 横向缩略图：左侧首图 200x112，右侧标签/日期/标题/摘要/剩余图片网格
             var pic = el('div', 'gs-notice-card-pic');
             if (headUrl) {
                 var im = document.createElement('img');
                 im.src = assetUrl(headUrl);
                 im.loading = 'lazy';
                 im.draggable = false;
+                im.style.cursor = 'zoom-in';
+                markInteractive(im);
                 im.onerror = function () { pic.innerHTML = ''; pic.appendChild(buildPh(g.name || T('公告'))); };
+                im.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    openNoticeImageViewer(headUrl, viewableImgs, 0);
+                });
                 pic.appendChild(im);
             } else {
                 pic.appendChild(buildPh(g.name || T('公告')));
@@ -2508,8 +2567,18 @@
             var main = el('div', 'gs-notice-card-main');
             main.appendChild(top);
             if (n.title) main.appendChild(el('div', 'gs-notice-card-title', n.title));
-            if (n.content) main.appendChild(el('div', 'gs-notice-card-text', n.content));
-            if (imgs.length > 1) main.appendChild(el('div', 'gs-notice-card-hint', T('共 ') + imgs.length + T(' 张图片')));
+            if (n.content) {
+                var textBox = el('div', 'gs-notice-card-text');
+                textBox.appendChild(renderNoticeText(n.content));
+                main.appendChild(textBox);
+            }
+            // thumb 布局也显示剩余图片（之前只显示"共N张图片"提示不显示图片本身）
+            var restImgs = imgs.length > 1 ? imgs.slice(1) : [];
+            if (restImgs.length) {
+                main.appendChild(el('div', 'gs-notice-card-hint', T('共 ') + imgs.length + T(' 张图片')));
+                // offset=1 因为 restImgs 从 fullList 第 2 张开始
+                main.appendChild(buildNoticeGrid(restImgs, viewableImgs, 1));
+            }
             card.appendChild(main);
         } else {
             card.appendChild(top);
@@ -2522,35 +2591,75 @@
                     bi.draggable = false;
                     bi.alt = '';
                     bi.className = 'gs-notice-card-banner';
+                    bi.style.cursor = 'zoom-in';
+                    markInteractive(bi);
                     bi.onerror = function () { if (bi.parentNode) bi.parentNode.removeChild(bi); };
+                    bi.addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        openNoticeImageViewer(headUrl, viewableImgs, 0);
+                    });
                     card.appendChild(bi);
                 }
                 if (n.title) card.appendChild(el('div', 'gs-notice-card-title', n.title));
-                if (n.content) card.appendChild(el('div', 'gs-notice-card-text', n.content));
+                if (n.content) {
+                    var btBox = el('div', 'gs-notice-card-text');
+                    btBox.appendChild(renderNoticeText(n.content));
+                    card.appendChild(btBox);
+                }
                 var rest = imgs.length > 1 ? imgs.slice(1) : [];
-                if (rest.length) card.appendChild(buildNoticeGrid(rest));
+                if (rest.length) card.appendChild(buildNoticeGrid(rest, viewableImgs, 1));
             } else {
                 // 图片网格：标题/正文在上，全部图片横排网格在下
                 if (n.title) card.appendChild(el('div', 'gs-notice-card-title', n.title));
-                if (n.content) card.appendChild(el('div', 'gs-notice-card-text', n.content));
+                if (n.content) {
+                    var gtBox = el('div', 'gs-notice-card-text');
+                    gtBox.appendChild(renderNoticeText(n.content));
+                    card.appendChild(gtBox);
+                }
                 var shown = imgs.length ? imgs : (headUrl ? [headUrl] : []);
-                if (shown.length) card.appendChild(buildNoticeGrid(shown));
+                if (shown.length) card.appendChild(buildNoticeGrid(shown, viewableImgs, 0));
             }
         }
         if (n.content) {
-            card.style.cursor = 'pointer'; // 长正文可点击展开（纯图/短文卡无此交互）
-            card.addEventListener('click', function () { card.classList.toggle('expanded'); });
+            // 事件委托：只在点击非图片/非链接区域时触发展开/收起
+            card.style.cursor = 'pointer';
+            card.addEventListener('click', function (e) {
+                // 向上查找目标链：若任何一级被标记为交互元素或 <a> 标签，跳过
+                var t = e.target;
+                while (t && t !== card) {
+                    if (t.dataset && t.dataset.noticeInteractive === '1') return;
+                    if (t.tagName === 'A') return;
+                    t = t.parentNode;
+                }
+                card.classList.toggle('expanded');
+            });
         }
         return card;
     }
 
+    // 公告图片统一打开查看器（PC Electron 桥优先走独立窗口，Web 端 fallback 新窗口）
+    // 与 chat.js openImageViewer 同口径；list 支持整组翻页，index 当前图
+    function openNoticeImageViewer(targetUrl, allUrls, index) {
+        var desktop = window.desktop || null;
+        if (desktop && typeof desktop.openImageViewer === 'function') {
+            desktop.openImageViewer({ url: targetUrl, list: allUrls, index: index || 0 });
+        } else {
+            // Web 端：把完整列表挂到 window.__imageViewerList，供 image-viewer.html 通过 opener 读取翻页
+            window.__imageViewerList = (allUrls || []).slice();
+            window.open('/image-viewer.html?v=gs&url=' + encodeURIComponent(targetUrl), '_blank');
+        }
+    }
+
     // buildNoticeGrid 公告图片网格（grid/banner 布局共用）：1 图全宽 / 2 图两列 / ≥3 图三列，
-    // 最多 6 张（尾张叠 +N 余图角标），GIF 原生播放，坏图整格移除
-    function buildNoticeGrid(list) {
+    // 最多 6 张（尾张叠 +N 余图角标），GIF 原生播放，坏图整格移除；点击缩略图可打开查看器翻页
+    function buildNoticeGrid(list, fullList, offset) {
+        fullList = fullList || list;       // 完整图片列表（用于查看器翻页）
+        offset = offset || 0;              // 当前 grid 的首图在 fullList 中的索引
         var grid = el('div', 'gs-notice-card-grid n' + Math.min(list.length, 3));
         var cap = Math.min(list.length, 6);
         list.slice(0, cap).forEach(function (u, i) {
             var cell = el('div', 'gs-notice-card-cell');
+            cell.style.cursor = 'zoom-in';
             var im = document.createElement('img');
             im.src = assetUrl(u);
             im.loading = 'lazy';
@@ -2559,8 +2668,15 @@
             im.onerror = function () { if (cell.parentNode) cell.parentNode.removeChild(cell); };
             cell.appendChild(im);
             if (i === 5 && list.length > 6) {
-                cell.appendChild(el('div', 'gs-notice-card-more', '+' + (list.length - 6)));
+                var more = el('div', 'gs-notice-card-more', '+' + (list.length - 6));
+                more.style.cursor = 'zoom-in';
+                cell.appendChild(more);
             }
+            // 点击图片打开查看器：stopPropagation 防冒泡到 card 触发展开/收起
+            cell.addEventListener('click', function (e) {
+                e.stopPropagation();
+                openNoticeImageViewer(u, fullList, offset + i);
+            });
             grid.appendChild(cell);
         });
         return grid;

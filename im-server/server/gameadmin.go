@@ -3336,6 +3336,74 @@ func gameNoticeLayoutClean(v string) string {
 	}
 }
 
+// gameNoticeContentClean 公告正文消毒：纯文本字段，仅放行 <a href="安全URL">文字</a> 格式链接。
+// 其余 HTML 标签一律剔除（标签外壳去掉保留内文），换行符 \n 保留。
+// 这是存储型 XSS 的第二道防线——即使客户端消毒被绕过，服务端入库前也强制清洗。
+func gameNoticeContentClean(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	// 允许的 <a> 标签正则（只匹配 href 属性，其他属性忽略）
+	// 格式：<a href="URL">文字</a> 或 <a href='URL'>文字</a>
+	// 注意：Go 正则是 RE2 引擎，不支持 \1 反向引用，用两个引号分支的 alternation 替代
+	var aTagRe = regexp.MustCompile(`(?is)<a\s+href\s*=\s*("[^"]+"|'[^']+')[^>]*>([\s\S]*?)</a>`)
+	// 任意 HTML 标签外壳（匹配所有 <xxx> 或 </xxx>）——RE2 不支持反向引用，
+	// 危险标签整块剥离可省略（先保护安全 <a> 为占位符，再统一剥壳即可：<script>alert(1)</script>
+	// 会被剥壳为 "alert(1)" 纯文本，不再具备执行能力）
+	var anyTagRe = regexp.MustCompile(`(?is)<\s*[^>]+\s*>`)
+
+	safeURL := func(url string) bool {
+		url = strings.TrimSpace(url)
+		low := strings.ToLower(strings.ReplaceAll(url, "\\", ""))
+		if strings.Contains(low, "javascript:") || strings.Contains(low, "vbscript:") || strings.Contains(low, "data:") {
+			return false
+		}
+		return strings.HasPrefix(low, "http://") || strings.HasPrefix(low, "https://") ||
+			strings.HasPrefix(url, "/") || strings.HasPrefix(url, "./") || strings.HasPrefix(url, "#")
+	}
+
+	// 第一步：把安全的 <a> 标签替换为唯一占位符保护起来（防止被后续标签剥离误删）
+	const phPrefix = "\x00ANCHOR_"
+	const phSuffix = "_END\x00"
+	var anchors []string
+	idx := 0
+	result := aTagRe.ReplaceAllStringFunc(content, func(m string) string {
+		parts := aTagRe.FindStringSubmatch(m)
+		if parts == nil {
+			return "" // 解析失败直接丢弃
+		}
+		// parts[1] 是完整引号串 "url" 或 'url'，去掉首尾引号取 URL
+		href := strings.TrimSpace(parts[1])
+		if len(href) >= 2 {
+			first := href[0]
+			last := href[len(href)-1]
+			if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+				href = href[1 : len(href)-1]
+			}
+		}
+		label := strings.TrimSpace(parts[2])
+		if !safeURL(href) {
+			return label // URL 不安全：去掉链接外壳，只保留文字
+		}
+		// 安全：缓存标准化的 <a> 标签
+		normalized := fmt.Sprintf(`<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>`,
+			strings.ReplaceAll(href, `"`, `&quot;`), label)
+		ph := fmt.Sprintf("%s%d%s", phPrefix, idx, phSuffix)
+		anchors = append(anchors, normalized)
+		idx++
+		return ph
+	})
+	// 第二步：剥离剩余所有 HTML 标签外壳（占位符 \x00 不是 HTML，不会被匹配）
+	result = anyTagRe.ReplaceAllString(result, "")
+	// 第三步：还原占位符为安全的 <a> 标签
+	for i, a := range anchors {
+		ph := fmt.Sprintf("%s%d%s", phPrefix, i, phSuffix)
+		result = strings.ReplaceAll(result, ph, a)
+	}
+
+	return strings.TrimSpace(result)
+}
+
 // handleAdminGameNoticeCreate 发布游戏公告（标题/正文可空支持"纯图片公告"，但三者至少一项非空；
 // 图片支持 GIF 动图，最多 9 张，首图兼作动态卡头图；layout 卡片布局白名单校验）
 func (s *Server) handleAdminGameNoticeCreate(w http.ResponseWriter, r *http.Request) {
@@ -3355,7 +3423,7 @@ func (s *Server) handleAdminGameNoticeCreate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	req.Title = strings.TrimSpace(req.Title)
-	req.Content = strings.TrimSpace(req.Content)
+	req.Content = gameNoticeContentClean(req.Content)
 	req.Cover = strings.TrimSpace(req.Cover)
 	if req.GameID == 0 {
 		adminFail(w, http.StatusBadRequest, "参数错误")
@@ -3419,7 +3487,7 @@ func (s *Server) handleAdminGameNoticeUpdate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	req.Title = strings.TrimSpace(req.Title)
-	req.Content = strings.TrimSpace(req.Content)
+	req.Content = gameNoticeContentClean(req.Content)
 	if req.GameID == 0 {
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
