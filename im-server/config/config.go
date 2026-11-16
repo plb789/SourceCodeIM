@@ -271,6 +271,10 @@ type GameConfig struct {
 	Gateway GameGatewayConfig `yaml:"gateway"`
 	// Save 云存档配置节（Steam 同款云存档 P1，server/gamesave.go 归口）
 	Save GameSaveConfig `yaml:"save"`
+	// AchievementSignRequired 成就上报签名强制开关（游戏端成就解锁对接，评审结论默认 false）：
+	// false = 客户端上报未携带有效会话签名时降级放行（登录 token + 在库校验 + 防重放 + 限流四道防线兜底）；
+	// true  = 无有效会话签名一律拒绝（待链路 B 稳定、全部上报方携带会话密钥后再收紧）
+	AchievementSignRequired bool `yaml:"achievement_sign_required"`
 }
 
 // GameGatewayItem 网关地址簿条目（多网关部署：每条目=一台部署了 im-gateway 的远程服务器）

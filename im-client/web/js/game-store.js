@@ -9,6 +9,19 @@
 (function () {
     'use strict';
 
+    // ==================== 安全补丁 ====================
+    // JavaScript 原生 String 没有 .format() 方法（C#/Python 风格 {0}/{1} 占位符），
+    // 但本文件第 1370 / 1447 行使用了该方法，必须先注入 polyfill 否则 TypeError
+    if (typeof String.prototype.format !== 'function') {
+        String.prototype.format = function () {
+            var args = Array.prototype.slice.call(arguments);
+            return this.replace(/\{(\d+)\}/g, function (m, idx) {
+                var i = parseInt(idx, 10);
+                return i >= 0 && i < args.length ? args[i] : m;
+            });
+        };
+    }
+
     // ==================== 环境与登录信息 ====================
     // i18n 翻译入口（与 drive.js/gn-room.js 同款别名；英文模式查 en-US.json，缺失回退中文原文）
     function T(s, p) { return (window.I18N ? I18N.t(s, p) : s); }
@@ -58,7 +71,26 @@
         libFeed: {},       // gameId → 库内页动态数据（公告+版本，详情接口懒加载缓存）
         reviews: { gid: 0, list: [], page: 0, has_more: false, total: 0, positive: 0,
             summary: '', type: 'all', mine: null, // 详情页评测区状态（Steam 同款，每页 10 条）
-            recent: [], recent_gid: 0 } // 右栏"最近发布"小卡流（sort=latest 一次性加载，不随筛选/分页变）
+            recent: [], recent_gid: 0 }, // 右栏"最近发布"小卡流（sort=latest 一次性加载，不随筛选/分页变）
+        // 阶段二百九十五：Steam 同款个人资料页 P0 状态
+        profile: {
+            username: '',      // 当前查看的用户（空=加载中）
+            basic: null,       // 基础资料 { nickname, avatar, title, signature, level, exp, profile_bg, favorite_game_id }
+            stats: null,       // 统计数据 { total_games, total_play_hours, total_achievements, total_badges, friends_count }
+            badges: [],        // 徽章横条 [{ type, code, icon, name }]
+            recentGames: [],   // 最近游戏 [{ game_id, name, cover, play_seconds, last_play_at }]
+            favoriteGame: null,// 最爱游戏 { id, name, cover }
+            // 阶段二百九十五 P1：补齐初始化字段（避免 undefined 导致 renderComments/renderShowcases 首帧异常）
+            showcase: [],      // 展示柜配置 [{ slot, type, title, config, enabled }]
+            comments: [],      // 留言列表 [{ id, from_user, from_nickname, from_avatar, content, create_time, replies }]
+            canComment: true,   // 资料主人是否允许留言（默认允许；API 返回覆盖）
+            friends: [],       // 好友列表 [{ username, nickname, avatar, is_online }]
+            achievements: null, // P1.5: 成就列表 API 响应 { groups, unlocked, total, viewer_self }
+            reviews: null,     // P2: 用户评测列表 { list: [...], total }
+            screenshots: null, // P2.3: 截图/艺术作品列表 { list: [...] }
+            cards: null,       // P3: 卡片背包 { groups: [...] }
+            loading: false
+        }
     };
 
     // ==================== 基础工具 ====================
@@ -238,7 +270,7 @@
                 el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; update(); });
             }
         }, { passive: true });
-        if (window.ResizeObserver) new ResizeObserver(function () { update(); }).observe(el);
+        if (window.ResizeObserver) { el._osbRo = new ResizeObserver(function () { update(); }); el._osbRo.observe(el); }
         el.addEventListener('click', function () { update(); }, true);
         // 捕获阶段监听内部图片加载完成（高度变化影响滚动范围）
         el.addEventListener('load', function () { update(); }, true);
@@ -253,6 +285,7 @@
     function osbInit(el) { // 纵向
         if (el._osb) return;
         el._osb = true;
+        el.classList.add('osb-host'); // 标记：sbFind 悬停委托识别（与 .gs-scroll 并列候选）
         var thumb = document.createElement('div');
         thumb.className = 'osb-thumb';
         document.body.appendChild(thumb);
@@ -297,6 +330,7 @@
         if (el._osbH) return;
         el._osbH = true;
         el._osb = true;
+        el.classList.add('osb-host');
         var thumb = document.createElement('div');
         thumb.className = 'osb-thumb osb-h';
         document.body.appendChild(thumb);
@@ -355,11 +389,15 @@
     // 重渲染前销毁旧滑块（滑块挂 body，容器 innerHTML 重建后会变孤儿）
     function destroyOsb(el) {
         if (!el) return;
+        if (el._osbHideT) { clearTimeout(el._osbHideT); el._osbHideT = null; } // 取消 pending 的 180ms 隐藏计时器
+        if (typeof sbLast !== 'undefined' && sbLast === el) sbLast = null;     // 清悬停委托状态残留
+        if (el._osbRo) { try { el._osbRo.disconnect(); } catch(e) {} el._osbRo = null; } // 断开 ResizeObserver（强引用，不 disconnect 会持有 el）
         if (el._osbThumb) { el._osbThumb.remove(); el._osbThumb = null; }
         if (el._osbThumbH) { el._osbThumbH.remove(); el._osbThumbH = null; }
         el._osb = false;
         el._osbH = false;
         el._osbUpdate = null;
+        el.classList.remove('osb-host');
     }
 
     // ==================== Steam 同款骨架屏 + 无限滚动/分批渲染归口 ====================
@@ -438,7 +476,7 @@
 
     // 悬停显隐联动：事件委托找最近 .gs-scroll 宿主，滑块随宿主悬停浮现（延迟 180ms 防闪烁）
     var sbLast = null;
-    function sbFind(t) { return t && t.closest ? t.closest('.gs-scroll') : null; }
+    function sbFind(t) { return t && t.closest ? t.closest('.gs-scroll, .osb-host') : null; }
     function sbShow(el) {
         el.classList.add('sb-hover');
         if (el._osbThumb) el._osbThumb.classList.add('sb-show');
@@ -458,7 +496,10 @@
     }
     document.addEventListener('mouseover', function (e) {
         var host = sbFind(e.target);
-        if (host === sbLast) { if (host) clearTimeout(host._osbHideT); return; }
+        if (host === sbLast) {
+            if (host) { clearTimeout(host._osbHideT); sbShow(host); } // 确保 .sb-show 存在（可能被 180ms hide 移除后鼠标回来了）
+            return;
+        }
         if (sbLast) sbHideLater(sbLast);
         sbLast = host;
         if (sbLast) { clearTimeout(sbLast._osbHideT); sbShow(sbLast); }
@@ -479,12 +520,12 @@
     function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
     function showView(name) {
-        ['store', 'library', 'downloads', 'detail', 'online'].forEach(function (v) {
+        ['store', 'library', 'downloads', 'detail', 'online', 'profile'].forEach(function (v) {
             $('gsView' + cap(v)).classList.toggle('hidden', v !== name);
         });
         // 导航高亮：详情归属商店页签
         var tab = name === 'detail' ? 'store' : name;
-        ['store', 'library', 'downloads', 'online'].forEach(function (t) {
+        ['store', 'library', 'downloads', 'online', 'profile'].forEach(function (t) {
             $('gsNav' + cap(t)).classList.toggle('active', t === tab);
         });
         state.tab = tab;
@@ -503,7 +544,8 @@
         var scrollId = name === 'online' ? ''
             : name === 'detail' ? 'gsDetailScroll'
                 : (name === 'store' ? 'gsStoreScroll'
-                    : (name === 'library' ? 'gsLibMain' : 'gsDlList'));
+                    : (name === 'library' ? 'gsLibMain'
+                        : (name === 'profile' ? 'gsProfileScroll' : 'gsDlList')));
         if (scrollId) osbTick($(scrollId), 400);
         // 下载页签进入时重绘吞吐曲线（display:none 期间 canvas 尺寸为 0 跳绘，显示后补一帧）
         if (name === 'downloads') setTimeout(function () { renderDlGraph(); }, 80);
@@ -513,12 +555,1954 @@
         } else {
             libBarHide();
         }
+        // 个人资料页：首次进入时 osbInit 初始化悬浮滑块（GS 主窗口统一挂在 body，与 store/library 同构）
+        if (name === 'profile') {
+            osbInit($('gsProfileScroll'));
+        }
     }
 
     function closeDetail() {
         if (!state.detailId) return;
         state.detailId = 0;
         showView(state.tab);
+    }
+
+    // ==================== 阶段二百九十五：Steam 同款个人资料页 P0 ====================
+
+    // openProfile 打开个人资料页：切换视图 + 拉取/渲染（首次进入自动拉，后续切换直接显示）
+    function openProfile(targetUser) {
+        showView('profile');
+        if (!targetUser) targetUser = username;
+        if (state.profile.username === targetUser && state.profile.basic) {
+            // 已加载过 → 强制刷新所有渲染（确保留言板/展示柜等不因之前 hidden 状态丢失）
+            renderShowcases();
+            renderComments();
+            setTimeout(function () { osbTick($('gsProfileScroll')); }, 80);
+            return;
+        }
+        loadProfile(targetUser);
+    }
+
+    // 等级经验公式：Level(N) 需要的累计经验 = 500 * N²
+    // 与开发文档 §4.2 保持一致
+    function levelExpRequired(level) { return 500 * level * level; }
+    function calcLevelFromExp(exp) {
+        // 反推等级：找最大的 N 使 500*N² <= exp
+        var n = 1;
+        while (levelExpRequired(n + 1) <= exp) n++;
+        return n;
+    }
+
+    // renderProfile 渲染资料页（纯本地渲染，数据来自 state.profile；无 API 时走本地基础数据）
+    function renderProfile() {
+        var p = state.profile;
+
+        // 1. 背景横幅
+        var bg = $('gpBg');
+        if (p.basic && p.basic.profile_bg) {
+            bg.style.backgroundImage = 'url(' + assetUrl(p.basic.profile_bg) + ')';
+        } else {
+            bg.style.backgroundImage = '';
+        }
+
+        // 2. 头像（120×120 圆形）
+        var av = $('gpAv');
+        av.innerHTML = '';
+        av.classList.remove('gp-avatar-frame');
+        var shopItems = (p.basic && p.basic.shop_items) || [];
+        var hasAvFrame = shopItems.indexOf('avatar_frame') >= 0;
+        var hasGolden = shopItems.indexOf('golden_name') >= 0;
+        if (hasAvFrame) av.classList.add('gp-avatar-frame');
+        var avUrl = (p.basic && p.basic.avatar) ? assetUrl(p.basic.avatar) : '';
+        if (avUrl) {
+            var img = document.createElement('img');
+            img.src = avUrl;
+            img.alt = '';
+            img.onerror = function () { av.innerHTML = ''; av.appendChild(el('b', '', initialOf(p.basic && p.basic.nickname || p.username))); };
+            av.appendChild(img);
+        } else {
+            av.appendChild(el('b', '', initialOf((p.basic && p.basic.nickname) || p.username)));
+        }
+
+        // P2-b: 自己的资料 → 头像可点击编辑（hover 蒙层+"编辑头像"提示）
+        av.classList.remove('gp-can-edit');
+        av.removeAttribute('data-hint');
+        if (p.username === username) {
+            av.classList.add('gp-can-edit');
+            av.setAttribute('data-hint', T('点击编辑头像'));
+            av.onclick = openAvatarCropper;
+        } else {
+            av.onclick = null;
+        }
+
+        // 3. 昵称 + 称号 + 等级标签
+        var nick = (p.basic && p.basic.nickname) || p.username || '—';
+        var nickEl = $('gpNick');
+        nickEl.textContent = nick;
+        nickEl.classList.toggle('gp-golden-name', hasGolden);
+        // P1-a 称号自动显示：用户自定义 title 优先，没自定义时用后端 level_perks.title（等级配置里的预设称号）
+        var userTitle = (p.basic && p.basic.title) || '';
+        var perksTitle = (p.level_perks && p.level_perks.title) || '';
+        var title = userTitle || perksTitle;
+        var titleEl = $('gpTitle');
+        titleEl.textContent = title;
+        titleEl.classList.toggle('hidden', !title);
+
+        var lvl = (p.basic && p.basic.level) || 1;
+        $('gpLevel').textContent = 'Lv.' + lvl;
+
+        // 4. 签名
+        var sig = (p.basic && p.basic.signature) || '';
+        $('gpSig').textContent = sig;
+        $('gpSig').classList.toggle('hidden', !sig);
+
+        // 5. 按钮区（P0 只有"编辑资料"按钮；自己的资料才显示）
+        var btns = $('gpBtns');
+        btns.innerHTML = '';
+        if (p.username === username) {
+            var editBtn = el('button', 'gp-btn primary', T('编辑资料'));
+            editBtn.addEventListener('click', function () { openEditProfile(); });
+            btns.appendChild(editBtn);
+            // P1 新增按钮
+            var privBtn = el('button', 'gp-btn', T('隐私设置'));
+            privBtn.addEventListener('click', function () { openPrivacySettings(); });
+            btns.appendChild(privBtn);
+            var scBtn = el('button', 'gp-btn', T('展示柜'));
+            scBtn.addEventListener('click', function () { openShowcaseEditor(); });
+            btns.appendChild(scBtn);
+            var ssBtn = el('button', 'gp-btn', T('上传截图'));
+            ssBtn.addEventListener('click', function () { openScreenshotUpload(); });
+            btns.appendChild(ssBtn);
+            var cardBtn = el('button', 'gp-btn', T('卡片工坊'));
+            cardBtn.addEventListener('click', function () { openCardWorkshop(); });
+            btns.appendChild(cardBtn);
+            var bgBtn = el('button', 'gp-btn', T('编辑横幅'));
+            bgBtn.addEventListener('click', function () { openBackgroundEditor(); });
+            btns.appendChild(bgBtn);
+        } else {
+            var addBtn = el('button', 'gp-btn primary', T('添加好友'));
+            addBtn.addEventListener('click', function () { toast(T('好友功能走主界面，请到好友列表添加')); });
+            btns.appendChild(addBtn);
+            var msgBtn = el('button', 'gp-btn', T('发送消息'));
+            msgBtn.addEventListener('click', function () { toast(T('消息功能走主界面，请到聊天列表发起')); });
+            btns.appendChild(msgBtn);
+        }
+        // 经验记录：所有资料页都可查看（公开数据）
+        var expBtn = el('button', 'gp-btn', T('经验记录'));
+        expBtn.addEventListener('click', function () { openExpLogViewer(username); });
+        btns.appendChild(expBtn);
+        // 发表评测：只有自己的资料页显示（评测自己玩过的游戏）
+        if (p.username === username) {
+            var revBtn = el('button', 'gp-btn', T('发表评测'));
+            revBtn.addEventListener('click', function () { openReviewEditor(); });
+            btns.appendChild(revBtn);
+        }
+
+        // 6. 徽章横条
+        var badges = $('gpBadges');
+        badges.innerHTML = '';
+        if (p.badges && p.badges.length) {
+            p.badges.slice(0, 10).forEach(function (b) {
+                var bd = el('div', 'gp-badge');
+                if (b.icon) {
+                    var bi = document.createElement('img');
+                    bi.src = assetUrl(b.icon);
+                    bi.onerror = function () { bd.innerHTML = ''; bd.appendChild(el('span', 'gp-badge-ic', '🏅')); };
+                    bd.appendChild(bi);
+                } else {
+                    bd.appendChild(el('span', 'gp-badge-ic', b.type === 'level' ? '⭐' : '🏅'));
+                }
+                bd.title = b.name + (b.desc ? ' — ' + b.desc : '');
+                badges.appendChild(bd);
+            });
+        }
+
+        // 7. 统计面板
+        var st = p.stats || {};
+        $('gpStatGames').textContent = st.total_games || 0;
+        $('gpStatHours').textContent = fmtPlay((st.total_play_seconds || 0));
+        $('gpStatAch').textContent = st.total_achievements || 0;
+        $('gpStatBadges').textContent = st.total_badges || 0;
+        $('gpStatFriends').textContent = st.friends_count || 0;
+
+        // 8. 等级进度条
+        var exp = (p.basic && p.basic.exp) || 0;
+        $('gpLvlBig').textContent = 'Lv.' + lvl;
+        var curReq = levelExpRequired(lvl);
+        var nextReq = levelExpRequired(lvl + 1);
+        var pct = (nextReq - curReq > 0) ? Math.round((exp - curReq) / (nextReq - curReq) * 100) : 0;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        $('gpProgFill').style.width = pct + '%';
+        $('gpLvlExp').textContent = exp + ' / ' + nextReq + ' EXP';
+        $('gpLvlNext').textContent = '再获得 ' + Math.max(0, nextReq - exp) + ' EXP 升到 Lv.' + (lvl + 1);
+
+        // 9. 最爱游戏
+        var favCard = $('gpCardFav');
+        var favGame = p.favoriteGame;
+        if (favGame) {
+            favCard.classList.remove('hidden');
+            var favBox = $('gpFavGame');
+            favBox.innerHTML = '';
+            var card = el('div', 'gp-fav-card');
+            var favImg = document.createElement('img');
+            favImg.src = assetUrl(favGame.cover || '');
+            favImg.onerror = function () { card.innerHTML = '<div style="position:absolute;inset:0;background:var(--placeholder-bg);display:flex;align-items:center;justify-content:center;color:var(--text-light);font-size:13px;">' + (favGame.name || '?') + '</div>'; };
+            card.appendChild(favImg);
+            var favName = el('div', 'gp-fav-name', favGame.name || '—');
+            card.appendChild(favName);
+            card.addEventListener('click', function () { openDetail(favGame.id); });
+            favBox.appendChild(card);
+        } else {
+            favCard.classList.add('hidden');
+        }
+
+        // 10. 右侧主区 —— 由 renderShowcases() 统一接管（P1 展示柜引擎）
+        //    有自定义展示柜配置 → 按配置渲染；无配置自动兜底"最近游玩"
+        //    不再硬编码 gpRecentGames 元素（renderShowcases 会清空 .gp-main 重建）
+
+        // 渲染后刷新滚动滑块
+        renderShowcases(); // P1: 展示柜引擎接管右侧主区
+        renderComments();  // P1: 渲染留言板
+        osbTick($('gsProfileScroll'), 500);
+        // P2.6 展示柜主题：给 .gp-main 加主题 CSS 类
+        var mainEl = document.querySelector('.gp-main');
+        if (mainEl && p.basic && p.basic.profile_theme) {
+            // 先清旧主题类，再加新的
+            ['gp-theme-dark', 'gp-theme-ocean', 'gp-theme-forest', 'gp-theme-sunset'].forEach(function (c) { mainEl.classList.remove(c); });
+            var themeMap = { showcase_theme_dark: 'gp-theme-dark', showcase_theme_ocean: 'gp-theme-ocean', showcase_theme_forest: 'gp-theme-forest', showcase_theme_sunset: 'gp-theme-sunset' };
+            var cls = themeMap[p.basic.profile_theme];
+            if (cls) mainEl.classList.add(cls);
+        }
+    }
+
+    // ==================== 阶段二百九十五 P1：留言板 + 弹窗 + 展示柜编辑 ====================
+
+    // P1: 扩展 state.profile 字段（在 loadProfile 里填充）
+    // state.profile.showcase = [] 展示柜配置
+    // state.profile.comments = [] 留言列表
+    // state.profile.friends = [] 好友列表
+    // state.profile.canComment = true
+
+    // ---------- P1.5 成就辅助 ----------
+    var ACH_RARITY_LABEL = [T('常见'), T('罕见'), T('稀有'), T('史诗'), T('传说')];
+    function makeAchievementCell(it) {
+        var cell = el('div', 'gp-ach-cell' + (it.unlocked ? '' : ' locked'));
+        var iconBox = el('div', 'gp-ach-icon');
+        if (it.icon) {
+            var img = document.createElement('img');
+            img.src = assetUrl(it.icon);
+            img.onerror = function () { iconBox.textContent = ''; iconBox.appendChild(el('b', '', String(it.name || '?').charAt(0).toUpperCase())); };
+            iconBox.appendChild(img);
+        } else {
+            iconBox.appendChild(el('b', '', String(it.name || '?').charAt(0).toUpperCase()));
+        }
+        cell.appendChild(iconBox);
+        cell.appendChild(el('div', 'gp-ach-name', it.name));
+        return cell;
+    }
+    // P3: 卡片单元格（稀有度边框颜色 + 闪卡光效 + 持有数量）
+    function makeCardCell(it) {
+        var card = it.card || it;
+        var cell = el('div', 'gp-card-cell gp-card-rarity-' + (card.rarity || 0));
+        if (it.foil_count > 0) cell.classList.add('gp-card-foil');
+        var imgBox = el('div', 'gp-card-imgbox');
+        if (card.image) {
+            var ci = document.createElement('img');
+            ci.src = assetUrl(card.image);
+            ci.onerror = function () { imgBox.textContent = ''; imgBox.appendChild(el('b', '', String(card.name || '?').charAt(0).toUpperCase())); };
+            imgBox.appendChild(ci);
+        } else {
+            imgBox.appendChild(el('b', '', String(card.name || '?').charAt(0).toUpperCase()));
+        }
+        cell.appendChild(imgBox);
+        cell.appendChild(el('div', 'gp-card-name', card.name));
+        // 数量角标
+        if (it.count > 1) {
+            cell.appendChild(el('span', 'gp-card-count', '×' + it.count));
+        }
+        cell.title = (card.name || '') + '\n' + (card.desc || '') + '\n' + T('稀有度') + ': ' + (CARD_RARITY_LABEL[card.rarity] || '?') +
+            (it.foil_count > 0 ? '\n✨ ' + T('闪卡') + ' ×' + it.foil_count : '');
+        return cell;
+    }
+    var CARD_RARITY_LABEL = { 0: T('普通'), 1: T('罕见'), 2: T('稀有'), 3: T('史诗'), 4: T('传说') };
+    // 简易图片查看器（全屏覆盖层，点击关闭）
+    function openImageViewer(url, title) {
+        if (!url) return;
+        var ov = document.createElement('div');
+        ov.className = 'gp-img-viewer';
+        ov.innerHTML = '<img src="' + url + '" alt="' + (title || '') + '"><div class="gp-img-viewer-close">✕</div>';
+        if (title) { var cap = document.createElement('div'); cap.className = 'gp-img-viewer-title'; cap.textContent = title; ov.appendChild(cap); }
+        function gpClose() { document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
+        document.addEventListener('keydown', _gpEsc);
+        ov.addEventListener('click', gpClose);
+        document.body.appendChild(ov);
+    }
+    // P2: 评测卡片（Steam 同款：推荐/不推荐拇指图标 + 游戏名 + 内容摘要 + 时长）
+    function makeReviewCard(rv) {
+        var card = el('div', 'gp-rev-card');
+        // 顶部行：推荐/不推荐 + 游戏名
+        var top = el('div', 'gp-rev-top');
+        var thumb = el('span', 'gp-rev-thumb' + (rv.recommended ? ' up' : ' down'), rv.recommended ? '👍' : '👎');
+        top.appendChild(thumb);
+        top.appendChild(el('span', 'gp-rev-game', rv.game_name || T('未知游戏')));
+        card.appendChild(top);
+        // 内容（最多 2 行截断）
+        var content = el('div', 'gp-rev-content', rv.content || '');
+        card.appendChild(content);
+        // 底部：游戏时长 + 有帮助数
+        var meta = el('div', 'gp-rev-meta');
+        meta.appendChild(el('span', 'gp-rev-hours', (rv.play_hours || 0) + 'h ' + T('游戏时长')));
+        meta.appendChild(el('span', 'gp-rev-helpful', '❤️ ' + (rv.helpful || 0)));
+        card.appendChild(meta);
+        // 点击卡片 → 跳转到游戏详情页评测区
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', function () {
+            if (rv.game_id) { openDetail(rv.game_id); }
+        });
+        return card;
+    }
+    function openAchievementsModal() {
+        var data = state.profile.achievements;
+        if (!data || !data.groups) { toast(T('成就数据加载中…')); return; }
+        renderAchievementsModal(data);
+        showMask('gpAchMask');
+    }
+    function renderAchievementsModal(data) {
+        var body = $('gpAchBody');
+        body.innerHTML = '';
+        // 顶部统计条
+        var header = el('div', 'gp-ach-header');
+        header.innerHTML = '<span class="gp-ach-progress-text">' + T('总进度') + ': <b>' + data.unlocked + '</b> / ' + data.total + '</span>';
+        var progress = el('div', 'gp-ach-progress');
+        var pct = data.total > 0 ? Math.round(data.unlocked * 100 / data.total) : 0;
+        var bar = el('div', 'gp-ach-progress-bar');
+        bar.style.width = pct + '%';
+        progress.appendChild(bar);
+        header.appendChild(progress);
+        body.appendChild(header);
+
+        // 按游戏分组渲染
+        data.groups.forEach(function (g) {
+            var gDiv = el('div', 'gp-ach-group');
+            var gHead = el('div', 'gp-ach-group-head');
+            gHead.appendChild(el('span', 'gp-ach-group-name', g.game_name || (T('游戏 #') + g.game_id)));
+            gHead.appendChild(el('span', 'gp-ach-group-stat', g.unlocked + ' / ' + g.total));
+            gDiv.appendChild(gHead);
+            var grid = el('div', 'gp-ach-group-grid');
+            g.items.forEach(function (it) {
+                var cell = makeAchievementCell(it);
+                // 悬停提示完整信息
+                cell.title = it.name + '\n' + it.desc + '\n' + T('稀有度') + ': ' + (ACH_RARITY_LABEL[it.rarity] || '?') +
+                    (it.unlocked ? '\n' + T('解锁时间') + ': ' + it.unlock_time : '\n' + T('未解锁'));
+                grid.appendChild(cell);
+            });
+            gDiv.appendChild(grid);
+            body.appendChild(gDiv);
+        });
+
+        if (data.groups.length === 0) {
+            body.appendChild(el('div', 'gp-empty', T('暂无成就数据')));
+        }
+    }
+
+    // ---------- 留言板渲染 ----------
+    function renderComments() {
+        var cmtsArea = $('gpCommentsArea');
+        // 先强制移除 hidden（确保首帧可见；后续可基于 canCmt 决定输入框显示）
+        cmtsArea.classList.remove('hidden');
+        var list = state.profile.comments || [];
+        var listEl = $('gpCmtsList');
+        listEl.innerHTML = '';
+        $('gpCmtsEmpty').classList.toggle('hidden', list.length > 0);
+        var inputRow = $('gpCmtInputRow');
+        var disabledBox = $('gpCmtDisabled');
+        var canCmt = state.profile.canComment !== false;
+        var loggedIn = username !== '';
+        if (loggedIn && canCmt) {
+            inputRow.classList.remove('hidden');
+            disabledBox.classList.add('hidden');
+        } else if (loggedIn && !canCmt) {
+            inputRow.classList.add('hidden');
+            disabledBox.classList.remove('hidden');
+            disabledBox.textContent = isOwnProfile()
+                ? T('你已关闭留言功能')
+                : T('主人已关闭留言功能');
+        } else {
+            inputRow.classList.add('hidden');
+            disabledBox.classList.add('hidden');
+        }
+
+        list.forEach(function (root) {
+            listEl.appendChild(renderCmtRoot(root));
+        });
+
+        // 回车发送（Shift+Enter 换行）
+        var input = $('gpCmtInput');
+        input.onkeydown = function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postComment(); }
+        };
+    }
+
+    function renderCmtRoot(root) {
+        var box = el('div', 'gp-cmt-root');
+        var head = el('div', 'gp-cmt-head');
+        // 头像
+        var av = el('div', 'gp-cmt-av');
+        if (root.from_avatar) {
+            var ai = document.createElement('img');
+            ai.src = assetUrl(root.from_avatar);
+            av.appendChild(ai);
+        } else {
+            av.textContent = initialOf(root.from_nickname || root.from_user);
+        }
+        head.appendChild(av);
+        var meta = el('div', 'gp-cmt-meta');
+        meta.appendChild(el('span', 'gp-cmt-nick', root.from_nickname || root.from_user));
+        meta.appendChild(el('span', 'gp-cmt-time', fmtCmtTime(root.create_time)));
+        head.appendChild(meta);
+        // 删除按钮（自己的留言 或 资料主人能删）
+        var canDel = root.from_user === username || state.profile.username === username;
+        if (canDel) {
+            var delBtn = el('span', 'gp-cmt-del', T('删除'));
+            delBtn.addEventListener('click', function () {
+                showConfirm(T('确定删除这条留言？'), T('删除后无法恢复'), T('删除'), function () {
+                    deleteComment(root.id);
+                }, true);
+            });
+            head.appendChild(delBtn);
+        }
+        box.appendChild(head);
+        box.appendChild(el('div', 'gp-cmt-body gp-comment-text', renderCommentContent(root.content)));
+        // 回复区
+        if (root.replies && root.replies.length) {
+            var replies = el('div', 'gp-cmt-replies');
+            root.replies.forEach(function (rp) {
+                replies.appendChild(renderCmtReply(rp, root));
+            });
+            box.appendChild(replies);
+        }
+        return box;
+    }
+    function renderCmtReply(rp, parent) {
+        var box = el('div', 'gp-cmt-reply');
+        var head = el('div', 'gp-cmt-head');
+        var meta = el('div', 'gp-cmt-meta');
+        var nickTxt = rp.from_nickname || rp.from_user;
+        if (rp.reply_to) nickTxt += ' → ' + (rp.profile_nickname || rp.reply_to);
+        meta.appendChild(el('span', 'gp-cmt-nick', nickTxt));
+        meta.appendChild(el('span', 'gp-cmt-time', fmtCmtTime(rp.create_time)));
+        head.appendChild(meta);
+        var canDel = rp.from_user === username || state.profile.username === username;
+        if (canDel) {
+            var delBtn = el('span', 'gp-cmt-del', T('删除'));
+            delBtn.addEventListener('click', function () {
+                showConfirm(T('确定删除这条回复？'), T('删除后无法恢复'), T('删除'), function () {
+                    deleteComment(rp.id);
+                }, true);
+            });
+            head.appendChild(delBtn);
+        }
+        box.appendChild(head);
+        box.appendChild(el('div', 'gp-cmt-body gp-comment-text', renderCommentContent(rp.content)));
+        return box;
+    }
+    function fmtCmtTime(ts) {
+        if (!ts) return '';
+        try {
+            var d = new Date(ts);
+            var now = new Date();
+            var diff = (now - d) / 1000;
+            if (diff < 60) return T('刚刚');
+            if (diff < 3600) return Math.floor(diff / 60) + T('分钟前');
+            if (diff < 86400) return Math.floor(diff / 3600) + T('小时前');
+            return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) + ' ' +
+                d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        } catch (e) { return ts; }
+    }
+
+    // P3: 渲染留言内容 —— 保留 emoji + @username 高亮 + 换行转 <br>
+    // 安全：先用 document.createTextNode 转义，再用正则替换 @username 为 <mark>
+    function renderCommentContent(text) {
+        if (!text) return document.createTextNode('');
+        var container = document.createElement('div');
+        container.textContent = text;
+        var safeHtml = container.innerHTML;
+
+        safeHtml = safeHtml.replace(/\n/g, '<br>');
+        safeHtml = safeHtml.replace(/@([a-zA-Z0-9_]{2,31})(?=[\s!@#$%^&*()\-=\[\]{};':"\\|,.<>\/?]|$)/g,
+            '<mark data-at="$1">@$1</mark>');
+
+        var wrap = document.createElement('div');
+        wrap.innerHTML = safeHtml;
+        wrap.querySelectorAll('mark[data-at]').forEach(function (m) {
+            m.addEventListener('click', function () {
+                var u = m.getAttribute('data-at');
+                if (u && u !== username) openProfile(u);
+            });
+        });
+        return wrap;
+    }
+
+    // P3: 插入到 textarea 光标位置
+    function insertAtCursor(input, text) {
+        var start = input.selectionStart || 0;
+        var end = input.selectionEnd || 0;
+        var val = input.value;
+        input.value = val.substring(0, start) + text + val.substring(end);
+        input.selectionStart = input.selectionEnd = start + text.length;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // P3: 显示 @提及下拉
+    function showAtDropdown(query) {
+        var atDropdown = $('gpAtDropdown');
+        var friends = (state.profile && state.profile.friends) || [];
+        var matched = friends.filter(function (f) {
+            if (!query) return true;
+            var nick = (f.nickname || f.username || '').toLowerCase();
+            return nick.indexOf(query.toLowerCase()) >= 0;
+        });
+        atDropdown.innerHTML = '';
+        if (matched.length === 0) {
+            atDropdown.innerHTML = '<div class="gp-at-empty">' + T('没有匹配的好友') + '</div>';
+        } else {
+            matched.slice(0, 10).forEach(function (f, idx) {
+                var item = el('div', 'gp-at-item' + (idx === 0 ? ' gp-at-active' : ''));
+                var av = el('div', 'gp-at-av');
+                if (f.avatar) {
+                    var ai = document.createElement('img');
+                    ai.src = assetUrl(f.avatar);
+                    ai.style.width = '24px'; ai.style.height = '24px';
+                    ai.style.borderRadius = '50%';
+                    av.appendChild(ai);
+                } else {
+                    av.textContent = initialOf(f.nickname || f.username);
+                }
+                item.appendChild(av);
+                item.appendChild(el('div', 'gp-at-name', f.nickname || f.username));
+                item.addEventListener('click', function () {
+                    var input = $('gpCmtInput');
+                    var val = input.value;
+                    var pos = input.selectionStart;
+                    var atIdx = -1;
+                    for (var i = pos - 1; i >= 0; i--) {
+                        if (val[i] === '@') { atIdx = i; break; }
+                        if (/\s/.test(val[i])) break;
+                    }
+                    if (atIdx >= 0) {
+                        var before = val.substring(0, atIdx);
+                        var after = val.substring(pos);
+                        input.value = before + '@' + f.username + ' ' + after;
+                        var newPos = before.length + 1 + f.username.length + 1;
+                        input.selectionStart = input.selectionEnd = newPos;
+                    }
+                    atDropdown.classList.add('hidden');
+                    input.focus();
+                });
+                atDropdown.appendChild(item);
+            });
+        }
+        atDropdown.classList.remove('hidden');
+    }
+
+    // P3: 初始化留言板表情面板 + @提及自动补全
+    function initCommentEnhance() {
+        var input = $('gpCmtInput');
+        if (!input) return;
+
+        var EMOJI_CATS = {
+            smileys: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','😟','🙁','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'],
+            gestures: ['👍','👎','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👋','🤚','🖐️','✋','🖖','👏','🙌','👐','🤲','🤝','🙏','💪','🦾','🦿','🦵','🦶','👂','🦻','👃','🧠','🫀','🫁','🦷','🦴','👀','👁️','👅','👄','🫦','🫵'],
+            hearts: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','💌','💋','💯','💢','💥','💫','💦','💨','🕳️','💣','💬','💭','🗯️','♨️','🗨️'],
+            objects: ['🎉','🎊','🎁','🎈','🎂','🍰','☕','🍺','🍻','🥂','🍷','🥃','🥤','🍾','🎤','🎧','🎸','🎹','🥁','🏆','🥇','🥈','🥉','⚽','🏀','🏈','⚾','🎮','🕹️','🚀','✈️','🚗','💻','📱','📷','📺','🎵','🎶','📚','💡','🔔','🎯','🏆','💯','✅','❌','⭐','🌟','💫','🔥','✨','🎉','🎊','🎈','🎁','💝','🎀','🎁']
+        };
+        var currentCat = 'smileys';
+        var gridEl = $('gpEmojiGrid');
+        var panel = $('gpEmojiPanel');
+        var atDropdown = $('gpAtDropdown');
+
+        function renderEmojiGrid() {
+            gridEl.innerHTML = '';
+            var list = EMOJI_CATS[currentCat] || [];
+            list.forEach(function (em) {
+                var btn = document.createElement('button');
+                btn.className = 'gp-emoji-cell';
+                btn.textContent = em;
+                btn.title = em;
+                btn.addEventListener('click', function () { insertAtCursor(input, em); });
+                gridEl.appendChild(btn);
+            });
+        }
+        renderEmojiGrid();
+
+        panel.querySelectorAll('.gp-emoji-tab').forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                panel.querySelectorAll('.gp-emoji-tab').forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                currentCat = tab.getAttribute('data-cat');
+                renderEmojiGrid();
+            });
+        });
+
+        $('gpCmtEmojiBtn').addEventListener('click', function (e) {
+            e.stopPropagation();
+            atDropdown.classList.add('hidden');
+            panel.classList.toggle('hidden');
+            if (!panel.classList.contains('hidden')) renderEmojiGrid();
+        });
+
+        $('gpCmtAtBtn').addEventListener('click', function (e) {
+            e.stopPropagation();
+            insertAtCursor(input, '@');
+            input.focus();
+            showAtDropdown('');
+        });
+
+        input.addEventListener('input', function () {
+            var pos = input.selectionStart;
+            var val = input.value;
+            var atIdx = -1;
+            for (var i = pos - 1; i >= 0; i--) {
+                if (val[i] === '@') { atIdx = i; break; }
+                if (/\s/.test(val[i])) break;
+            }
+            if (atIdx >= 0) {
+                var query = val.substring(atIdx + 1, pos);
+                if (query.length <= 20 && !/\s/.test(query)) {
+                    showAtDropdown(query);
+                    return;
+                }
+            }
+            atDropdown.classList.add('hidden');
+        });
+
+        document.addEventListener('click', function (e) {
+            if (!panel.contains(e.target) && e.target !== $('gpCmtEmojiBtn')) {
+                panel.classList.add('hidden');
+            }
+            if (!atDropdown.contains(e.target) && e.target !== input) {
+                atDropdown.classList.add('hidden');
+            }
+        });
+    }
+
+    function isOwnProfile() { return state.profile.username === username; }
+
+    function postComment() {
+        var input = $('gpCmtInput');
+        var txt = (input.value || '').trim();
+        if (!txt) { toast(T('请输入留言内容')); input.focus(); return; }
+        if (txt.length > 500) { toast(T('留言不能超过 500 字')); return; }
+        api('POST', '/api/profile/comments', {
+            profile_user: state.profile.username, content: txt,
+            parent_id: 0, reply_to: ''
+        }).then(function (res) {
+            if (res && res.ok) {
+                input.value = '';
+                toast(T('留言成功'));
+                // 重新拉留言列表
+                loadComments();
+            } else {
+                toast((res && res.err) || T('发表失败'));
+            }
+        });
+    }
+    function deleteComment(id) {
+        api('DELETE', '/api/profile/comments/' + id).then(function (res) {
+            if (res && res.ok) { toast(T('已删除')); loadComments(); }
+            else toast((res && res.err) || T('删除失败'));
+        });
+    }
+    function loadComments() {
+        api('GET', '/api/profile/comments?username=' + encodeURIComponent(state.profile.username)).then(function (res) {
+            if (!res || !res.ok || !res.data) return;
+            state.profile.comments = res.data.list || [];
+            state.profile.canComment = res.data.can_comment !== false;
+            renderComments();
+        });
+    }
+
+    // ---------- 三个自绘弹窗 ----------
+
+    // 1. 编辑资料弹窗
+    function openEditProfile() {
+        var p = state.profile.basic || {};
+        $('gpEditNick').value = p.nickname || '';
+        $('gpEditTitle').value = p.title || '';
+        $('gpEditSig').value = p.signature || '';
+        showMask('gpEditMask');
+    }
+    // 2. 隐私设置弹窗
+    function openPrivacySettings() {
+        var p = state.profile.basic || {};
+        setGroupVal('#gpPrivacyMask [data-key="profile_visibility"]', p.profile_visibility != null ? p.profile_visibility : 1);
+        setGroupVal('#gpPrivacyMask [data-key="game_visibility"]', p.game_visibility != null ? p.game_visibility : 1);
+        setGroupVal('#gpPrivacyMask [data-key="friend_visibility"]', p.friend_visibility != null ? p.friend_visibility : 1);
+        $('gpPrivacyCmt').checked = (p.comment_enabled != null ? p.comment_enabled : 1) == 1;
+        showMask('gpPrivacyMask');
+    }
+    // 自定义 button 组选中：互斥切换 + 点击已选中可以取消（变成全不选）
+    function setGroupVal(sel, val) {
+        document.querySelectorAll(sel + ' .gp-priv-btn').forEach(function (btn) {
+            btn.classList.toggle('active', btn.dataset.val === String(val));
+        });
+    }
+    function getGroupVal(parent, key) {
+        var grp = parent.querySelector('[data-key="' + key + '"]');
+        if (!grp) return null;
+        var active = grp.querySelector('.gp-priv-btn.active');
+        return active ? parseInt(active.dataset.val, 10) : null;
+    }
+    // 隐私弹窗按钮组点击事件（绑定到模态框上，事件委托）
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('#gpPrivacyMask .gp-priv-btn');
+        if (!btn) return;
+        var group = btn.parentElement;
+        if (btn.classList.contains('active')) {
+            // 点击已选中 → 取消选中（允许全不选，保存时兜底）
+            btn.classList.remove('active');
+        } else {
+            // 点击未选中 → 互斥切换
+            group.querySelectorAll('.gp-priv-btn').forEach(function (b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+        }
+    });
+    function showMask(id) { $(id).classList.remove('hidden'); }
+    function hideMask(id) { $(id).classList.add('hidden'); }
+
+    // 3. 展示柜编辑弹窗
+    var showcaseEditItems = [];   // 弹窗内临时状态
+    var showcaseMaxSlots = 3;     // 模块级：当前等级允许的槽位数（所有 renderShowcaseEditor 调用共享）
+    function openShowcaseEditor() {
+        try {
+        // P0 等级权益：从后端 level_perks 读当前等级允许的展示柜槽位数（缺省 3）
+        var perks = (state.profile && state.profile.level_perks) || {};
+        showcaseMaxSlots = perks.showcase_slots || 3;
+        var maxSlots = perks.showcase_slots || 3;
+
+        // 初始化：从 state.profile.showcase 加载，过滤超出当前等级允许上限的槽位（后端会兜底跳过）
+        var rawList = state.profile && Array.isArray(state.profile.showcase) ? state.profile.showcase : [];
+        showcaseEditItems = JSON.parse(JSON.stringify(rawList));
+        // 防御性：过滤掉没有 slot 字段或 slot 非数字的脏数据
+        showcaseEditItems = showcaseEditItems.filter(function (it) {
+            return it && typeof it.slot === 'number' && !isNaN(it.slot);
+        });
+        showcaseEditItems = showcaseEditItems.filter(function (it) { return it.slot <= maxSlots; });
+        if (!showcaseEditItems.length) {
+            showcaseEditItems.push({ slot: 1, type: 'recent_games', title: '', config: '', enabled: 1 });
+        }
+        // 槽位超出上限 → 自动裁剪
+        if (showcaseEditItems.length > maxSlots) {
+            showcaseEditItems = showcaseEditItems.slice(0, maxSlots);
+        }
+        renderShowcaseEditor();
+        showMask('gpShowcaseMask');
+        } catch (e) {
+            console.error('[openShowcaseEditor] ERROR:', e, e.stack);
+            toast(T('打开展示柜失败：') + (e && e.message || e));
+        }
+    }
+    function renderShowcaseEditor() {
+        try {
+        var maxSlots = showcaseMaxSlots; // 模块级，openShowcaseEditor 打开时已设置
+        var list = $('gpShowcaseList');
+        if (!list) { console.error('[renderShowcaseEditor] #gpShowcaseList DOM not found'); return; }
+        list.innerHTML = '';
+        var curLevel = (state.profile && state.profile.level_perks && state.profile.level_perks.level) || 1;
+        var customHTMLRequiresLevel = 30;
+        showcaseEditItems.forEach(function (it, idx) {
+            var row = el('div', 'gp-showcase-item');
+            row.draggable = true;
+
+            // ===== 第一行：header（拖拽柄 + 序号 + 类型 + 标题 + 删除） =====
+            var header = el('div', 'gp-showcase-item-header');
+            header.appendChild(el('span', 'gp-showcase-drag', '⋮⋮')).title = T('拖动排序');
+            header.appendChild(el('span', 'gp-showcase-num', '#' + (idx + 1)));
+
+            // 类型选择
+            var sel = document.createElement('select');
+            var typeOpts = [
+                { v: 'recent_games', t: T('最近游玩'), lv: 1 },
+                { v: 'favorite_game', t: T('最爱游戏'), lv: 1 },
+                { v: 'achievements', t: T('精选成就'), lv: 1 },
+                { v: 'badges', t: T('徽章展示'), lv: 1 },
+                { v: 'screenshots', t: T('游戏截图'), lv: 1 },
+                { v: 'artwork', t: T('艺术作品'), lv: 1 },
+                { v: 'reviews', t: T('我的评测'), lv: 1 },
+                { v: 'friends', t: T('好友展示'), lv: 1 },
+                { v: 'cards', t: T('卡片背包'), lv: 1 },
+                { v: 'custom_html', t: T('自定义 HTML'), lv: customHTMLRequiresLevel }
+            ];
+            typeOpts.forEach(function (o) {
+                var opt = document.createElement('option');
+                opt.value = o.v; opt.textContent = o.t + (o.lv > curLevel ? T('（Lv.{0}+ 解锁）').format(o.lv) : '');
+                if (o.v === it.type) opt.selected = true;
+                if (o.lv > curLevel && o.v !== it.type) opt.disabled = true;
+                sel.appendChild(opt);
+            });
+            sel.addEventListener('change', function () {
+                var newType = sel.value;
+                if (newType === 'custom_html' && curLevel < customHTMLRequiresLevel) {
+                    toast(T('自定义 HTML 展示柜需要 Lv.{0} 解锁').format(customHTMLRequiresLevel));
+                    for (var k = 0; k < sel.options.length; k++) {
+                        if (sel.options[k].value === it.type) { sel.selectedIndex = k; break; }
+                    }
+                    return;
+                }
+                it.type = newType;
+                if (newType === 'custom_html') {
+                    try { var prev = JSON.parse(it.config || '{}'); it._html = prev.html || ''; } catch (e) { it._html = it.config || ''; }
+                } else {
+                    if (it._html != null) it.config = it._html;
+                }
+                renderShowcaseEditor();
+            });
+            header.appendChild(sel);
+
+            // 自定义标题
+            var tInp = document.createElement('input');
+            tInp.placeholder = T('自定义标题（可选）');
+            tInp.value = it.title || '';
+            tInp.addEventListener('input', function () { it.title = tInp.value; });
+            header.appendChild(tInp);
+
+            // 删除按钮
+            var del = el('button', 'gp-showcase-del', '✕');
+            del.title = T('删除');
+            del.addEventListener('click', function () {
+                showcaseEditItems.splice(idx, 1);
+                renderShowcaseEditor();
+            });
+            header.appendChild(del);
+
+            row.appendChild(header);
+
+            // ===== 第二行：custom_html 专属编辑区 =====
+            if (it.type === 'custom_html') {
+                var body = el('div', 'gp-showcase-item-body');
+                var wrap = el('div', 'gp-showcase-html-wrap');
+                var ta = document.createElement('textarea');
+                ta.placeholder = T('在这里输入自定义 HTML…\n支持 inline style、常用排版标签、emoji');
+                ta.spellcheck = false;
+                if (it._html != null) {
+                    ta.value = it._html;
+                } else {
+                    try { var cfgObj = JSON.parse(it.config || '{}'); ta.value = cfgObj.html || it.config || ''; }
+                    catch (e) { ta.value = it.config || ''; }
+                }
+                ta.addEventListener('input', function () {
+                    it._html = ta.value;
+                    it.config = ta.value;
+                });
+                wrap.appendChild(ta);
+                body.appendChild(wrap);
+                row.appendChild(body);
+            }
+
+            // 拖拽事件（HTML5 DnD）
+            row.addEventListener('dragstart', function (e) {
+                row.classList.add('grabbing');
+                e.dataTransfer.setData('text/plain', String(idx));
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            row.addEventListener('dragend', function () { row.classList.remove('grabbing'); });
+            row.addEventListener('dragover', function (e) { e.preventDefault(); });
+            row.addEventListener('drop', function (e) {
+                e.preventDefault();
+                var fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+                if (isNaN(fromIdx) || fromIdx === idx) return;
+                var tmp = showcaseEditItems.splice(fromIdx, 1)[0];
+                showcaseEditItems.splice(idx, 0, tmp);
+                renderShowcaseEditor();
+            });
+            list.appendChild(row);
+        });
+        // 每次渲染完槽位后，同步更新底部"+"按钮状态（disabled + 显示当前/上限）
+        // 参数 maxSlots 来自 openShowcaseEditor 传入的等级权益
+        var addBtn = $('gpShowcaseAdd');
+        if (addBtn) {
+            var isFull = showcaseEditItems.length >= maxSlots;
+            addBtn.disabled = isFull;
+            addBtn.classList.toggle('disabled', isFull);
+            addBtn.textContent = (isFull ? T('已满（') : T('添加展示柜（')) + showcaseEditItems.length + '/' + maxSlots + '）';
+            // CSS tooltip 读 attr(data-disabled-hint)：用户禁用时 hover 按钮能看到原因
+            if (isFull) {
+                addBtn.setAttribute('data-disabled-hint', T('当前等级（Lv.{1}）最多 {0} 个，升级解锁更多').format(maxSlots, (state.profile && state.profile.level_perks && state.profile.level_perks.level) || 1));
+            } else {
+                addBtn.removeAttribute('data-disabled-hint');
+            }
+        }
+        // 同步更新 hint 文案（让用户知道为什么满了）
+        var hint = document.querySelector('#gpShowcaseMask .gp-showcase-hint');
+        if (hint && isFull) {
+            hint.textContent = T('已达当前等级上限，升级可解锁更多槽位');
+            hint.style.color = 'var(--theme-primary, #5865f2)';
+        } else if (hint) {
+            hint.textContent = T('等级越高可解锁越多槽位；点击下拉选择类型，拖动调整顺序');
+            hint.style.color = '';
+        }
+        } catch (e) {
+            console.error('[renderShowcaseEditor] ERROR:', e, e && e.stack);
+            toast(T('渲染展示柜失败：') + (e && e.message || e));
+        }
+    }
+
+    // ---------- 弹窗按钮事件（delegate 到 game-store.js 初始化函数里绑定） ----------
+    // 这里注册：gpEditCancel/Save、gpPrivacyCancel/Save、gpShowcaseCancel/Save/Add
+    // 以及"发送"按钮
+    function bindProfileModalEvents() {
+        $('gpEditCancel').addEventListener('click', function () { hideMask('gpEditMask'); });
+        $('gpEditSave').addEventListener('click', function () {
+            var nick = $('gpEditNick').value.trim();
+            var title_ = $('gpEditTitle').value.trim();
+            var sig = $('gpEditSig').value.trim();
+            if (!nick) { toast(T('昵称不能为空')); return; }
+            if (nick.length > 32) { toast(T('昵称不能超过 32 字')); return; }
+            if (sig.length > 200) { toast(T('签名不能超过 200 字')); return; }
+            api('PUT', '/api/profile/basic', {
+                nickname: nick, title: title_, signature: sig
+            }).then(function (res) {
+                if (res && res.ok) {
+                    toast(T('保存成功'));
+                    hideMask('gpEditMask');
+                    // 刷新资料
+                    state.profile.username = ''; // 强制重新 load
+                    openProfile(username);
+                } else {
+                    toast((res && res.err) || T('保存失败'));
+                }
+            });
+        });
+
+        $('gpAchClose').addEventListener('click', function () { hideMask('gpAchMask'); });
+        $('gpPrivacyCancel').addEventListener('click', function () { hideMask('gpPrivacyMask'); });
+        $('gpPrivacySave').addEventListener('click', function () {
+            var mask = $('gpPrivacyMask');
+            // 兜底：如果用户把某组全取消了，默认 1=仅好友（隐私建议默认值）
+            var pV = getGroupVal(mask, 'profile_visibility');
+            var gV = getGroupVal(mask, 'game_visibility');
+            var fV = getGroupVal(mask, 'friend_visibility');
+            api('PUT', '/api/profile/privacy', {
+                profile_visibility: pV != null ? pV : 1,
+                game_visibility:    gV != null ? gV : 1,
+                friend_visibility:  fV != null ? fV : 1,
+                comment_enabled:    $('gpPrivacyCmt').checked ? 1 : 0
+            }).then(function (res) {
+                if (res && res.ok) {
+                    toast(T('隐私设置已更新'));
+                    hideMask('gpPrivacyMask');
+                    state.profile.username = ''; // 强制重新 load
+                    openProfile(username);
+                } else {
+                    toast((res && res.err) || T('保存失败'));
+                }
+            });
+        });
+
+        $('gpShowcaseCancel').addEventListener('click', function () { hideMask('gpShowcaseMask'); });
+        $('gpShowcaseAdd').addEventListener('click', function () {
+            var perks = (state.profile && state.profile.level_perks) || {};
+            var maxSlots = perks.showcase_slots || 3;
+            if (showcaseEditItems.length >= maxSlots) {
+                toast(T('当前等级（Lv.{1}）最多可配置 {0} 个展示柜，升级到更高等级可解锁更多').format(maxSlots, perks.level || 1));
+                return;
+            }
+            showcaseEditItems.push({
+                slot: showcaseEditItems.length + 1,
+                type: 'recent_games', title: '', config: '', enabled: 1
+            });
+            renderShowcaseEditor();
+        });
+        $('gpShowcaseSave').addEventListener('click', function () {
+            // slot 按顺序重新编号
+            showcaseEditItems.forEach(function (it, i) { it.slot = i + 1; });
+            api('PUT', '/api/profile/showcase', { items: showcaseEditItems }).then(function (res) {
+                if (res && res.ok) {
+                    toast(T('展示柜已保存'));
+                    hideMask('gpShowcaseMask');
+                    state.profile.showcase = showcaseEditItems.slice();
+                    // 重新渲染右侧主区（替换默认"最近游玩"为 showcase 渲染器）
+                    renderShowcases();
+                } else {
+                    toast((res && res.err) || T('保存失败'));
+                }
+            });
+        });
+
+        // 留言发送按钮
+        $('gpCmtSendBtn').addEventListener('click', postComment);
+
+        // ==================== P3: 表情面板 + @提及自动补全 ====================
+        initCommentEnhance();
+
+        // 点击遮罩关闭
+        ['gpEditMask', 'gpPrivacyMask', 'gpShowcaseMask'].forEach(function (mid) {
+            $(mid).addEventListener('click', function (e) {
+                if (e.target === this) hideMask(mid);
+            });
+        });
+    }
+    // 注入初始化钩子（游戏中心 init 完成后调用）
+    window._gpBindModal = bindProfileModalEvents;
+
+    // ==================== P2.3：截图上传弹窗 ====================
+    function openScreenshotUpload() {
+        var ov = document.createElement('div');
+        ov.className = 'gp-mask';
+        ov.innerHTML = '<div class="gp-modal gp-ss-upload-modal">' +
+            '<div class="gp-modal-title">' + T('上传截图/艺术作品') + '</div>' +
+            '<div class="gp-modal-body">' +
+              '<div class="gp-ss-preview" id="gpSsPreview"></div>' +
+              '<input type="file" id="gpSsFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none">' +
+              '<button class="gp-btn primary" id="gpSsPick">' + T('选择图片') + '</button>' +
+              '<input type="text" id="gpSsTitle" placeholder="' + T('标题（可选）') + '" style="margin-top:10px">' +
+              '<select id="gpSsType" style="margin-top:10px">' +
+                '<option value="screenshot">' + T('游戏截图') + '</option>' +
+                '<option value="artwork">' + T('艺术作品') + '</option>' +
+              '</select>' +
+            '</div>' +
+            '<div class="gp-modal-foot">' +
+              '<button class="gp-btn" id="gpSsCancel">' + T('取消') + '</button>' +
+              '<button class="gp-btn primary" id="gpSsUpload">' + T('上传') + '</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(ov);
+        var bodyScroll = ov.querySelector('.gp-modal-body');
+        if (bodyScroll) osbInit(bodyScroll);
+        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
+        document.addEventListener('keydown', _gpEsc);
+        var selFile = null;
+        ov.querySelector('#gpSsPick').addEventListener('click', function () { ov.querySelector('#gpSsFile').click(); });
+        ov.querySelector('#gpSsFile').addEventListener('change', function (e) {
+            selFile = e.target.files[0];
+            var pv = ov.querySelector('#gpSsPreview');
+            pv.innerHTML = '';
+            if (selFile) {
+                var img = document.createElement('img');
+                img.src = URL.createObjectURL(selFile);
+                pv.appendChild(img);
+            }
+        });
+        ov.querySelector('#gpSsCancel').addEventListener('click', gpClose);
+        ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
+        ov.querySelector('#gpSsUpload').addEventListener('click', function () {
+            if (!selFile) { toast(T('请选择图片')); return; }
+            var fd = new FormData();
+            fd.append('file', selFile);
+            fd.append('type', ov.querySelector('#gpSsType').value);
+            fd.append('title', ov.querySelector('#gpSsTitle').value.trim());
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/profile/screenshot');
+            var dt = localStorage.getItem('drive_token');
+            if (dt) xhr.setRequestHeader('X-Drive-Token', dt);
+            xhr.onload = function () {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.ok) {
+                        toast(T('上传成功'));
+                        gpClose();
+                        // 刷新截图数据
+                        api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(username) + '&type=all').then(function (s2) {
+                            if (s2 && s2.ok && s2.data) { state.profile.screenshots = s2.data; renderShowcases(); }
+                        });
+                    } else { toast(res.err || T('上传失败')); }
+                } catch (e) { toast(T('上传失败')); }
+            };
+            xhr.send(fd);
+        });
+    }
+
+    // ==================== P3：卡片工坊（抽卡 + 合成徽章 + 积分商店） ====================
+    function openCardWorkshop() {
+        var ov = document.createElement('div');
+        ov.className = 'gp-mask';
+        ov.innerHTML = '<div class="gp-modal gp-card-workshop">' +
+            '<div class="gp-modal-title">' + T('卡片工坊') +
+              '<span class="gp-points-badge" id="gpPointsBadge"></span>' +
+            '</div>' +
+            '<div class="gp-modal-body">' +
+              '<div class="gp-cw-tabs">' +
+                '<button class="gp-cw-tab active" data-tab="draw">' + T('抽卡') + '</button>' +
+                '<button class="gp-cw-tab" data-tab="craft">' + T('合成徽章') + '</button>' +
+                '<button class="gp-cw-tab" data-tab="shop">' + T('积分商店') + '</button>' +
+              '</div>' +
+              '<div class="gp-cw-panel" id="gpCwPanel"></div>' +
+            '</div>' +
+            '<div class="gp-modal-foot">' +
+              '<button class="gp-btn" id="gpCwClose">' + T('关闭') + '</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(ov);
+        var bodyScroll = ov.querySelector('.gp-modal-body');
+        if (bodyScroll) osbInit(bodyScroll);
+        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
+        document.addEventListener('keydown', _gpEsc);
+        var points = (state.profile.basic && state.profile.basic.points != null) ? state.profile.basic.points : 0;
+        ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
+        ov.querySelector('#gpCwClose').addEventListener('click', gpClose);
+        ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
+        ov.querySelectorAll('.gp-cw-tab').forEach(function (tb) {
+            tb.addEventListener('click', function () {
+                ov.querySelectorAll('.gp-cw-tab').forEach(function (t) { t.classList.remove('active'); });
+                tb.classList.add('active');
+                renderCwPanel(tb.dataset.tab);
+            });
+        });
+        function renderCwPanel(tab) {
+            var panel = ov.querySelector('#gpCwPanel');
+            panel.innerHTML = '';
+            if (tab === 'draw') renderDrawPanel(panel);
+            else if (tab === 'craft') renderCraftPanel(panel);
+            else renderShopPanel(panel);
+        }
+        // 抽卡面板：选游戏 → 抽卡按钮 → 结果展示
+        function renderDrawPanel(panel) {
+            panel.innerHTML = '<div class="gp-cw-draw">' +
+                '<div class="gp-cw-hint">' + T('每次抽卡消耗 50 积分，按稀有度随机掉落，有几率获得闪卡') + '</div>' +
+                '<select id="gpDrawGame"></select>' +
+                '<button class="gp-btn primary gp-cw-draw-btn" id="gpDrawBtn">' + T('抽卡（50 积分）') + '</button>' +
+                '<div class="gp-cw-result" id="gpDrawResult"></div>' +
+              '</div>';
+            // 加载游戏列表（用商店列表简化）
+            api('GET', '/api/game/list?page=1&size=50').then(function (res) {
+                var sel = panel.querySelector('#gpDrawGame');
+                if (res && res.ok && res.data && res.data.list) {
+                    res.data.list.forEach(function (g) {
+                        var opt = document.createElement('option'); opt.value = g.id; opt.textContent = g.name;
+                        sel.appendChild(opt);
+                    });
+                }
+            });
+            panel.querySelector('#gpDrawBtn').addEventListener('click', function () {
+                var gid = parseInt(panel.querySelector('#gpDrawGame').value, 10);
+                if (!gid) { toast(T('请选择游戏')); return; }
+                api('POST', '/api/card/draw', { game_id: gid }).then(function (res) {
+                    var rb = panel.querySelector('#gpDrawResult');
+                    if (res && res.ok) {
+                        var c = res.data.card;
+                        rb.innerHTML = '<div class="gp-draw-result-card gp-card-rarity-' + c.rarity + (res.data.foil ? ' gp-card-foil' : '') + '">' +
+                            (c.image ? '<img src="' + assetUrl(c.image) + '">' : '<b>' + String(c.name || '?').charAt(0) + '</b>') +
+                            '<div class="gp-draw-result-name">' + c.name + '</div>' +
+                            '<div class="gp-draw-result-rarity">' + (CARD_RARITY_LABEL[c.rarity] || '') + (res.data.foil ? ' ✨' + T('闪卡') : '') + '</div>' +
+                          '</div>';
+                        // 更新积分显示
+                        points = res.data.points_left;
+                        ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
+                    } else {
+                        rb.innerHTML = '<div class="gp-cw-err">' + ((res && res.err) || T('抽卡失败')) + '</div>';
+                    }
+                });
+            });
+        }
+        // 合成徽章面板：列出徽章模板 + 所需卡片 + 合成按钮
+        function renderCraftPanel(panel) {
+            panel.innerHTML = '<div class="gp-cw-craft" id="gpCraftList">' + T('加载中…') + '</div>';
+            api('GET', '/api/badge/templates').then(function (res) {
+                var list = (res && res.ok && res.data && res.data.list) || [];
+                var box = panel.querySelector('#gpCraftList');
+                if (list.length === 0) { box.innerHTML = '<div class="gp-empty">' + T('暂无可合成的徽章') + '</div>'; return; }
+                box.innerHTML = '';
+                // 同时加载用户卡片背包用于判断集齐
+                api('GET', '/api/profile/cards?username=' + encodeURIComponent(username)).then(function (cres) {
+                    var holdMap = {};
+                    (cres && cres.ok && cres.data && cres.data.groups || []).forEach(function (g) {
+                        g.items.forEach(function (it) { holdMap[it.card.id] = it; });
+                    });
+                    list.forEach(function (tpl) {
+                        // 查该卡组卡片
+                        api('GET', '/api/cards?game_id=' + tpl.game_id).then(function (cardsRes) {
+                            var allCards = (cardsRes && cardsRes.ok && cardsRes.data && cardsRes.data.list) || [];
+                            var setCards = allCards.filter(function (c) { return c.card_set === tpl.card_set; });
+                            var haveAll = setCards.length > 0 && setCards.every(function (c) { return holdMap[c.id] && holdMap[c.id].count >= 1; });
+                            var tplDiv = el('div', 'gp-craft-item');
+                            var head = el('div', 'gp-craft-head');
+                            head.appendChild(el('span', 'gp-craft-name', tpl.name));
+                            head.appendChild(el('span', 'gp-craft-reward', T('奖励') + ': +' + tpl.exp_reward + T('经验') + (tpl.points_reward > 0 ? ' +' + tpl.points_reward + T('积分') : '')));
+                            tplDiv.appendChild(head);
+                            var need = el('div', 'gp-craft-cards');
+                            setCards.forEach(function (c) {
+                                var h = holdMap[c.id] && holdMap[c.id].count >= 1;
+                                var cc = el('div', 'gp-craft-card' + (h ? ' have' : ' miss'));
+                                cc.textContent = c.name + (h ? ' ✓' : ' ✗');
+                                need.appendChild(cc);
+                            });
+                            tplDiv.appendChild(need);
+                            var craftBtn = el('button', 'gp-btn' + (haveAll ? ' primary' : ''), haveAll ? T('合成徽章') : T('卡片未集齐'));
+                            craftBtn.disabled = !haveAll;
+                            craftBtn.addEventListener('click', function () {
+                                api('POST', '/api/badge/craft', { card_set: tpl.card_set }).then(function (r) {
+                                    if (r && r.ok) {
+                                        toast(T('合成成功！获得 ') + tpl.name);
+                                        renderCraftPanel(panel);
+                                        // 刷新积分
+                                        points = (state.profile.basic && state.profile.basic.points) || 0;
+                                        ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
+                                    } else { toast((r && r.err) || T('合成失败')); }
+                                });
+                            });
+                            tplDiv.appendChild(craftBtn);
+                            box.appendChild(tplDiv);
+                        });
+                    });
+                });
+            });
+        }
+        // 积分商店面板
+        function renderShopPanel(panel) {
+            var items = [
+                { id: 'avatar_frame', name: T('头像框'), price: 200, icon: '🖼️', desc: T('为资料页头像添加精美边框') },
+                { id: 'golden_name', name: T('金色昵称'), price: 500, icon: '👑', desc: T('资料页昵称显示金色渐变效果') },
+                { id: 'showcase_theme_dark', name: T('暗夜深空'), price: 300, icon: '🌌', desc: T('深空黑色背景 + 星光点缀') },
+                { id: 'showcase_theme_ocean', name: T('深海蔚蓝'), price: 400, icon: '🌊', desc: T('蓝色渐变背景 + 海浪纹理') },
+                { id: 'showcase_theme_forest', name: T('森林秘境'), price: 500, icon: '🌲', desc: T('翠绿渐变背景 + 树叶纹理') },
+                { id: 'showcase_theme_sunset', name: T('落日余晖'), price: 600, icon: '🌅', desc: T('橙粉渐变背景 + 光晕效果') }
+            ];
+            var box = el('div', 'gp-shop-list');
+            items.forEach(function (it) {
+                var card = el('div', 'gp-shop-item');
+                card.appendChild(el('div', 'gp-shop-icon', it.icon));
+                card.appendChild(el('div', 'gp-shop-name', it.name));
+                card.appendChild(el('div', 'gp-shop-desc', it.desc));
+                var buy = el('button', 'gp-btn primary', T('购买') + ' (' + it.price + T('积分') + ')');
+                buy.addEventListener('click', function () {
+                    api('POST', '/api/points/shop/buy', { item_id: it.id }).then(function (res) {
+                        if (res && res.ok) {
+                            toast(T('购买成功！'));
+                            points = res.data.points_left;
+                            ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
+                            // 展示柜主题：购买后自动激活
+                            if (it.id.indexOf('showcase_theme_') === 0) {
+                                api('PUT', '/api/profile/basic', { profile_theme: it.id }).then(function () {
+                                    toast(T('主题已应用！'));
+                                });
+                            }
+                            state.profile.username = ''; openProfile(username);
+                        } else { toast((res && res.err) || T('购买失败')); }
+                    });
+                });
+                card.appendChild(buy);
+                box.appendChild(card);
+            });
+            panel.appendChild(box);
+        }
+        renderCwPanel('draw');
+    }
+
+    // ==================== 增强：背景横幅编辑器 ====================
+    function openBackgroundEditor() {
+        var curUrl = (state.profile.basic && state.profile.basic.profile_bg) || '';
+        var ov = document.createElement('div');
+        ov.className = 'gp-mask';
+        ov.innerHTML = '<div class="gp-modal gp-bg-editor">' +
+            '<div class="gp-modal-title">' + T('编辑资料横幅') + '</div>' +
+            '<div class="gp-modal-body">' +
+              '<div class="gp-bg-preview" id="gpBgPreview">' +
+                (curUrl ? '<img src="' + assetUrl(curUrl) + '">' : '<span class="gp-bg-empty-hint">' + T('暂无横幅，默认使用主题渐变色') + '</span>') +
+              '</div>' +
+              '<input type="file" id="gpBgFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none">' +
+              '<div class="gp-bg-btns">' +
+                '<button class="gp-btn primary" id="gpBgPick">' + T('选择图片') + '</button>' +
+                (curUrl ? '<button class="gp-btn" id="gpBgClear">' + T('清除横幅') + '</button>' : '') +
+              '</div>' +
+              '<div class="gp-bg-size-hint">' + T('建议尺寸 1920×360，不超过 8MB') + '</div>' +
+            '</div>' +
+            '<div class="gp-modal-foot">' +
+              '<button class="gp-btn" id="gpBgCancel">' + T('取消') + '</button>' +
+              '<button class="gp-btn primary" id="gpBgSave" disabled>' + T('保存') + '</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(ov);
+        var bodyScroll = ov.querySelector('.gp-modal-body');
+        if (bodyScroll) osbInit(bodyScroll);
+        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
+        document.addEventListener('keydown', _gpEsc);
+        var selectedFile = null;
+        ov.querySelector('#gpBgPick').addEventListener('click', function () { ov.querySelector('#gpBgFile').click(); });
+        ov.querySelector('#gpBgFile').addEventListener('change', function (e) {
+            selectedFile = e.target.files[0];
+            if (!selectedFile) return;
+            if (selectedFile.size > 8 << 20) { toast(T('图片超过 8MB 限制')); selectedFile = null; return; }
+            var pv = ov.querySelector('#gpBgPreview');
+            pv.innerHTML = '<img src="' + URL.createObjectURL(selectedFile) + '">';
+            ov.querySelector('#gpBgSave').disabled = false;
+        });
+        if (curUrl) {
+            ov.querySelector('#gpBgClear').addEventListener('click', function () {
+                showConfirm(T('清除横幅'), T('确定要清除横幅并恢复默认渐变色吗？'), T('清除'), true, function () {
+                    api('DELETE', '/api/profile/background').then(function (res) {
+                        if (res && res.ok) {
+                            toast(T('已清除'));
+                            gpClose();
+                            $('gpBg').style.backgroundImage = '';
+                            state.profile.basic.profile_bg = '';
+                        } else { toast((res && res.err) || T('清除失败')); }
+                    });
+                });
+            });
+        }
+        ov.querySelector('#gpBgCancel').addEventListener('click', gpClose);
+        ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
+        ov.querySelector('#gpBgSave').addEventListener('click', function () {
+            if (!selectedFile) { toast(T('请先选择要上传的图片')); return; }
+            var fd = new FormData();
+            fd.append('file', selectedFile);
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/profile/background');
+            var dt = localStorage.getItem('drive_token');
+            if (dt) xhr.setRequestHeader('X-Drive-Token', dt);
+            xhr.onload = function () {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.ok && res.data && res.data.url) {
+                        $('gpBg').style.backgroundImage = 'url(' + assetUrl(res.data.url) + ')';
+                        state.profile.basic.profile_bg = res.data.url;
+                        toast(T('横幅已更新'));
+                        gpClose();
+                    } else { toast((res && res.err) || T('上传失败')); }
+                } catch (e) { toast(T('上传失败')); }
+            };
+            xhr.send(fd);
+        });
+    }
+
+    // ==================== 增强：经验值历史查看器 ====================
+    function openExpLogViewer(targetUser) {
+        var ov = document.createElement('div');
+        ov.className = 'gp-mask';
+        ov.innerHTML = '<div class="gp-modal gp-exp-log-modal">' +
+            '<div class="gp-modal-title">' + T('经验值记录') +
+              '<span class="gp-exp-summary" id="gpExpSummary"></span>' +
+            '</div>' +
+            '<div class="gp-modal-body gp-exp-log-body" id="gpExpLogList">' + T('加载中…') + '</div>' +
+            '<div class="gp-modal-foot">' +
+              '<button class="gp-btn" id="gpExpClose">' + T('关闭') + '</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(ov);
+        var bodyScroll = ov.querySelector('.gp-exp-log-body') || ov.querySelector('.gp-modal-body');
+        if (bodyScroll) osbInit(bodyScroll);
+        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
+        document.addEventListener('keydown', _gpEsc);
+        ov.querySelector('#gpExpClose').addEventListener('click', gpClose);
+        ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
+        // 从资料页已有的 basic 信息先显示概览
+        var basic = (state.profile && state.profile.basic) || {};
+        var summary = T('等级') + ': Lv.' + (basic.level != null ? basic.level : 0) + ' · ' + T('经验') + ': ' + (basic.exp != null ? basic.exp : 0);
+        ov.querySelector('#gpExpSummary').textContent = summary;
+        // 拉日志
+        api('GET', '/api/profile/exp-log?username=' + encodeURIComponent(targetUser)).then(function (res) {
+            var list = (res && res.ok && res.data && res.data.list) || [];
+            var box = ov.querySelector('#gpExpLogList');
+            if (list.length === 0) { box.innerHTML = '<div class="gp-empty">' + T('暂无经验记录') + '</div>'; return; }
+            box.innerHTML = '';
+            var reasonMap = {
+                achievement: T('解锁成就'), badge: T('获得徽章'),
+                card_draw: T('抽卡'), badge_craft: T('合成徽章'),
+                review: T('发布评测'), game_play: T('游玩游戏'), other: T('其他')
+            };
+            list.forEach(function (it) {
+                var row = el('div', 'gp-exp-row');
+                var left = el('div', 'gp-exp-left');
+                left.appendChild(el('div', 'gp-exp-reason', reasonMap[it.reason] || it.reason || T('未知')));
+                if (it.detail) left.appendChild(el('div', 'gp-exp-detail', it.detail));
+                var tm = it.create_time ? new Date(it.create_time) : null;
+                if (tm) {
+                    var ts = tm.toLocaleString();
+                    left.appendChild(el('div', 'gp-exp-time', ts));
+                }
+                var right = el('div', 'gp-exp-right');
+                var change = Number(it.change) || 0;
+                right.appendChild(el('span', 'gp-exp-change' + (change >= 0 ? ' positive' : ' negative'),
+                    (change >= 0 ? '+' : '') + change + T(' EXP')));
+                row.appendChild(left); row.appendChild(right);
+                box.appendChild(row);
+            });
+        });
+    }
+
+    // ==================== 增强：资料页发表评测（先选游戏 → 复用游戏详情页评测弹窗） ====================
+    function openReviewEditor() {
+        var ov = document.createElement('div');
+        ov.className = 'gp-mask';
+        ov.innerHTML = '<div class="gp-modal gp-game-pick-modal">' +
+            '<div class="gp-modal-title">' + T('选择要评测的游戏') + '</div>' +
+            '<div class="gp-modal-body">' +
+              '<input type="text" id="gpRevSearch" placeholder="' + T('搜索游戏名称…') + '" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-bg);color:var(--text);margin-bottom:12px">' +
+              '<div class="gp-game-pick-list" id="gpGamePickList">' + T('加载中…') + '</div>' +
+            '</div>' +
+            '<div class="gp-modal-foot">' +
+              '<button class="gp-btn" id="gpRevPickCancel">' + T('取消') + '</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(ov);
+        var bodyScroll = ov.querySelector('.gp-game-pick-list') || ov.querySelector('.gp-modal-body');
+        if (bodyScroll) osbInit(bodyScroll);
+        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
+        document.addEventListener('keydown', _gpEsc);
+        ov.querySelector('#gpRevPickCancel').addEventListener('click', gpClose);
+        ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
+        api('GET', '/api/game/list?page=1&size=100').then(function (res) {
+            var games = (res && res.ok && res.data && res.data.list) || [];
+            var filtered = games.slice();
+            var listBox = ov.querySelector('#gpGamePickList');
+            function renderGameList() {
+                listBox.innerHTML = '';
+                if (filtered.length === 0) { listBox.innerHTML = '<div class="gp-empty">' + T('无游戏') + '</div>'; return; }
+                filtered.forEach(function (g) {
+                    var row = el('div', 'gp-game-pick-row');
+                    var ic = el('div', 'gp-game-pick-ic');
+                    if (g.cover) { var img = document.createElement('img'); img.src = assetUrl(g.cover); img.onerror = function () { ic.textContent = g.name.charAt(0); }; ic.appendChild(img); }
+                    else { ic.textContent = g.name.charAt(0); }
+                    row.appendChild(ic);
+                    var nameBox = el('div', 'gp-game-pick-namebox');
+                    nameBox.appendChild(el('div', 'gp-game-pick-name', g.name));
+                    if (g.genre) nameBox.appendChild(el('div', 'gp-game-pick-sub', g.genre));
+                    row.appendChild(nameBox);
+                    row.addEventListener('click', function () {
+                        gpClose();
+                        openReviewModal(g.id);
+                    });
+                    listBox.appendChild(row);
+                });
+            }
+            renderGameList();
+            ov.querySelector('#gpRevSearch').addEventListener('input', function (e) {
+                var kw = (e.target.value || '').trim().toLowerCase();
+                filtered = kw ? games.filter(function (g) { return (g.name || '').toLowerCase().indexOf(kw) >= 0; }) : games.slice();
+                renderGameList();
+            });
+        });
+    }
+
+    // ---------- 展示柜渲染引擎 ----------
+    function renderShowcases() {
+        var showcaseList = state.profile.showcase;
+        var main = document.querySelector('.gp-main');
+        if (!main) return;
+        main.innerHTML = '';
+
+        // 有自定义展示柜配置 → 按配置渲染
+        if (showcaseList && showcaseList.length) {
+            showcaseList.forEach(function (sc) {
+                var box = renderShowcaseItem(sc);
+                if (box) main.appendChild(box);
+            });
+            return;
+        }
+
+        // 没配置 → 用默认兜底（P0 遗留的"最近游玩"）
+        main.appendChild(renderDefaultRecentGames());
+    }
+
+    function renderDefaultRecentGames() {
+        var wrap = document.createElement('div');
+        wrap.className = 'gp-default-wrap';
+        wrap.appendChild(el('div', 'gp-section-title', T('最近游玩')));
+        var list = el('div', 'gp-recent');
+        var recs = state.profile.recentGames || [];
+        if (recs.length) {
+            recs.forEach(function (g) { list.appendChild(makeRecentRow(g)); });
+        } else {
+            var empty = el('div', 'gp-empty');
+            empty.style.padding = '40px 0';
+            empty.textContent = T('暂无游戏记录');
+            wrap.appendChild(list);
+            wrap.appendChild(empty);
+            return wrap;
+        }
+        wrap.appendChild(list);
+        return wrap;
+    }
+
+    function makeRecentRow(g) {
+        var row = el('div', 'gp-recent-row');
+        var thumb = el('div', 'gp-recent-thumb');
+        var gImg = document.createElement('img');
+        gImg.src = assetUrl(g.cover || '');
+        gImg.onerror = function () { thumb.innerHTML = ''; var ph = el('div', 'gs-cover-ph'); ph.style.filter = 'hue-rotate(' + hashHue(g.name) + 'deg)'; ph.appendChild(el('b', '', String(g.name || '?').charAt(0).toUpperCase())); thumb.appendChild(ph); };
+        thumb.appendChild(gImg); row.appendChild(thumb);
+        var info = el('div', 'gp-recent-info');
+        info.appendChild(el('div', 'gp-recent-name', g.name || (T('游戏 #') + g.game_id)));
+        var meta = el('div', 'gp-recent-meta');
+        meta.appendChild(el('span', '', T('游戏时长') + ': ' + fmtPlay(g.play_seconds)));
+        if (g.last_play_at) meta.appendChild(el('span', '', T('最近游玩') + ': ' + g.last_play_at));
+        info.appendChild(meta); row.appendChild(info);
+        row.addEventListener('click', function () { openDetail(g.game_id); });
+        return row;
+    }
+
+    // P2-a: addLikeBar 给截图/艺术作品 cell 加右下角点赞条（绝对定位 overlay）
+    // 点击 toggle，调用 POST /api/profile/screenshot/like，更新 like_count DOM
+    // 自己的图只显示计数不允许点（防后端报错）
+    function addLikeBar(cell, ss, ssId) {
+        if (!ssId || !cell) return;
+        var isSelf = state.profile && state.profile.username === ss.username;
+        var liked = ss._liked === true; // 后端列表接口暂未返回 liked，这里只做本地 toggle 视觉
+        var cnt = ss.like_count || 0;
+
+        var bar = el('div', 'gp-like-bar');
+        bar.style.pointerEvents = isSelf ? 'none' : 'auto';
+        bar.style.opacity = isSelf ? '0.5' : '0.9';
+
+        var btn = el('button', 'gp-like-btn' + (liked ? ' liked' : ''), '♥');
+        var cntEl = el('span', 'gp-like-count', String(cnt));
+        bar.appendChild(btn);
+        bar.appendChild(cntEl);
+
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();   // 阻止冒泡触发 cell 的 openImageViewer
+            if (isSelf) { toast(T('不能点赞自己的作品')); return; }
+            btn.disabled = true;
+            api('POST', '/api/profile/screenshot/like', { screenshot_id: ssId }).then(function (res) {
+                btn.disabled = false;
+                if (res && res.ok) {
+                    liked = res.data.liked;
+                    cnt = res.data.like_count;
+                    btn.classList.toggle('liked', liked);
+                    cntEl.textContent = String(cnt);
+                    // 同步回 state，后续重渲染用
+                    ss._liked = liked; ss.like_count = cnt;
+                } else {
+                    toast((res && res.err) || T('操作失败'));
+                }
+            }).catch(function () { btn.disabled = false; });
+        });
+
+        cell.style.position = 'relative';
+        cell.appendChild(bar);
+    }
+
+    // ==================== custom_html 前端安全过滤（与服务端 sanitizeCustomHTML 同口径） ====================
+
+    // sanitizeCustomHTMLFrontend 前端白名单过滤：移除危险标签/属性/协议
+    // 服务端已过滤过一次，前端再做一层防御性过滤
+    function sanitizeCustomHTMLFrontend(html) {
+        if (!html) return '';
+        var out = html;
+        // 1. 移除 HTML 注释
+        out = out.replace(/<!--[\s\S]*?-->/g, '');
+        // 2. 移除 <script> / <style> 整块（非贪婪匹配 + 忽略大小写）
+        out = out.replace(/<\s*script[^>]*>[\s\S]*?<\s*\/\s*script\s*>/gi, '');
+        out = out.replace(/<\s*style[^>]*>[\s\S]*?<\s*\/\s*style\s*>/gi, '');
+        // 3. 移除危险标签（成对 + 自闭合）
+        var dangerTags = 'iframe|object|embed|applet|form|input|button|textarea|select|link|meta|base|body|head|html|title|frameset|frame|noscript|xmp|template|slot';
+        var dangerReOpen = new RegExp('<\\s*(' + dangerTags + ')\\b[^>]*/?>', 'gi');
+        var dangerRePair  = new RegExp('<\\s*(' + dangerTags + ')\\b[^>]*>[\\s\\S]*?<\\s*/\\s*\\1\\s*>', 'gi');
+        out = out.replace(dangerRePair, '');
+        out = out.replace(dangerReOpen, '');
+        // 4. 移除所有 on* 事件属性
+        out = out.replace(/\son[a-zA-Z]+\s*=\s*"[^"]*"/g, '');
+        out = out.replace(/\son[a-zA-Z]+\s*=\s*'[^']*'/g, '');
+        out = out.replace(/\son[a-zA-Z]+\s*=\s*[^\s>]+/g, '');
+        // 5. 移除 javascript:/vbscript:/data: 协议（href/src/action/formaction/xlink:href）
+        var protoRe1 = /(href|src|action|formaction|xlink:href)\s*=\s*"(javascript|vbscript|data)\s*:[^"]*"/gi;
+        var protoRe2 = /(href|src|action|formaction|xlink:href)\s*=\s*'(javascript|vbscript|data)\s*:[^']*'/gi;
+        out = out.replace(protoRe1, '"#"');
+        out = out.replace(protoRe2, "'#'");
+        // 6. 清理剩余的 < > 闭合不成对的可能（简单处理：trim）
+        return out.trim();
+    }
+
+    // renderShowcaseItem 根据 type 渲染单个展示柜
+    function renderShowcaseItem(sc) {
+        var titleMap = {
+            recent_games: T('最近游玩'), favorite_game: T('最爱游戏'),
+            achievements: T('精选成就'), badges: T('徽章展示'),
+            screenshots: T('游戏截图'), artwork: T('艺术作品'),
+            reviews: T('我的评测'), friends: T('好友展示'), cards: T('卡片背包'),
+            custom_html: T('自定义展示')
+        };
+        var section = document.createElement('div');
+        section.className = 'gp-showcase-section';
+        section.style.marginBottom = '18px';
+        section.appendChild(el('div', 'gp-section-title', sc.title || titleMap[sc.type] || sc.type));
+
+        // custom_html 需要 sc.config（原始 HTML），单独处理
+        if (sc.type === 'custom_html') {
+            var htmlContent = '';
+            if (sc.config) {
+                try {
+                    // 兼容 JSON 格式旧数据 {html: "..."} 和纯 HTML 字符串
+                    var parsed = JSON.parse(sc.config);
+                    htmlContent = typeof parsed === 'object' ? (parsed.html || '') : sc.config;
+                } catch (e) {
+                    htmlContent = sc.config;
+                }
+            }
+            if (!htmlContent) {
+                section.appendChild(el('div', 'gp-empty', T('自定义展示柜内容为空')));
+                return section;
+            }
+            var sanitized = sanitizeCustomHTMLFrontend(htmlContent);
+            var wrap = el('div', 'gp-custom-html-wrap');
+            wrap.style.cssText = 'overflow:hidden;border-radius:6px;';
+            wrap.innerHTML = sanitized;
+            section.appendChild(wrap);
+            return section;
+        }
+
+        // 其他类型走 getShowcaseData
+        var data = getShowcaseData(sc.type);
+        if (!data) {
+            section.appendChild(el('div', 'gp-empty', T('暂无可展示内容')));
+            return section;
+        }
+        section.appendChild(data);
+        return section;
+    }
+
+    // getShowcaseData 返回某个 showcase type 对应的渲染节点
+    function getShowcaseData(type) {
+        // 所有 renderer 都在本地 state 里取数据；后端扩展后可以升级
+        if (type === 'recent_games') {
+            var list = el('div', 'gp-recent');
+            (state.profile.recentGames || []).slice(0, 6).forEach(function (g) { list.appendChild(makeRecentRow(g)); });
+            return list.childNodes.length ? list : null;
+        }
+        if (type === 'favorite_game') {
+            var fg = state.profile.favoriteGame;
+            if (!fg) return null;
+            var card = el('div', 'gp-fav-card');
+            var img = document.createElement('img');
+            img.src = assetUrl(fg.cover || '');
+            card.appendChild(img);
+            card.appendChild(el('div', 'gp-fav-name', fg.name || '—'));
+            card.addEventListener('click', function () { openDetail(fg.id); });
+            return card;
+        }
+        if (type === 'badges') {
+            var badges = el('div', 'gp-badges');
+            badges.style.marginTop = '4px';
+            (state.profile.badges || []).slice(0, 10).forEach(function (b) {
+                var bd = el('div', 'gp-badge');
+                if (b.icon) {
+                    var bi = document.createElement('img'); bi.src = assetUrl(b.icon); bd.appendChild(bi);
+                } else { bd.appendChild(el('span', 'gp-badge-ic', b.type === 'level' ? '⭐' : '🏅')); }
+                bd.title = b.name;
+                badges.appendChild(bd);
+            });
+            return badges.childNodes.length ? badges : null;
+        }
+        if (type === 'friends') {
+            var box = el('div', 'gp-friends-grid');
+            box.style.display = 'flex'; box.style.gap = '10px'; box.style.flexWrap = 'wrap';
+            (state.profile.friends || []).slice(0, 8).forEach(function (f) {
+                var cell = el('div', 'gp-friend-cell');
+                cell.style.width = '44px'; cell.style.textAlign = 'center'; cell.style.cursor = 'pointer';
+                var fav = el('div', 'gp-cmt-av');
+                fav.style.width = '42px'; fav.style.height = '42px';
+                if (f.avatar) { var fi = document.createElement('img'); fi.src = assetUrl(f.avatar); fav.appendChild(fi); }
+                else fav.textContent = initialOf(f.nickname || f.username);
+                if (f.is_online) {
+                    fav.classList.add('gp-online');
+                }
+                cell.appendChild(fav);
+                cell.appendChild(el('div', '', (f.nickname || f.username).slice(0, 4)));
+                box.appendChild(cell);
+            });
+            return box.childNodes.length ? box : null;
+        }
+        if (type === 'achievements') {
+            var achData = state.profile.achievements;
+            if (!achData || !achData.groups || achData.groups.length === 0) return null;
+            // 取前 6 个成就展示（跨游戏取 unlocked 的优先）
+            var flatItems = [];
+            achData.groups.forEach(function (g) {
+                g.items.forEach(function (it) {
+                    it._gameName = g.game_name || '';
+                    it._gameID = g.game_id;
+                    flatItems.push(it);
+                });
+            });
+            flatItems.sort(function (a, b) {
+                if (a.unlocked !== b.unlocked) return a.unlocked ? -1 : 1;
+                return b.rarity - a.rarity;
+            });
+            var grid = el('div', 'gp-ach-grid');
+            flatItems.slice(0, 6).forEach(function (it) {
+                grid.appendChild(makeAchievementCell(it));
+            });
+            // 点击整个 grid → 打开成就详情弹窗
+            grid.style.cursor = 'pointer';
+            grid.addEventListener('click', function () { openAchievementsModal(); });
+            // 统计行：解锁 X/Y
+            var stat = el('div', 'gp-ach-stat');
+            stat.textContent = T('已解锁') + ' ' + achData.unlocked + ' / ' + achData.total;
+            var wrap = el('div');
+            wrap.appendChild(grid);
+            wrap.appendChild(stat);
+            return wrap;
+        }
+        if (type === 'reviews') {
+            var revData = state.profile.reviews;
+            if (!revData || !revData.list || revData.list.length === 0) return null;
+            var revWrap = el('div', 'gp-rev-list');
+            revData.list.slice(0, 4).forEach(function (rv) {
+                revWrap.appendChild(makeReviewCard(rv));
+            });
+            // 底部统计：共 N 条评测
+            var revStat = el('div', 'gp-ach-stat');
+            revStat.textContent = T('共') + ' ' + (revData.total || 0) + ' ' + T('条评测');
+            revWrap.appendChild(revStat);
+            return revWrap;
+        }
+        if (type === 'screenshots') {
+            var ssData = state.profile.screenshots;
+            if (!ssData || !ssData.list || ssData.list.length === 0) return null;
+            var ssList = ssData.list.filter(function (ss) { return ss.type !== 'artwork'; });
+            if (ssList.length === 0) return null;
+            var ssGrid = el('div', 'gp-ss-grid');
+            ssList.slice(0, 8).forEach(function (ss) {
+                var cell = el('div', 'gp-ss-cell');
+                var img = document.createElement('img');
+                img.src = assetUrl(ss.url);
+                img.loading = 'lazy';
+                img.onerror = function () { cell.style.display = 'none'; };
+                cell.appendChild(img);
+                if (ss.title) {
+                    var cap = el('div', 'gp-ss-cap', ss.title);
+                    cell.appendChild(cap);
+                }
+                // P2-a: 右下角点赞按钮 + 计数（点击不触发 cell 的 openImageViewer）
+                addLikeBar(cell, ss, ss.id);
+                cell.addEventListener('click', function () { openImageViewer(assetUrl(ss.url), ss.title); });
+                ssGrid.appendChild(cell);
+            });
+            return ssGrid.childNodes.length ? ssGrid : null;
+        }
+        if (type === 'artwork') {
+            var awData = state.profile.screenshots;
+            if (!awData || !awData.list || awData.list.length === 0) return null;
+            // 只展示 type=artwork 的艺术作品（区别于游戏截图网格）
+            var awList = awData.list.filter(function (ss) { return ss.type === 'artwork'; });
+            if (awList.length === 0) return null;
+            // Steam 风格艺术作品布局：第 1 张大图突出 + 后续小图横排
+            var awWrap = el('div', 'gp-art-wrap');
+            var awGrid = el('div', 'gp-art-grid');
+            awGrid.style.display = 'grid';
+            awGrid.style.gap = '8px';
+            awGrid.style.gridTemplateColumns = '2fr 1fr 1fr'; // 大图 + 2 小图
+            awList.slice(0, 3).forEach(function (ss, i) {
+                var cell = el('div', i === 0 ? 'gp-art-hero' : 'gp-art-cell');
+                cell.style.cursor = 'pointer';
+                var img = document.createElement('img');
+                img.src = assetUrl(ss.url);
+                img.loading = 'lazy';
+                img.style.width = '100%'; img.style.height = i === 0 ? '200px' : '96px';
+                img.style.objectFit = 'cover'; img.style.borderRadius = '6px';
+                img.style.display = 'block';
+                cell.appendChild(img);
+                if (ss.title) {
+                    var cap = el('div', 'gp-ss-cap', ss.title);
+                    cap.style.fontSize = i === 0 ? '13px' : '11px';
+                    cell.appendChild(cap);
+                }
+                addLikeBar(cell, ss, ss.id);
+                cell.addEventListener('click', function () { openImageViewer(assetUrl(ss.url), ss.title); });
+                awGrid.appendChild(cell);
+            });
+            awWrap.appendChild(awGrid);
+            // 超过 3 张 → 小缩略图行
+            if (awList.length > 3) {
+                var awMore = el('div', 'gp-art-more');
+                awMore.style.display = 'flex'; awMore.style.gap = '6px'; awMore.style.marginTop = '6px';
+                awList.slice(3, Math.min(awList.length, 7)).forEach(function (ss) {
+                    var t = document.createElement('img');
+                    t.src = assetUrl(ss.url); t.loading = 'lazy';
+                    t.style.width = '48px'; t.style.height = '48px';
+                    t.style.objectFit = 'cover'; t.style.borderRadius = '4px';
+                    t.style.cursor = 'pointer';
+                    t.addEventListener('click', function () { openImageViewer(assetUrl(ss.url), ss.title); });
+                    awMore.appendChild(t);
+                });
+                awWrap.appendChild(awMore);
+            }
+            return awWrap;
+        }
+        if (type === 'cards') {
+            var cardData = state.profile.cards;
+            if (!cardData || !cardData.groups || cardData.groups.length === 0) return null;
+            var cardWrap = el('div', 'gp-cards-wrap');
+            cardData.groups.forEach(function (g) {
+                var gHead = el('div', 'gp-card-group-head', g.game_name || (T('游戏 #') + g.game_id));
+                cardWrap.appendChild(gHead);
+                var cGrid = el('div', 'gp-card-grid');
+                g.items.slice(0, 8).forEach(function (it) {
+                    cGrid.appendChild(makeCardCell(it));
+                });
+                cardWrap.appendChild(cGrid);
+            });
+            return cardWrap;
+        }
+        return null;
+    }
+
+    // loadProfile 拉取个人资料（API 优先；服务端未就绪时走本地已有数据兜底）
+    function loadProfile(targetUser) {
+        var p = state.profile;
+        p.username = targetUser;
+        p.loading = true;
+
+        // 先渲染"自己"的基础信息（从 localStorage im_auth 解码 + 已有昵称/头像）
+        // —— 即使 API 还没好，页面也不至于一片空白
+        var basic = {
+            nickname: myNickname || username,
+            avatar: '',
+            title: '',
+            signature: '',
+            level: 1,
+            exp: 0,
+            profile_bg: '',
+            favorite_game_id: 0
+        };
+        // 尝试从 localStorage 取已缓存的头像（chat.js 存的）
+        try {
+            var saved = localStorage.getItem('im_user_' + targetUser);
+            if (saved) {
+                var parsed = JSON.parse(saved);
+                if (parsed.avatar) basic.avatar = parsed.avatar;
+                if (parsed.nickname) basic.nickname = parsed.nickname;
+                if (parsed.signature) basic.signature = parsed.signature;
+            }
+        } catch (e) { /* 忽略 */ }
+        p.basic = basic;
+        // 统计：先从本地 game-store state.lib 聚合（自己时直接算；他人时服务端聚合）
+        if (targetUser === username) {
+            var libs = [];
+            var totalPlay = 0;
+            for (var gid in state.lib) {
+                var lib = state.lib[gid];
+                if (lib && lib.lib && lib.lib.state >= 0) libs.push(gid);
+                if (lib && lib.lib && lib.lib.play_seconds) totalPlay += lib.lib.play_seconds;
+            }
+            p.stats = {
+                total_games: libs.length,
+                total_play_seconds: totalPlay,
+                total_achievements: 0,
+                total_badges: 0,
+                friends_count: 0
+            };
+            // 最近游戏：按 play_seconds 倒序取前 6（无 last_play_at 时用进入库的顺序）
+            var recent = libs.map(function (gid) {
+                var lg = state.lib[gid];
+                var game = state.games[gid] || { id: gid, name: '', cover: lg.game && lg.game.cover };
+                return {
+                    game_id: gid,
+                    name: (game && game.name) || (T('游戏 #') + gid),
+                    cover: lg.game ? lg.game.cover : (game && game.cover) || '',
+                    play_seconds: (lg.lib && lg.lib.play_seconds) || 0,
+                    last_play_at: ''
+                };
+            }).filter(function (x) { return x.play_seconds > 0; })
+              .sort(function (a, b) { return b.play_seconds - a.play_seconds; })
+              .slice(0, 6);
+            p.recentGames = recent;
+            // 徽章：自己至少显示一个等级徽章（即使服务端还没存）
+            var calcedLv = calcLevelFromExp(basic.exp || 0);
+            p.badges = [{ type: 'level', code: 'lv' + calcedLv, name: '等级 ' + calcedLv, icon: '', desc: '' }];
+        } else {
+            p.stats = { total_games: 0, total_play_seconds: 0, total_achievements: 0, total_badges: 0, friends_count: 0 };
+            p.recentGames = [];
+            p.badges = [];
+        }
+
+        // 先渲染本地兜底数据（让用户能立即看到页面）
+        renderProfile();
+
+        // 异步尝试从后端拉取完整数据（服务端接口就绪后自动生效）
+        api('GET', '/api/profile?username=' + encodeURIComponent(targetUser)).then(function (res) {
+            p.loading = false;
+            if (!res || !res.ok) {
+                // 后端返回 403 私密 / 404 不存在 / 网络错误 → 显示本地兜底 + 提示
+                if (res && res.err && (res.err.indexOf('私密') >= 0 || res.err.indexOf('不存在') >= 0)) {
+                    toast(res.err);
+                }
+                return;
+            }
+            if (!res.data) return;
+            var d = res.data;
+            if (d.basic) p.basic = Object.assign({}, p.basic, d.basic);
+            if (d.stats) p.stats = d.stats;
+            if (d.badges) p.badges = d.badges;
+            if (d.recentGames) p.recentGames = d.recentGames;
+            if (d.favoriteGame) p.favoriteGame = d.favoriteGame;
+            // P1-a/G3: level_perks —— 等级权益（展示柜槽位/称号/等级等），必须同步到 state
+            // 否则所有依赖 maxSlots 的逻辑都会走 fallback 3 而不会用后端真实配置
+            if (d.level_perks) p.level_perks = d.level_perks;
+            renderProfile();
+
+            // P1: 异步拉取展示柜/留言/好友三条补充数据（各自独立 Promise，互不阻塞）
+            api('GET', '/api/profile/showcase?username=' + encodeURIComponent(targetUser)).then(function (s2) {
+                if (s2 && s2.ok && Array.isArray(s2.data)) {
+                    // 精简后端返回的 ProfileShowcase struct —— 只留前端需要的 5 个字段
+                    // 后端会多返回 id/username/sort_order/create_time/update_time 等
+                    state.profile.showcase = s2.data.map(function (row) {
+                        return {
+                            slot: Number(row.slot) || 0,
+                            type: row.type || 'recent_games',
+                            title: row.title || '',
+                            config: row.config || '',
+                            enabled: 1
+                        };
+                    });
+                    renderShowcases();
+                }
+            });
+            api('GET', '/api/profile/comments?username=' + encodeURIComponent(targetUser)).then(function (c2) {
+                if (c2 && c2.ok && c2.data) {
+                    state.profile.comments = c2.data.list || [];
+                    state.profile.canComment = c2.data.can_comment !== false;
+                    renderComments();
+                }
+            });
+            api('GET', '/api/profile/friends?username=' + encodeURIComponent(targetUser)).then(function (f2) {
+                if (f2 && f2.ok && f2.data) {
+                    state.profile.friends = f2.data.list || [];
+                    // 如果 showcase 里有 friends 类型，重新渲染
+                    var hasFriends = (state.profile.showcase || []).some(function (s) { return s.type === 'friends'; });
+                    if (hasFriends) renderShowcases();
+                }
+            });
+            // P1.5: 异步拉取成就列表（用于 achievements 展示柜类型 + 成就详情弹窗）
+            api('GET', '/api/profile/achievements?username=' + encodeURIComponent(targetUser) + '&game_id=0').then(function (a2) {
+                if (a2 && a2.ok && a2.data) {
+                    state.profile.achievements = a2.data;
+                    var hasAch = (state.profile.showcase || []).some(function (s) { return s.type === 'achievements'; });
+                    if (hasAch) renderShowcases();
+                }
+            });
+            // P2: 异步拉取用户评测列表（用于 reviews 展示柜类型）
+            api('GET', '/api/profile/reviews?username=' + encodeURIComponent(targetUser) + '&limit=6').then(function (r2) {
+                if (r2 && r2.ok && r2.data) {
+                    state.profile.reviews = r2.data;
+                    var hasRev = (state.profile.showcase || []).some(function (s) { return s.type === 'reviews'; });
+                    if (hasRev) renderShowcases();
+                }
+            });
+            // P2.3: 异步拉取截图/艺术作品（用于 screenshots 展示柜类型）
+            api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(targetUser) + '&type=all').then(function (s2) {
+                if (s2 && s2.ok && s2.data) {
+                    state.profile.screenshots = s2.data;
+                    var hasSs = (state.profile.showcase || []).some(function (s) { return s.type === 'screenshots'; });
+                    if (hasSs) renderShowcases();
+                }
+            });
+            // P3: 异步拉取卡片背包（用于 cards 展示柜类型）
+            api('GET', '/api/profile/cards?username=' + encodeURIComponent(targetUser)).then(function (c2) {
+                if (c2 && c2.ok && c2.data) {
+                    state.profile.cards = c2.data;
+                    var hasCards = (state.profile.showcase || []).some(function (s) { return s.type === 'cards'; });
+                    if (hasCards) renderShowcases();
+                }
+            });
+        });
     }
 
     // ==================== 商店页签 ====================
@@ -1725,6 +3709,10 @@
                 if (!gid) return;
                 state.lib[gid] = item;
                 if (item.game) state.games[gid] = item.game;
+                // 成就桥接会话密钥（方案 §14.4 链路 B）：随库接口下发，喂给 ImGameSDK
+                if (window.ImGameSDK && item.game && item.game.session_sign_key) {
+                    ImGameSDK.setSession(gid, item.game.session_sign_key);
+                }
             });
             if (silent && state.libSig === prevSig) { updateBadges(); return false; } // 无变化：仅徽标保守刷新
             renderLibrary();
@@ -1762,6 +3750,8 @@
                 var d = res.data || {};
                 // 更新最新的游戏元数据（含 steam_emu / steam_app_id / launch_exe / launch_args / net_mode）
                 state.games[gid] = d;
+                // 成就桥接会话密钥（详情接口 token 匹配时下发，方案 §14.4）
+                if (window.ImGameSDK && d.session_sign_key) ImGameSDK.setSession(gid, d.session_sign_key);
                 if (state.lib[gid]) {
                     state.lib[gid].game = d;
                     // 同步 install_path（详情接口 item.lib.install_path 可能比库接口更新）
@@ -2420,6 +4410,8 @@
             if (!res.ok) { if (body.isConnected) body.textContent = res.msg || T('动态加载失败'); return; }
             var d = res.data || {};
             state.games[gid] = d; // 全量详情同步进缓存（库摘要 → 全量）
+            // 成就桥接会话密钥（详情接口 token 匹配时下发，方案 §14.4）
+            if (window.ImGameSDK && d.session_sign_key) ImGameSDK.setSession(gid, d.session_sign_key);
             var feed = { notices: d.notices || [], versions: d.versions || [] };
             state.libFeed[gid] = feed;
             if (body.isConnected) renderLibFeed(gid, feed, body); // 响应回来已切走：丢弃
@@ -4010,7 +6002,7 @@
         });
         $('gsCardProfile').addEventListener('click', function () {
             hide();
-            toast(T('个人资料页即将开放，可先在主界面查看'));
+            openProfile(username);
         });
         $('gsCardSettings').addEventListener('click', function () {
             hide();
@@ -4566,6 +6558,8 @@
             if (!res.ok || propGid !== gid) return;
             var fresh = res.data || {};
             state.games[gid] = fresh;
+            // 成就桥接会话密钥（详情接口 token 匹配时下发，方案 §14.4）
+            if (window.ImGameSDK && fresh.session_sign_key) ImGameSDK.setSession(gid, fresh.session_sign_key);
             if (state.lib[gid]) state.lib[gid].game = fresh;
             // 端口转发可能也更新了（管理后台修改）
             var newPf = parsePortForwards(fresh.port_forwards);
@@ -6559,6 +8553,172 @@
             showView('online');
         }
     });
+    // 阶段二百九十五：Steam 同款个人资料页签
+    $('gsNavProfile').addEventListener('click', function () {
+        openProfile(username);
+    });
+    // 阶段二百九十五 P1: 三个个人资料自绘弹窗事件绑定
+    bindProfileModalEvents();
+
+    // ==================== P2-b: 头像裁剪模块 ====================
+    // 裁剪参数语义冻结：
+    //   scale [1,3]           → 显示上的放大倍数（1=原图铺满 256 画布）
+    //   offsetX / offsetY    → 显示坐标系下的偏移（单位=canvas 像素，正=图片向右/下移）
+    // 映射函数单一化：
+    //   sourceSize = 256 / scale
+    //   sourceX = (imgW - sourceSize)/2 - offsetX  （再 clamp 到合法范围）
+    //   sourceY = (imgH - sourceSize)/2 - offsetY
+    //   drawImage(img, sourceX, sourceY, sourceSize, sourceSize, 0, 0, 256, 256)
+    (function () {
+        var cropState = { img: null, scale: 1.3, offsetX: 0, offsetY: 0,
+            dragging: false, dragStartX: 0, dragStartY: 0, dragOffsetX: 0, dragOffsetY: 0 };
+        var CROP_SIZE = 256;
+
+        // 单一绘制函数：把当前 cropState 渲染到 canvas
+        function drawCrop() {
+            if (!cropState.img) return;
+            var canvas = $('gpAvCropCanvas');
+            var ctx = canvas.getContext('2d');
+            var img = cropState.img;
+            var scale = Math.max(1, Math.min(3, cropState.scale));
+
+            // 冻结映射公式
+            var sourceSize = CROP_SIZE / scale;
+            var offsetX = cropState.offsetX;
+            var offsetY = cropState.offsetY;
+
+            // 边界约束：sourceX/Y 不能让 source 超出原图
+            var maxOffsetX = Math.max(0, (img.naturalWidth - sourceSize) / 2);
+            var maxOffsetY = Math.max(0, (img.naturalHeight - sourceSize) / 2);
+            offsetX = Math.max(-maxOffsetX, Math.min(maxOffsetX, offsetX));
+            offsetY = Math.max(-maxOffsetY, Math.min(maxOffsetY, offsetY));
+            cropState.offsetX = offsetX;
+            cropState.offsetY = offsetY;
+
+            var sx = (img.naturalWidth - sourceSize) / 2 - offsetX;
+            var sy = (img.naturalHeight - sourceSize) / 2 - offsetY;
+
+            ctx.clearRect(0, 0, CROP_SIZE, CROP_SIZE);
+            ctx.drawImage(img, sx, sy, sourceSize, sourceSize, 0, 0, CROP_SIZE, CROP_SIZE);
+        }
+
+        function openAvatarCropper() {
+            // 触发隐藏 file input
+            var fileInput = $('gpAvatarFile');
+            fileInput.value = '';     // 重置，允许重复选同一文件
+            fileInput.click();
+        }
+        window.openAvatarCropper = openAvatarCropper;  // 暴露给 onclick
+
+        $('gpAvatarFile').addEventListener('change', function (e) {
+            var file = e.target.files && e.target.files[0];
+            if (!file) return;
+            if (file.size > 5 * 1024 * 1024) { toast(T('图片不能超过 5MB')); return; }
+            if (!/^image\//.test(file.type)) { toast(T('请选择图片文件')); return; }
+
+            var reader = new FileReader();
+            reader.onload = function (ev) {
+                var img = new Image();
+                img.onload = function () {
+                    cropState.img = img;
+                    // 初始参数：scale 让短边尽量铺满但不裁剪过度
+                    var initScale = Math.max(1, Math.min(3,
+                        Math.min(img.naturalWidth, img.naturalHeight) / CROP_SIZE
+                    ));
+                    cropState.scale = initScale;
+                    cropState.offsetX = 0;
+                    cropState.offsetY = 0;
+                    $('gpAvCropScale').value = String(initScale);
+                    showMask('gpAvatarCropMask');
+                    setTimeout(drawCrop, 10);
+                };
+                img.src = ev.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 拖拽定位
+        var wrap = document.querySelector('.gp-av-crop-wrap');
+        wrap.addEventListener('pointerdown', function (e) {
+            cropState.dragging = true;
+            cropState.dragStartX = e.clientX;
+            cropState.dragStartY = e.clientY;
+            cropState.dragOffsetX = cropState.offsetX;
+            cropState.dragOffsetY = cropState.offsetY;
+            wrap.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        });
+        wrap.addEventListener('pointermove', function (e) {
+            if (!cropState.dragging) return;
+            cropState.offsetX = cropState.dragOffsetX + (e.clientX - cropState.dragStartX);
+            cropState.offsetY = cropState.dragOffsetY + (e.clientY - cropState.dragStartY);
+            drawCrop();
+        });
+        wrap.addEventListener('pointerup', function (e) {
+            cropState.dragging = false;
+            try { wrap.releasePointerCapture(e.pointerId); } catch (ex) {}
+        });
+
+        // 滚轮缩放（以鼠标位置为中心）
+        wrap.addEventListener('wheel', function (e) {
+            e.preventDefault();
+            var canvasRect = $('gpAvCropCanvas').getBoundingClientRect();
+            var mx = (e.clientX - canvasRect.left) / canvasRect.width;
+            var my = (e.clientY - canvasRect.top) / canvasRect.height;
+            var oldScale = cropState.scale;
+            var newScale = Math.max(1, Math.min(3, oldScale - e.deltaY * 0.003));
+            // 以鼠标位置为锚点调整 offset：保持该点对应原图同一像素
+            var ratio = newScale / oldScale;
+            cropState.offsetX = mx * CROP_SIZE - ratio * (mx * CROP_SIZE - cropState.offsetX);
+            cropState.offsetY = my * CROP_SIZE - ratio * (my * CROP_SIZE - cropState.offsetY);
+            cropState.scale = newScale;
+            $('gpAvCropScale').value = String(newScale);
+            drawCrop();
+        }, { passive: false });
+
+        // 滑块缩放
+        $('gpAvCropScale').addEventListener('input', function () {
+            cropState.scale = parseFloat(this.value) || 1.3;
+            drawCrop();
+        });
+
+        // 取消
+        $('gpAvCropCancel').addEventListener('click', function () {
+            hideMask('gpAvatarCropMask');
+            cropState.img = null;
+        });
+
+        // 确认：canvas → blob → FormData POST /upload/avatar（不能用 api()，它强制 JSON.stringify + 自动加 username）
+        $('gpAvCropConfirm').addEventListener('click', function () {
+            if (!cropState.img) { toast(T('请先选择图片')); return; }
+            var canvas = $('gpAvCropCanvas');
+            var btn = this;
+            btn.disabled = true; btn.textContent = T('上传中…');
+            canvas.toBlob(function (blob) {
+                if (!blob) { btn.disabled = false; btn.textContent = T('确认上传'); toast(T('导出失败')); return; }
+                var fd = new FormData();
+                fd.append('avatar', blob, 'avatar.png');
+                var headers = {};
+                try { var dt = localStorage.getItem('drive_token'); if (dt) headers['X-Drive-Token'] = dt; } catch (_) {}
+                fetch('/upload/avatar?username=' + encodeURIComponent(username), {
+                    method: 'POST', headers: headers, body: fd,
+                }).then(function (r) { return r.json(); }).then(function (res) {
+                    btn.disabled = false; btn.textContent = T('确认上传');
+                    if (res && res.avatar) {
+                        if (state.profile && state.profile.basic) {
+                            state.profile.basic.avatar = res.avatar;
+                        }
+                        hideMask('gpAvatarCropMask');
+                        cropState.img = null;
+                        renderProfile();
+                        toast(T('头像更新成功'));
+                    } else {
+                        toast(T('上传失败'));
+                    }
+                }).catch(function () { btn.disabled = false; btn.textContent = T('确认上传'); toast(T('网络异常')); });
+            }, 'image/png');
+        });
+    })();
 
     // 商店无限滚动（Steam 同款）：滚动接近底部（root=gsStoreScroll，400px 预载余量）自动拉下一页，
     // "加载更多"按钮已由 #gsStoreInf 底部容器替代（spinner/已加载全部，状态归口 updateStoreInf）

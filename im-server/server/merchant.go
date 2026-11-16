@@ -59,6 +59,9 @@ func registerMerchantRoutes(s *Server) {
 	http.HandleFunc("GET /api/merchant/recharge/summary", s.merchantGuard(s.handleMerchantRechargeSummary))
 	http.HandleFunc("GET /api/merchant/recharge/orders", s.merchantGuard(s.handleMerchantRechargeOrders))
 	http.HandleFunc("GET /api/merchant/gateway/package", s.merchantGuard(s.handleMerchantGatewayPackage))
+	// P2.2：成就定义 CRUD + 图标上传
+	http.HandleFunc("POST /api/merchant/games/{id}/achievement", s.merchantGuard(s.handleMerchantAchievementSave))
+	http.HandleFunc("GET /api/merchant/games/{id}/achievements", s.merchantGuard(s.handleMerchantAchievementsGet))
 }
 
 // merchantLoginStatus 商户登录前置状态（登录与守卫共用口径）：

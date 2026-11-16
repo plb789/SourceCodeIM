@@ -326,7 +326,8 @@
         OFFICIAL_MSG_ACK: 118,   // 下行：审核状态变更通知（审核人/发起方）
         OFFICIAL_SEARCH: 119,    // 双向：上行关键词；下行搜索结果 JSON
         OFFICIAL_CARD: 120,      // 双向：聊天内服务号名片（类似联系人名片 107）
-        OFFICIAL_RECALL: 121     // 下行：服务号消息撤回通知（商户后台撤回后推给订阅用户；content: {msg_id, official_msg_id}）
+        OFFICIAL_RECALL: 121,    // 下行：服务号消息撤回通知（商户后台撤回后推给订阅用户；content: {msg_id, official_msg_id}）
+        ACHIEVEMENT_UNLOCK: 122  // 游戏成就解锁实时推送（下行 content 为 JSON {game_id,code,name,desc,icon,rarity,exp_reward,level_up,new_level}；右下角弹成就 toast，不落库仅实时帧）
     };
 
     // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/

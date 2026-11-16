@@ -34,6 +34,28 @@ type User struct {
 	// 阶段二百八十一：朋友圈封面（微信同款"更换相册封面"）——/static/upload/ 相对路径，
 	// 空串走默认渐变背景；支持图片/GIF/短视频，AutoMigrate 自动加列，存量用户默认空
 	MomentCover string `gorm:"column:moment_cover;type:varchar(255);default:''" json:"moment_cover"`
+	// 阶段二百九十五：Steam 同款个人资料扩展字段
+	// Level 个人等级（经验值驱动，500*N² 公式；AutoMigrate 自动加列，存量用户默认 1）
+	Level int `gorm:"column:level;type:int;default:1" json:"level"`
+	// Exp 累计经验值（成就解锁/评测/上传等行为获得；int64 防高等级溢出）
+	Exp int64 `gorm:"column:exp;type:bigint;default:0" json:"exp"`
+	// Title 称号/副标题（如"传奇玩家"、"资深评测家"等，可由高等级解锁或管理员授予）
+	Title string `gorm:"column:title;type:varchar(64);default:''" json:"title"`
+	// ProfileBg 个人资料背景图 URL（Steam 同款横幅背景；/static/upload/ 相对路径，空串走默认渐变）
+	ProfileBg string `gorm:"column:profile_bg;type:varchar(255);default:''" json:"profile_bg"`
+	// ProfileVisibility 个人资料隐私：0=私密 1=仅好友可见 2=公开（陌生人可看）
+	ProfileVisibility int8 `gorm:"column:profile_visibility;type:tinyint;default:1" json:"profile_visibility"`
+	// GameVisibility 游戏详情隐私（谁能看到我的游戏库/游戏时长/成就列表）
+	GameVisibility int8 `gorm:"column:game_visibility;type:tinyint;default:1" json:"game_visibility"`
+	// FriendVisibility 好友列表隐私（谁能看到我的好友列表）
+	FriendVisibility int8 `gorm:"column:friend_visibility;type:tinyint;default:1" json:"friend_visibility"`
+	// CommentEnabled 是否允许他人在我资料页留言：0=禁止 1=允许（默认允许）
+	CommentEnabled int8 `gorm:"column:comment_enabled;type:tinyint;default:1" json:"comment_enabled"`
+	// FavoriteGameID 最爱游戏（资料页大卡展示；0=未设置）
+	FavoriteGameID int `gorm:"column:favorite_game_id;type:int;default:0" json:"favorite_game_id"`
+	// 阶段二百九十六：展示柜主题（积分商店购买激活；空串走默认主题；
+	// 可选值：showcase_theme_dark / showcase_theme_ocean / showcase_theme_forest / showcase_theme_sunset）
+	ProfileTheme string `gorm:"column:profile_theme;type:varchar(64);default:''" json:"profile_theme"`
 }
 
 // 用户状态常量（阶段一百三十五：后台账号锁定封禁/注销归口）
@@ -1355,7 +1377,10 @@ type GameLibrary struct {
 	// PayPrice 入库实付积分快照（0=免费入库；移出库退款按实付全额退还，防管理员中途调价导致退款歧义）
 	PayPrice float64 `gorm:"column:pay_price;type:double;default:0" json:"pay_price"`
 	// PlaySeconds 累计游玩秒数（客户端 start/end 上报归口累加）
-	PlaySeconds int64     `gorm:"column:play_seconds;default:0" json:"play_seconds"`
+	PlaySeconds int64 `gorm:"column:play_seconds;default:0" json:"play_seconds"`
+	// PlayCount 累计游玩会话次数（成就引擎次数型判定数据源；每次新会话 start 时 +1，
+	// 运行期间周期心跳复用 start 动作不计数。AutoMigrate 自动加列，存量库条目默认 0）
+	PlayCount   int64     `gorm:"column:play_count;default:0" json:"play_count"`
 	LastPlayAt  time.Time `gorm:"column:last_play_at;type:datetime;default:CURRENT_TIMESTAMP" json:"last_play_at"`
 	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime  time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
@@ -1702,3 +1727,240 @@ type ClamavWhitelist struct {
 }
 
 func (ClamavWhitelist) TableName() string { return "im_clamav_whitelist" }
+
+// ============= 阶段二百九十五：Steam 同款个人资料功能 =============
+
+// GameAchievement 游戏成就定义表 im_game_achievement（P0 阶段核心表）
+// 由游戏开发者/运营预置；客户端启动时拉取用于"成就未解锁时展示名称与描述"。
+// 稀有度决定解锁时发放的经验值（Common +10 → Legendary +200）
+type GameAchievement struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	// GameID 关联游戏（im_game.id）
+	GameID uint `gorm:"column:game_id;not null;index;uniqueIndex:idx_game_code" json:"game_id"`
+	// Code 成就游戏内唯一代码（客户端上报解锁时用此锚点；同一游戏内唯一）
+	Code string `gorm:"column:code;type:varchar(64);not null;uniqueIndex:idx_game_code" json:"code"`
+	// Name 成就展示名称
+	Name string `gorm:"column:name;type:varchar(128);not null" json:"name"`
+	// Desc 成就描述（解锁条件提示）
+	Desc string `gorm:"column:desc;type:varchar(255);default:''" json:"desc"`
+	// Icon 成就图标 URL（/static/upload/achievement/xxx.png）
+	Icon string `gorm:"column:icon;type:varchar(255);default:''" json:"icon"`
+	// Rarity 稀有度：0 Common 常见 / 1 Uncommon 罕见 / 2 Rare 稀有 / 3 Epic 史诗 / 4 Legendary 传说
+	Rarity int8 `gorm:"column:rarity;type:tinyint;default:0" json:"rarity"`
+	// ExpReward 解锁时发放的经验值（Common 10 → Legendary 200；由稀有度自动推断也可覆盖）
+	ExpReward int `gorm:"column:exp_reward;type:int;default:10" json:"exp_reward"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameAchievement) TableName() string { return "im_game_achievement" }
+
+// UserAchievement 用户已解锁成就表 im_user_achievement（P0 阶段核心表）
+// 每次解锁一条 INSERT 一条；客户端幂等上报（同一 username+achievement_id 唯一约束）
+type UserAchievement struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;index:idx_user_ach" json:"username"`
+	GameID   uint   `gorm:"column:game_id;not null;index:idx_user_game" json:"game_id"`
+	AchievementID uint `gorm:"column:achievement_id;not null;uniqueIndex:idx_user_ach" json:"achievement_id"`
+	UnlockTime time.Time `gorm:"column:unlock_time;autoCreateTime" json:"unlock_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (UserAchievement) TableName() string { return "im_user_achievement" }
+
+// UserBadge 用户徽章表 im_user_badge（P0 阶段核心表：等级徽章 + 特殊成就徽章）
+// 等级徽章由经验/等级变化时自动发放；特殊徽章由成就解锁/活动触发发放
+type UserBadge struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;index:idx_user_badge" json:"username"`
+	// Type 徽章类型：level 等级 / achievement 成就 / event 活动 / competition 竞赛
+	Type string `gorm:"column:type;type:varchar(16);not null;uniqueIndex:idx_user_badge" json:"type"`
+	// Code 徽章标识（如 lv12、first_win 等；同用户同 type 下唯一）
+	Code string `gorm:"column:code;type:varchar(64);not null;uniqueIndex:idx_user_badge" json:"code"`
+	Name string `gorm:"column:name;type:varchar(128);not null" json:"name"`
+	Icon string `gorm:"column:icon;type:varchar(255);default:''" json:"icon"`
+	Desc string `gorm:"column:desc;type:varchar(255);default:''" json:"desc"`
+	// ExpReward 获得该徽章发放的经验值（可为 0，如等级徽章主要标识等级不加经验）
+	ExpReward  int       `gorm:"column:exp_reward;type:int;default:0" json:"exp_reward"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (UserBadge) TableName() string { return "im_user_badge" }
+
+// ProfileExpLog 经验值变动日志表 im_profile_exp_log（P0 阶段：经验值审计 + 可查历史）
+// 任何给用户加经验的路径都写一条，便于前端展示"经验值从哪来的"
+type ProfileExpLog struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;index:idx_exp_user" json:"username"`
+	Change   int    `gorm:"column:change;type:int;not null" json:"change"` // 变动值（正=增加）
+	// Reason 来源类型：unlock_achievement / badge / complete_game / review_publish / upload_screenshot / level_up / admin_grant / other
+	Reason string `gorm:"column:reason;type:varchar(32);not null;index" json:"reason"`
+	Detail string `gorm:"column:detail;type:varchar(255);default:''" json:"detail"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (ProfileExpLog) TableName() string { return "im_profile_exp_log" }
+
+// ============= A1：等级配置表（文档附录 A） =============
+
+// UserLevelConfig 等级配置表 im_user_level_config
+// 管理员预设的等级权益数据（经验阈值/称号/展示柜槽位数/解锁主题等）；
+// 服务端启动时 AutoMigrate 自动建表，首次建表后自动 INSERT IGNORE 预设数据。
+type UserLevelConfig struct {
+	Level          int    `gorm:"column:level;primaryKey" json:"level"`                         // 等级（主键，从 1 开始）
+	ExpRequired    int64  `gorm:"column:exp_required;type:bigint;not null" json:"exp_required"` // 累计经验值（500*N² 公式反推）
+	BadgeCode      string `gorm:"column:badge_code;type:varchar(64);default:''" json:"badge_code"`
+	Title          string `gorm:"column:title;type:varchar(64);default:''" json:"title"`
+	ShowcaseSlots  int    `gorm:"column:showcase_slots;type:int;default:3" json:"showcase_slots"`
+	BackgroundLock string `gorm:"column:background_unlock;type:varchar(32);default:''" json:"background_unlock"`
+	CreateTime     time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (UserLevelConfig) TableName() string { return "im_user_level_config" }
+
+// ============= P2.3：截图/艺术作品展示柜 =============
+
+// ProfileScreenshot 用户截图/艺术作品表 im_profile_screenshot
+// 用户上传到个人资料页展示柜的图片（截图、艺术作品、同人图等）
+type ProfileScreenshot struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;index:idx_ss_user" json:"username"`
+	// Type 类型：screenshot 游戏截图 / artwork 艺术作品
+	Type     string `gorm:"column:type;type:varchar(16);not null;default:'screenshot';index:idx_ss_user" json:"type"`
+	URL      string `gorm:"column:url;type:varchar(512);not null" json:"url"`
+	Title    string `gorm:"column:title;type:varchar(128);default:''" json:"title"`
+	// GameID 关联游戏（0=通用艺术作品不关联具体游戏）
+	GameID   uint   `gorm:"column:game_id;default:0;index" json:"game_id"`
+	// LikeCount 点赞数
+	LikeCount int   `gorm:"column:like_count;default:0" json:"like_count"`
+	// Sort 排序权重
+	Sort     int       `gorm:"column:sort;default:0" json:"sort"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+func (ProfileScreenshot) TableName() string { return "im_profile_screenshot" }
+
+// ProfileScreenshotLike 截图/艺术作品点赞表 im_profile_screenshot_like
+// 一人一赞 toggle（uniqueIndex(screenshot_id, username) 幂等：未点插入+1，已点删除-1）
+// 点赞 → 作者获得 +2 经验值（文档 §4.1）
+type ProfileScreenshotLike struct {
+	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ScreenshotID uint      `gorm:"column:screenshot_id;not null;uniqueIndex:idx_ss_like_user" json:"screenshot_id"`
+	Username     string    `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_ss_like_user" json:"username"`
+	CreateTime   time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+func (ProfileScreenshotLike) TableName() string { return "im_profile_screenshot_like" }
+
+// ============= P3：卡片合成徽章 + 积分商店 =============
+
+// Card 卡片定义表 im_card（Steam 集换式卡牌同款）
+// 每张卡归属一个游戏，有稀有度，可通过开卡包（消耗积分）获得
+// 集齐一套卡可合成徽章
+type Card struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	GameID   uint   `gorm:"column:game_id;not null;index:idx_card_game" json:"game_id"`
+	Name     string `gorm:"column:name;type:varchar(128);not null" json:"name"`
+	// Rarity 稀有度：0 普通 / 1 罕见 / 2 稀有 / 3 史诗 / 4 传说（影响掉落率和合成价值）
+	Rarity   int8   `gorm:"column:rarity;type:tinyint;default:0;index" json:"rarity"`
+	Image    string `gorm:"column:image;type:varchar(512);default:''" json:"image"`
+	Desc     string `gorm:"column:desc;type:varchar(255);default:''" json:"desc"`
+	// CardSet 卡组编号（同游戏同卡组的卡可合成该游戏的徽章）
+	CardSet  string `gorm:"column:card_set;type:varchar(32);not null;index:idx_card_game" json:"card_set"`
+	// Foil 是否闪卡（特殊稀有版本，掉落率低）
+	Foil     bool   `gorm:"column:foil;default:false" json:"foil"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+func (Card) TableName() string { return "im_card" }
+
+// UserCard 用户持有卡片表 im_user_card
+// 记录用户背包里每张卡的数量（同卡可堆叠）
+type UserCard struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_user_card" json:"username"`
+	CardID   uint   `gorm:"column:card_id;not null;uniqueIndex:idx_user_card" json:"card_id"`
+	Count    int    `gorm:"column:count;default:1" json:"count"`
+	// FoilCount 闪卡数量（单独计数，不与普通卡混）
+	FoilCount int   `gorm:"column:foil_count;default:0" json:"foil_count"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+func (UserCard) TableName() string { return "im_user_card" }
+
+// BadgeTemplate 徽章合成模板表 im_badge_template
+// 集齐指定卡组的全部卡片（各1张）即可合成对应徽章
+type BadgeTemplate struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	GameID   uint   `gorm:"column:game_id;not null;index" json:"game_id"`
+	// CardSet 对应 im_card.card_set：集齐该卡组全部卡可合成
+	CardSet  string `gorm:"column:card_set;type:varchar(32);not null;uniqueIndex" json:"card_set"`
+	Name     string `gorm:"column:name;type:varchar(128);not null" json:"name"`
+	Icon     string `gorm:"column:icon;type:varchar(512);default:''" json:"icon"`
+	Desc     string `gorm:"column:desc;type:varchar(255);default:''" json:"desc"`
+	// ExpReward 合成徽章奖励经验
+	ExpReward int `gorm:"column:exp_reward;default:100" json:"exp_reward"`
+	// PointsReward 合成徽章奖励积分（可选）
+	PointsReward float64 `gorm:"column:points_reward;type:double;default:0" json:"points_reward"`
+	// Level 徽章等级（1-5，每级需要更多闪卡；P3 简化为1级）
+	Level    int8      `gorm:"column:level;default:1" json:"level"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+func (BadgeTemplate) TableName() string { return "im_badge_template" }
+
+// UserShopItem 用户积分商店已购物品表 im_user_shop_item（P3 积分商店）
+// 记录用户用积分购买的装饰性物品（头像框、金色昵称等），用于资料页渲染对应效果
+type UserShopItem struct {
+	ID         uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username   string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_user_shop" json:"username"`
+	ItemID     string `gorm:"column:item_id;type:varchar(32);not null;uniqueIndex:idx_user_shop" json:"item_id"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+func (UserShopItem) TableName() string { return "im_user_shop_item" }
+
+// ============= 阶段二百九十五 P1：展示柜 + 留言板 =============
+
+// ProfileShowcase 个人资料展示柜配置表 im_profile_showcase
+// 每个用户最多 10 个槽位（slot 1-10，由等级解锁数量）；每个槽位绑定一种类型：
+//   recent_games / favorite_game / achievements / badges / screenshots / artwork / reviews / friends
+// config 存 JSON（如成就 ID 列表、徽章代码列表、展示数量等）
+type ProfileShowcase struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_showcase_slot" json:"username"`
+	// Slot 槽位序号 1-10（等级决定可用上限）
+	Slot int `gorm:"column:slot;not null;uniqueIndex:idx_showcase_slot" json:"slot"`
+	// Type 展示柜类型（见开发文档 §附录 C 完整列表）
+	Type string `gorm:"column:type;type:varchar(32);not null" json:"type"`
+	// Title 用户自定义标题（空串回退默认，如"最近游玩"）
+	Title string `gorm:"column:title;type:varchar(64);default:''" json:"title"`
+	// Config JSON 配置（schema 随 type 变化，前端解析）
+	Config string `gorm:"column:config;type:text" json:"config"`
+	Enabled int8 `gorm:"column:enabled;type:tinyint;default:1" json:"enabled"`
+	// SortOrder 同 slot 内排序；0=按 slot 升序
+	SortOrder int `gorm:"column:sort_order;default:0" json:"sort_order"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (ProfileShowcase) TableName() string { return "im_profile_showcase" }
+
+// ProfileComment 个人资料留言表 im_profile_comment
+// 用户资料页右侧/底部留言板；支持楼中楼回复；主人/留言人可删（软删 deleted=1）
+type ProfileComment struct {
+	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	ProfileUser string `gorm:"column:profile_user;type:varchar(32);not null;index:idx_comment_profile;index:idx_comment_root,priority:1" json:"profile_user"`
+	FromUser    string `gorm:"column:from_user;type:varchar(32);not null;index:idx_comment_from" json:"from_user"`
+	Content     string `gorm:"column:content;type:varchar(500);not null" json:"content"`
+	// ParentID 父留言 ID（0=顶层留言，非 0=回复某条）
+	ParentID    uint   `gorm:"column:parent_id;default:0;index:idx_comment_parent;index:idx_comment_root,priority:2" json:"parent_id"`
+	// ReplyTo 回复目标用户名（非 0 时填写被回复人；仅展示方便）
+	ReplyTo     string `gorm:"column:reply_to;type:varchar(32);default:''" json:"reply_to"`
+	// Deleted 0=正常 1=软删除（主人/留言人/管理员可删；软删保留记录禁重放）
+	Deleted     int8   `gorm:"column:deleted;type:tinyint;default:0;index;index:idx_comment_root,priority:3" json:"deleted"`
+	DeleteReason string `gorm:"column:delete_reason;type:varchar(255);default:''" json:"delete_reason"`
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (ProfileComment) TableName() string { return "im_profile_comment" }

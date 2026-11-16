@@ -3341,6 +3341,949 @@
         .gs-hist-rev .gs-hist-cur { margin-left: 6px; font-size: 10px; font-weight: 400; color: var(--primary); }
         .gs-hist-meta { margin-top: 2px; font-size: 11px; color: var(--text-light); }
         .gs-hist-empty { padding: 16px; text-align: center; font-size: 12px; color: var(--text-light); }
+
+        /* ===== 阶段二百九十五：Steam 同款个人资料页 P0 样式 ===== */
+
+        /* 背景横幅 + 头像信息区（Steam 同款 180px 高横幅） */
+        .gp-hero {
+            position: relative;
+            min-height: 180px;
+            border-bottom: 1px solid var(--divider);
+            background: linear-gradient(135deg, var(--gp-hero-from) 0%, var(--gp-hero-mid) 60%, var(--gp-hero-to) 100%);
+            overflow: hidden;
+        }
+        .gp-bg {
+            position: absolute; inset: 0;
+            background-size: cover; background-position: center;
+            opacity: 0.9;
+        }
+        .gp-bg::after {
+            /* 无论有无图片都加一层深色渐变遮罩，保证文字可读性 */
+            content: '';
+            position: absolute; inset: 0;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.45) 100%);
+        }
+
+        .gp-info {
+            position: relative;
+            display: flex;
+            gap: 18px;
+            padding: 20px 28px 18px;
+        }
+
+        /* 头像 120×120，圆形带边框 */
+        .gp-av {
+            width: 120px; height: 120px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            background: var(--primary);
+            border: 3px solid rgba(255,255,255,0.25);
+            box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+            overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 1;
+        }
+        .gp-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gp-av b { font-size: 44px; font-weight: 700; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+
+        .gp-head {
+            flex: 1; min-width: 0;
+            padding-top: 12px;
+            color: #e0e0e0;
+            z-index: 1;
+        }
+        .gp-name-row {
+            display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+        }
+        .gp-nick {
+            font-size: 26px; font-weight: 700;
+            color: #fff;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.5);
+            letter-spacing: 0.3px;
+        }
+        .gp-title {
+            font-size: 13px; color: var(--gp-title-color);
+            padding: 2px 10px; border-radius: 12px;
+            background: var(--gp-title-bg);
+            border: 1px solid var(--gp-title-border);
+        }
+        .gp-level {
+            font-size: 13px; font-weight: 600;
+            padding: 2px 10px; border-radius: 12px;
+            background: var(--gp-level-bg);
+            border: 1px solid var(--gp-level-border);
+            color: var(--gp-level-color);
+        }
+        .gp-sig {
+            margin-top: 6px;
+            font-size: 13px; color: #b8c6d6;
+            line-height: 1.55;
+            max-width: 600px;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .gp-btns {
+            margin-top: 10px;
+            display: flex; gap: 8px; flex-wrap: wrap;
+        }
+        .gp-btns .gp-btn {
+            padding: 6px 16px; border-radius: 5px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text); font-size: 12.5px; font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .gp-btns .gp-btn:hover {
+            background: var(--hover);
+            border-color: var(--primary);
+        }
+        .gp-btns .gp-btn.primary {
+            background: var(--gs-btn); border-color: transparent;
+            color: var(--gs-btn-text);
+        }
+        .gp-btns .gp-btn.primary:hover { filter: brightness(1.1); }
+
+        /* 徽章横条（横幅下方贴底） */
+        .gp-badges {
+            margin-top: 12px;
+            display: flex; gap: 8px; flex-wrap: wrap;
+        }
+        .gp-badge {
+            width: 28px; height: 28px;
+            border-radius: 4px;
+            background: var(--hover);
+            border: 1px solid var(--border);
+            overflow: hidden;
+            cursor: default;
+            display: flex; align-items: center; justify-content: center;
+            position: relative;
+            transition: transform 0.15s;
+        }
+        .gp-badge:hover { transform: translateY(-2px); }
+        .gp-badge img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gp-badge .gp-badge-ic { font-size: 14px; }
+
+        /* 主双栏：侧栏 260px + 主区 */
+        .gp-body {
+            display: flex;
+            gap: 16px;
+            padding: 18px 28px 40px;
+        }
+        .gp-side {
+            width: 260px; flex-shrink: 0;
+            display: flex; flex-direction: column; gap: 14px;
+        }
+        .gp-main { flex: 1; min-width: 0; }
+
+        /* 通用卡片 */
+        .gp-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .gp-card-title {
+            padding: 10px 14px 8px;
+            font-size: 12px; font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--divider);
+        }
+
+        /* 统计行 */
+        .gp-stat-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 7px 14px;
+            font-size: 13px;
+            border-bottom: 1px solid var(--divider);
+        }
+        .gp-stat-row:last-child { border-bottom: none; }
+        .gp-stat-lbl { color: var(--text-light); }
+        .gp-stat-val { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+        /* 等级卡片 */
+        .gp-lvl-row {
+            padding: 12px 14px 8px;
+            display: flex; justify-content: space-between; align-items: baseline;
+        }
+        .gp-lvl-big {
+            font-size: 22px; font-weight: 700;
+            color: #e8c547;
+            text-shadow: 0 1px 3px rgba(232,197,71,0.25);
+        }
+        .gp-lvl-exp {
+            font-size: 12px; color: var(--text-light);
+            font-variant-numeric: tabular-nums;
+        }
+        .gp-prog {
+            margin: 0 14px;
+            height: 8px; border-radius: 4px;
+            background: var(--hover);
+            overflow: hidden;
+        }
+        .gp-prog-fill {
+            height: 100%; border-radius: 4px;
+            background: linear-gradient(90deg, var(--gp-prog-from) 0%, var(--gp-prog-to) 100%);
+            transition: width 0.6s ease;
+        }
+        .gp-lvl-next {
+            padding: 6px 14px 12px;
+            font-size: 11px; color: var(--text-light);
+        }
+
+        /* 最爱游戏卡 */
+        .gp-fav {
+            padding: 10px;
+        }
+        .gp-fav-card {
+            position: relative;
+            aspect-ratio: 16/9;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            cursor: pointer;
+        }
+        .gp-fav-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gp-fav-card .gp-fav-name {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            padding: 10px 12px 8px;
+            font-size: 13px; font-weight: 600; color: #fff;
+            background: linear-gradient(transparent, rgba(0,0,0,0.75));
+        }
+
+        /* 右侧展示柜标题 */
+        .gp-section-title {
+            font-size: 14px; font-weight: 600;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        /* ===== P1.5 成就样式 ===== */
+        .gp-ach-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+        .gp-ach-cell {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            transition: all 0.15s;
+            cursor: pointer;
+        }
+        .gp-ach-cell:hover { border-color: var(--primary); }
+        .gp-ach-cell.locked { opacity: 0.55; filter: grayscale(0.6); }
+        .gp-ach-icon {
+            width: 32px; height: 32px; flex-shrink: 0;
+            border-radius: 6px;
+            background: linear-gradient(135deg, var(--gs-btn), var(--gs-btn-deep));
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+        }
+        .gp-ach-icon img { width: 100%; height: 100%; object-fit: cover; }
+        .gp-ach-icon b { color: #fff; font-size: 14px; font-weight: 700; }
+        .gp-ach-name {
+            font-size: 12.5px;
+            color: var(--text);
+            line-height: 1.3;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1; min-width: 0;
+        }
+        .gp-ach-stat {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-align: right;
+        }
+        /* 成就弹窗 */
+        .gp-ach-body {
+            padding: 16px 4px;
+            max-height: 60vh;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }
+        .gp-ach-header {
+            padding: 12px 16px;
+            background: var(--panel-bg);
+            border-radius: 10px;
+            margin-bottom: 16px;
+            border: 1px solid var(--border);
+        }
+        .gp-ach-progress-text {
+            font-size: 13px; color: var(--text);
+        }
+        .gp-ach-progress-text b { color: var(--primary); }
+        .gp-ach-progress {
+            margin-top: 8px;
+            height: 8px; background: var(--divider);
+            border-radius: 4px; overflow: hidden;
+        }
+        .gp-ach-progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--gs-btn), var(--gs-btn-deep));
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        .gp-ach-group { margin-bottom: 18px; }
+        .gp-ach-group-head {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 6px 4px;
+            border-bottom: 1px solid var(--divider);
+            margin-bottom: 10px;
+        }
+        .gp-ach-group-name {
+            font-size: 13px; font-weight: 600; color: var(--text);
+        }
+        .gp-ach-group-stat {
+            font-size: 12px; color: var(--text-secondary);
+        }
+        .gp-ach-group-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 8px;
+        }
+
+        /* ===== P2 评测卡片（Steam 同款） ===== */
+        .gp-rev-list { display: flex; flex-direction: column; gap: 10px; }
+        .gp-rev-card {
+            padding: 12px 14px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--divider);
+            border-radius: 8px;
+            transition: all 0.15s;
+        }
+        .gp-rev-card:hover { border-color: var(--primary); transform: translateY(-1px); }
+        .gp-rev-card:has(.gp-rev-thumb.up) { border-left-color: #22c55e; }
+        .gp-rev-card:has(.gp-rev-thumb.down) { border-left-color: #ef4444; }
+        .gp-rev-top {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 6px;
+        }
+        .gp-rev-thumb {
+            font-size: 14px;
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 22px; height: 22px;
+            border-radius: 4px;
+            background: var(--divider);
+        }
+        .gp-rev-thumb.up { background: rgba(34,197,94,0.15); }
+        .gp-rev-thumb.down { background: rgba(239,68,68,0.15); }
+        .gp-rev-game {
+            font-size: 13px; font-weight: 600;
+            color: var(--primary);
+        }
+        .gp-rev-content {
+            font-size: 12.5px;
+            color: var(--text);
+            line-height: 1.5;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            margin-bottom: 6px;
+        }
+        .gp-rev-meta {
+            display: flex; justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .gp-rev-helpful { color: #ef4444; }
+
+        /* ===== P2.3：截图/艺术作品展示柜 ===== */
+        .gp-ss-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+        .gp-ss-cell {
+            position: relative;
+            aspect-ratio: 1 / 1;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: transform 0.15s, border-color 0.15s;
+        }
+        .gp-ss-cell:hover { transform: scale(1.03); border-color: var(--primary); }
+        .gp-ss-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gp-ss-cap {
+            position: absolute; left: 0; right: 0; bottom: 0;
+            padding: 4px 8px;
+            font-size: 11px;
+            color: #fff;
+            background: linear-gradient(transparent, rgba(0,0,0,0.7));
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        /* 截图上传弹窗 */
+        .gp-ss-upload-modal { max-width: 420px; }
+        .gp-ss-preview {
+            min-height: 120px;
+            margin-bottom: 12px;
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+        }
+        .gp-ss-preview img { max-width: 100%; max-height: 200px; border-radius: 6px; }
+        #gpSsTitle, #gpSsType {
+            width: 100%; box-sizing: border-box;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text);
+            font-size: 13px;
+        }
+
+        /* ===== P3：卡片背包展示柜 ===== */
+        .gp-cards-wrap { display: flex; flex-direction: column; gap: 10px; }
+        .gp-card-group-head {
+            font-size: 13px; font-weight: 600; color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .gp-card-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+        .gp-card-cell {
+            position: relative;
+            border-radius: 8px;
+            padding: 6px;
+            background: var(--panel-bg);
+            border: 2px solid var(--border);
+            text-align: center;
+            transition: transform 0.15s;
+        }
+        .gp-card-cell:hover { transform: translateY(-2px); }
+        .gp-card-rarity-0 { border-color: #9ca3af; }
+        .gp-card-rarity-1 { border-color: #22c55e; }
+        .gp-card-rarity-2 { border-color: #3b82f6; }
+        .gp-card-rarity-3 { border-color: #a855f7; }
+        .gp-card-rarity-4 { border-color: #f59e0b; }
+        .gp-card-foil {
+            background: linear-gradient(135deg, rgba(245,158,11,0.2), rgba(168,85,247,0.2));
+            box-shadow: 0 0 8px rgba(245,158,11,0.4);
+        }
+        .gp-card-imgbox {
+            width: 100%; aspect-ratio: 1/1;
+            border-radius: 6px;
+            background: linear-gradient(135deg, var(--gs-btn), var(--gs-btn-deep));
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            margin-bottom: 4px;
+        }
+        .gp-card-imgbox img { width: 100%; height: 100%; object-fit: cover; }
+        .gp-card-imgbox b { color: #fff; font-size: 18px; font-weight: 700; }
+        .gp-card-name {
+            font-size: 11px; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .gp-card-count {
+            position: absolute; top: 4px; right: 4px;
+            background: var(--primary); color: #fff;
+            font-size: 10px; padding: 1px 5px;
+            border-radius: 8px; font-weight: 700;
+        }
+
+        /* ===== 卡片工坊弹窗 ===== */
+        .gp-card-workshop { max-width: 560px; }
+        .gp-points-badge {
+            float: right;
+            font-size: 13px; font-weight: 600;
+            color: var(--primary);
+            background: var(--panel-bg);
+            padding: 2px 10px;
+            border-radius: 10px;
+        }
+        .gp-cw-tabs {
+            display: flex; gap: 6px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .gp-cw-tab {
+            background: none; border: none;
+            padding: 8px 16px;
+            font-size: 13px; color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+        }
+        .gp-cw-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .gp-cw-hint {
+            font-size: 12px; color: var(--text-secondary);
+            margin-bottom: 12px; padding: 8px 12px;
+            background: var(--panel-bg); border-radius: 6px;
+        }
+        .gp-cw-draw select {
+            width: 100%; padding: 8px 10px;
+            border-radius: 6px; border: 1px solid var(--border);
+            background: var(--panel-bg); color: var(--text);
+            margin-bottom: 12px;
+        }
+        .gp-cw-draw-btn { width: 100%; padding: 10px; }
+        .gp-cw-result { margin-top: 16px; text-align: center; }
+        .gp-draw-result-card {
+            display: inline-block;
+            width: 120px; padding: 10px;
+            border-radius: 10px;
+            border: 3px solid;
+            background: var(--panel-bg);
+        }
+        .gp-draw-result-card img { width: 100%; aspect-ratio: 1/1; object-fit: cover; border-radius: 6px; }
+        .gp-draw-result-card b { font-size: 36px; }
+        .gp-draw-result-name { font-size: 13px; font-weight: 600; margin-top: 6px; color: var(--text); }
+        .gp-draw-result-rarity { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+        .gp-cw-err { color: #ef4444; font-size: 13px; }
+        /* 合成徽章 */
+        .gp-craft-item {
+            padding: 12px; margin-bottom: 10px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .gp-craft-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .gp-craft-name { font-size: 14px; font-weight: 600; color: var(--text); }
+        .gp-craft-reward { font-size: 11px; color: var(--primary); }
+        .gp-craft-cards { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+        .gp-craft-card {
+            font-size: 11px; padding: 3px 8px;
+            border-radius: 4px;
+            background: var(--divider); color: var(--text-secondary);
+        }
+        .gp-craft-card.have { background: rgba(34,197,94,0.2); color: #22c55e; }
+        .gp-craft-card.miss { background: rgba(239,68,68,0.15); color: #ef4444; }
+        /* 积分商店 */
+        .gp-shop-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+        .gp-shop-item {
+            padding: 16px; text-align: center;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+        .gp-shop-icon { font-size: 32px; margin-bottom: 8px; }
+        .gp-shop-name { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+        .gp-shop-desc { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; }
+
+        /* ===== 图片查看器 ===== */
+        .gp-img-viewer {
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(0,0,0,0.85);
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+        }
+        .gp-img-viewer img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+        .gp-img-viewer-close {
+            position: absolute; top: 20px; right: 24px;
+            color: #fff; font-size: 28px; cursor: pointer;
+        }
+        .gp-img-viewer-title {
+            position: absolute; bottom: 24px; left: 0; right: 0;
+            text-align: center; color: #fff; font-size: 14px;
+        }
+
+        /* ===== P3：积分商店特效（头像框 / 金色昵称） ===== */
+        .gp-avatar-frame {
+            border: 3px solid transparent;
+            background: linear-gradient(var(--panel-bg), var(--panel-bg)) padding-box,
+                        linear-gradient(135deg, #f59e0b, #a855f7, #3b82f6) border-box;
+            box-shadow: 0 0 12px rgba(245,158,11,0.5);
+        }
+        .gp-golden-name {
+            background: linear-gradient(90deg, #f59e0b, #fbbf24, #f59e0b, #d97706);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: gp-golden-shine 3s linear infinite;
+            font-weight: 700;
+        }
+        @keyframes gp-golden-shine {
+            to { background-position: 200% center; }
+        }
+
+        /* ===== 背景横幅编辑器 ===== */
+        .gp-bg-editor { max-width: 560px; }
+        .gp-bg-preview {
+            width: 100%;
+            aspect-ratio: 16/3;
+            border-radius: 8px;
+            overflow: hidden;
+            background: linear-gradient(90deg, #1e3a8a, #7c3aed, #db2777);
+            border: 1px solid var(--border);
+            margin-bottom: 14px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .gp-bg-preview img { width: 100%; height: 100%; object-fit: cover; }
+        .gp-bg-empty-hint {
+            color: rgba(255,255,255,0.75); font-size: 13px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+        .gp-bg-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+        .gp-bg-size-hint { font-size: 11px; color: var(--text-secondary); margin-top: 10px; }
+
+        /* ===== 经验值日志查看器 ===== */
+        .gp-exp-log-modal { max-width: 520px; }
+        .gp-exp-summary {
+            float: right; font-size: 12px; font-weight: 400;
+            color: var(--text-secondary);
+        }
+        .gp-exp-log-body { max-height: 460px; overflow-y: auto; padding: 4px 0; }
+        .gp-exp-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--divider);
+            transition: background 0.15s;
+        }
+        .gp-exp-row:hover { background: var(--divider); }
+        .gp-exp-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .gp-exp-reason { font-size: 13px; font-weight: 600; color: var(--text); }
+        .gp-exp-detail { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+        .gp-exp-time { font-size: 10px; color: var(--text-tertiary); }
+        .gp-exp-right { text-align: right; flex-shrink: 0; margin-left: 10px; }
+        .gp-exp-change { font-size: 14px; font-weight: 700; }
+        .gp-exp-change.positive { color: #22c55e; }
+        .gp-exp-change.negative { color: #ef4444; }
+
+        /* ===== 资料页发表评测（游戏选择器） ===== */
+        .gp-game-pick-modal { max-width: 480px; }
+        .gp-game-pick-list { max-height: 420px; overflow-y: auto; }
+        .gp-game-pick-row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s;
+            margin-bottom: 4px;
+        }
+        .gp-game-pick-row:hover { background: var(--divider); }
+        .gp-game-pick-ic {
+            width: 40px; height: 40px;
+            border-radius: 6px;
+            background: linear-gradient(135deg, var(--gs-btn), var(--gs-btn-deep));
+            color: #fff; font-weight: 700; font-size: 16px;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden; flex-shrink: 0;
+        }
+        .gp-game-pick-ic img { width: 100%; height: 100%; object-fit: cover; }
+        .gp-game-pick-namebox { flex: 1; min-width: 0; }
+        .gp-game-pick-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gp-game-pick-sub { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* 最近游戏列表（Steam 同款横向大卡） */
+        .gp-recent {
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .gp-recent-row {
+            display: flex; gap: 12px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.12s, transform 0.12s;
+        }
+        .gp-recent-row:hover {
+            background: var(--hover);
+            transform: translateX(2px);
+        }
+        .gp-recent-thumb {
+            width: 180px; flex-shrink: 0;
+            border-radius: 5px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            aspect-ratio: 16/9;
+        }
+        .gp-recent-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gp-recent-info { flex: 1; min-width: 0; padding: 4px 0; display: flex; flex-direction: column; }
+        .gp-recent-name {
+            font-size: 14px; font-weight: 600;
+            color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .gp-recent-meta {
+            margin-top: auto;
+            display: flex; gap: 14px; flex-wrap: wrap;
+            font-size: 11.5px; color: var(--text-secondary);
+        }
+
+        /* 空态 */
+        .gp-empty {
+            padding: 60px 0; text-align: center;
+            font-size: 13px; color: var(--text-light);
+        }
+
+        /* ===== P1: 留言板区 ===== */
+        .gp-comments {
+            margin-top: 28px;
+        }
+        .gp-cmts {
+            display: flex; flex-direction: column; gap: 10px;
+        }
+        .gp-cmt-root {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 14px;
+        }
+        .gp-cmt-head {
+            display: flex; align-items: center; gap: 10px;
+        }
+        .gp-cmt-av {
+            width: 32px; height: 32px; border-radius: 50%;
+            background: var(--primary); color: #fff; font-size: 14px; font-weight: 600;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0; overflow: hidden;
+        }
+        .gp-cmt-av img { width: 100%; height: 100%; object-fit: cover; }
+        .gp-cmt-meta { flex: 1; min-width: 0; }
+        .gp-cmt-nick {
+            font-size: 13px; font-weight: 600; color: var(--text);
+        }
+        .gp-cmt-time {
+            font-size: 11px; color: var(--text-light);
+            margin-left: 8px;
+        }
+        .gp-cmt-del {
+            font-size: 11px; color: var(--text-light);
+            cursor: pointer; padding: 2px 6px; border-radius: 4px;
+        }
+        .gp-cmt-del:hover { background: var(--hover); color: #ff6b6b; }
+        .gp-cmt-body {
+            padding: 8px 4px 2px 42px;
+            font-size: 13px; color: var(--text-secondary);
+            line-height: 1.55; word-break: break-word;
+        }
+        .gp-cmt-replies {
+            margin-top: 8px;
+            padding-left: 28px;
+            border-left: 2px solid var(--divider);
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .gp-cmt-reply {
+            padding: 6px 8px;
+            border-radius: 5px;
+            background: var(--hover);
+            font-size: 12.5px;
+        }
+        .gp-cmt-reply .gp-cmt-nick { font-size: 12px; }
+        .gp-cmt-reply .gp-cmt-body { padding: 2px 0; }
+
+        .gp-cmt-input-row {
+            margin-top: 14px;
+            display: flex; gap: 10px; align-items: center;
+        }
+        .gp-cmt-input {
+            flex: 1;
+            padding: 9px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text);
+            font-size: 13px;
+            outline: none;
+        }
+        .gp-cmt-input:focus { border-color: var(--primary); }
+        .gp-cmt-disabled {
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: var(--panel-bg);
+            border: 1px dashed var(--divider);
+            border-radius: 6px;
+            font-size: 12.5px; color: var(--text-light);
+            text-align: center;
+        }
+
+        /* ===== P1: 编辑资料弹窗 ===== */
+        .gp-edit-row {
+            margin-bottom: 12px;
+        }
+        .gp-edit-row label {
+            display: block;
+            font-size: 11.5px; color: var(--text-secondary);
+            margin-bottom: 5px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.4px;
+        }
+        .gp-edit-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 9px 12px;
+            border-radius: 5px;
+            border: 1px solid var(--border);
+            background: var(--gp-input-bg, var(--panel-bg));
+            color: var(--text); font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            resize: vertical;
+        }
+        .gp-edit-input:focus { border-color: var(--primary); }
+
+        /* ===== P1: 隐私设置弹窗 ===== */
+        .gp-priv-row {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--divider);
+        }
+        .gp-priv-row:last-of-type { border-bottom: none; }
+        .gp-priv-lbl {
+            font-size: 12.5px; font-weight: 600; color: var(--text);
+            margin-bottom: 8px;
+        }
+        .gp-priv-opts {
+            display: flex; gap: 6px; flex-wrap: wrap;
+        }
+        /* 自定义 toggle 按钮组（替代原生 radio，支持点击已选中取消） */
+        .gp-priv-btn {
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-secondary);
+            background: var(--panel-bg);
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: inherit;
+        }
+        .gp-priv-btn:hover { border-color: var(--primary); color: var(--text); }
+        .gp-priv-btn.active {
+            border-color: var(--primary);
+            background: var(--primary-soft);
+            color: var(--primary);
+            font-weight: 600;
+        }
+        /* 开关 */
+        .gp-switch { position: relative; display: inline-block; width: 42px; height: 24px; }
+        .gp-switch input { display: none; }
+        .gp-switch-track {
+            position: absolute; inset: 0;
+            background: var(--divider); border-radius: 24px;
+            transition: background 0.2s;
+            cursor: pointer;
+        }
+        .gp-switch-track::after {
+            content: '';
+            position: absolute; top: 2px; left: 2px;
+            width: 20px; height: 20px; border-radius: 50%;
+            background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+            transition: transform 0.2s;
+        }
+        .gp-switch input:checked + .gp-switch-track { background: var(--primary); }
+        .gp-switch input:checked + .gp-switch-track::after { transform: translateX(18px); }
+
+        /* ===== P1: 展示柜编辑弹窗 ===== */
+        .gp-showcase-hint {
+            font-size: 11.5px; color: var(--text-light);
+            margin-bottom: 10px; font-style: italic;
+        }
+        .gp-showcase-list {
+            flex: 1; min-height: 100px; max-height: 60vh;
+            overflow-y: auto;
+            display: flex; flex-direction: column; gap: 10px;
+            margin-bottom: 10px;
+            padding-right: 2px;
+        }
+        .gp-showcase-item {
+            display: flex; flex-direction: column; gap: 8px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel-bg);
+            cursor: grab;
+        }
+        .gp-showcase-item.grabbing { cursor: grabbing; opacity: 0.85; }
+        .gp-showcase-item-header {
+            display: flex; gap: 8px; align-items: center;
+            user-select: none;
+        }
+        .gp-showcase-drag {
+            color: var(--text-light); font-size: 16px;
+            cursor: grab; padding: 0 2px; flex-shrink: 0;
+        }
+        .gp-showcase-num {
+            font-size: 11px; font-weight: 700;
+            color: var(--text-light);
+            min-width: 24px; text-align: center;
+            flex-shrink: 0;
+        }
+        .gp-showcase-item-header select,
+        .gp-showcase-item-header input {
+            padding: 5px 8px; border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--gp-input-bg, var(--panel-bg));
+            color: var(--text); font-size: 12px;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        .gp-showcase-item-header select { min-width: 160px; flex-shrink: 0; }
+        .gp-showcase-item-header input { flex: 1; min-width: 100px; }
+        .gp-showcase-del {
+            font-size: 13px; color: var(--text-light);
+            cursor: pointer; padding: 2px 6px; border-radius: 4px;
+            background: transparent; border: none;
+            flex-shrink: 0;
+            transition: color 0.15s, background 0.15s;
+        }
+        .gp-showcase-del:hover { color: var(--danger, #ff6b6b); background: rgba(255,107,107,0.08); }
+
+        /* custom_html 专属编辑区 */
+        .gp-showcase-item-body {
+            display: flex; flex-direction: column; gap: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed var(--border, rgba(255,255,255,0.1));
+        }
+        .gp-showcase-html-wrap { display: flex; flex-direction: column; gap: 6px; }
+        .gp-showcase-html-wrap textarea {
+            width: 100%;
+            min-height: 140px;
+            resize: vertical;
+            font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.55;
+            padding: 10px 12px;
+            background: var(--gp-input-bg, #1e1f22);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            outline: none;
+            transition: border-color 0.15s;
+            box-sizing: border-box;
+        }
+        .gp-showcase-html-wrap textarea:focus { border-color: var(--accent, #66c0f4); }
+        .gp-showcase-html-hint {
+            font-size: 11px;
+            color: var(--text-muted, #888);
+            line-height: 1.5;
+        }
+
+        /* 弹窗顶部全局安全提示 */
+        .gp-showcase-safety-note {
+            font-size: 11.5px;
+            color: var(--text-muted, #888);
+            background: rgba(102, 192, 244, 0.06);
+            border: 1px solid rgba(102, 192, 244, 0.18);
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 10px;
+            line-height: 1.6;
+        }
+        .gp-showcase-add {
+            padding: 4px 0 10px;
+        }
+
+        /* P1: 好友在线态 —— 主题变量驱动 */
+        .gp-cmt-av.gp-online {
+            box-shadow: 0 0 0 2px var(--gp-friend-online);
+        }
+
+        /* ===== 滚动条：全部走 game-store.js osbInit(el) 悬浮滑块 =====
+           style.css 全局把 ::-webkit-scrollbar 归零，禁止在此另开伪元素覆盖！
+           启动时注册：osbInit($('gsStoreScroll'/'gsLibSide'/'gsLibMain'/'gsPropPanes'/'gsSetPanes'...))
+           动态弹窗内滚动容器在 appendChild 后即时 osbInit */
     </style>
 </head>
 <body>
@@ -3384,6 +4327,10 @@
             <!-- 阶段二百九十二 M8：联机大厅页签（房间层/引擎整体迁入本窗；游戏字节走 P2P/TURN，服务端只见信令） -->
             <button class="gs-nav-btn" id="gsNavOnline" title="联机大厅">
                 <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21.58 16.09l-1.09-7.66A3.996 3.996 0 0 0 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 15.5h6l2.25 2.75c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H4V9h7v2zm9-1c0 .55-.45 1-1 1s-1-.45-1-1 .45-1 1-1 1 .45 1 1zm-2-3c0 .55-.45 1-1 1s-1-.45-1-1 .45-1 1-1 1 .45 1 1z"/></svg>
+            </button>
+            <!-- 阶段二百九十五：Steam 同款个人资料页签 -->
+            <button class="gs-nav-btn" id="gsNavProfile" title="个人资料">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
             </button>
         </div>
         <div class="gs-main">
@@ -3451,6 +4398,225 @@
                  内部结构由 js/gn-room.js 一次性构建，此处仅留容器 #gn-view） -->
             <div class="gs-view hidden" id="gsViewOnline">
                 <div id="gn-view" class="gn-view"></div>
+            </div>
+
+            <!-- 阶段二百九十五：Steam 同款个人资料页（P0 阶段基础框架）
+                 双栏布局：左侧统计面板 + 右侧展示柜区
+                 内部结构由 game-store.js 构建 -->
+            <div class="gs-view hidden" id="gsViewProfile">
+                <div class="gs-scroll" id="gsProfileScroll">
+                    <!-- 1. 背景横幅 + 头像信息区 -->
+                    <div class="gp-hero" id="gpHero">
+                        <div class="gp-bg" id="gpBg"></div>
+                        <div class="gp-info">
+                            <div class="gp-av" id="gpAv"></div>
+                            <div class="gp-head">
+                                <div class="gp-name-row">
+                                    <span class="gp-nick" id="gpNick">—</span>
+                                    <span class="gp-title" id="gpTitle"></span>
+                                    <span class="gp-level" id="gpLevel">Lv.1</span>
+                                </div>
+                                <div class="gp-sig" id="gpSig"></div>
+                                <div class="gp-btns" id="gpBtns"></div>
+                                <div class="gp-badges" id="gpBadges"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. 主体双栏：左统计 + 右展示柜 -->
+                    <div class="gp-body">
+                        <!-- 左侧统计栏 -->
+                        <div class="gp-side">
+                            <div class="gp-card" id="gpCardStats">
+                                <div class="gp-card-title">概览统计</div>
+                                <div class="gp-stat-row"><span class="gp-stat-lbl">游戏数量</span><span class="gp-stat-val" id="gpStatGames">—</span></div>
+                                <div class="gp-stat-row"><span class="gp-stat-lbl">总游戏时长</span><span class="gp-stat-val" id="gpStatHours">—</span></div>
+                                <div class="gp-stat-row"><span class="gp-stat-lbl">成就总数</span><span class="gp-stat-val" id="gpStatAch">—</span></div>
+                                <div class="gp-stat-row"><span class="gp-stat-lbl">徽章总数</span><span class="gp-stat-val" id="gpStatBadges">—</span></div>
+                                <div class="gp-stat-row"><span class="gp-stat-lbl">好友数量</span><span class="gp-stat-val" id="gpStatFriends">—</span></div>
+                            </div>
+                            <div class="gp-card" id="gpCardLevel">
+                                <div class="gp-card-title">等级进度</div>
+                                <div class="gp-lvl-row">
+                                    <span class="gp-lvl-big" id="gpLvlBig">Lv.1</span>
+                                    <span class="gp-lvl-exp" id="gpLvlExp">0 / 500 EXP</span>
+                                </div>
+                                <div class="gp-prog"><div class="gp-prog-fill" id="gpProgFill" style="width:0%"></div></div>
+                                <div class="gp-lvl-next" id="gpLvlNext">再获得 500 EXP 升到 Lv.2</div>
+                            </div>
+                            <div class="gp-card hidden" id="gpCardFav">
+                                <div class="gp-card-title">最爱游戏</div>
+                                <div class="gp-fav" id="gpFavGame"></div>
+                            </div>
+                        </div>
+                        <!-- 右侧展示柜区 -->
+                        <div class="gp-main">
+                            <div class="gp-section-title">最近游玩</div>
+                            <div class="gp-recent" id="gpRecentGames"></div>
+                            <div class="gp-empty hidden" id="gpRecentEmpty">暂无游戏记录，去商店下载一款吧！</div>
+                        </div>
+                    </div>
+
+                    <!-- P1: 底部留言板区（默认显示，hidden 由 renderComments 控制） -->
+                    <div class="gp-comments" id="gpCommentsArea">
+                        <div class="gp-section-title">留言墙</div>
+                        <div class="gp-cmts" id="gpCmtsList"></div>
+                        <div class="gp-empty hidden" id="gpCmtsEmpty">还没有留言，快来留一条吧！</div>
+                        <!-- 留言输入区（仅登录可见；他人资料也能留） -->
+                        <div class="gp-cmt-input-row hidden" id="gpCmtInputRow">
+                            <textarea class="gp-cmt-input" id="gpCmtInput" maxlength="500" rows="2" placeholder="说点什么… 输入 @ 可以提及好友"></textarea>
+                            <div class="gp-cmt-tools">
+                                <button class="gp-cmt-tool-btn" id="gpCmtEmojiBtn" title="表情">😄</button>
+                                <button class="gp-cmt-tool-btn" id="gpCmtAtBtn" title="@提及">@</button>
+                                <span class="gp-cmt-send-wrap">
+                                    <button class="gs-btn primary" id="gpCmtSendBtn">发送</button>
+                                </span>
+                            </div>
+                            <!-- P3: emoji 表情面板（绝对定位，emoji 按分类组织，零图片依赖） -->
+                            <div class="gp-emoji-panel hidden" id="gpEmojiPanel">
+                                <div class="gp-emoji-tabs">
+                                    <button class="gp-emoji-tab active" data-cat="smileys">😊</button>
+                                    <button class="gp-emoji-tab" data-cat="gestures">👍</button>
+                                    <button class="gp-emoji-tab" data-cat="hearts">❤️</button>
+                                    <button class="gp-emoji-tab" data-cat="objects">🎉</button>
+                                </div>
+                                <div class="gp-emoji-grid" id="gpEmojiGrid"></div>
+                            </div>
+                            <!-- P3: @提及好友下拉 -->
+                            <div class="gp-at-dropdown hidden" id="gpAtDropdown"></div>
+                        </div>
+                        <div class="gp-cmt-disabled hidden" id="gpCmtDisabled">主人已关闭留言功能</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 阶段二百九十五 P1: 个人资料自绘弹窗 -->
+
+    <!-- 1. 编辑资料弹窗：昵称/签名/称号 三项（背景图 P2 做上传先占位） -->
+    <div class="gs-modal-mask hidden" id="gpEditMask">
+        <div class="gs-modal" style="width:440px">
+            <div class="gs-modal-title">编辑个人资料</div>
+            <div class="gp-edit-row">
+                <label>昵称</label>
+                <input id="gpEditNick" class="gp-edit-input" maxlength="32" placeholder="显示给好友的名字">
+            </div>
+            <div class="gp-edit-row">
+                <label>称号</label>
+                <input id="gpEditTitle" class="gp-edit-input" maxlength="64" placeholder="如“资深玩家”（P3 等级解锁）">
+            </div>
+            <div class="gp-edit-row">
+                <label>个性签名</label>
+                <textarea id="gpEditSig" class="gp-edit-input" rows="3" maxlength="128" placeholder="写点有趣的…"></textarea>
+            </div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gpEditCancel">取消</button>
+                <button class="gs-btn primary" id="gpEditSave">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. 隐私设置弹窗：三组三选一（公开/仅好友/私密）+ 留言开关 -->
+    <div class="gs-modal-mask hidden" id="gpPrivacyMask">
+        <div class="gs-modal" style="width:460px">
+            <div class="gs-modal-title">隐私设置</div>
+            <!-- row 1: 资料整体可见性 -->
+            <div class="gp-priv-row">
+                <div class="gp-priv-lbl">个人资料可见性</div>
+                <div class="gp-priv-opts" data-key="profile_visibility">
+                    <button type="button" class="gp-priv-btn" data-val="2">公开</button>
+                    <button type="button" class="gp-priv-btn" data-val="1">仅好友</button>
+                    <button type="button" class="gp-priv-btn" data-val="0">私密</button>
+                </div>
+            </div>
+            <!-- row 2: 游戏详情可见性 -->
+            <div class="gp-priv-row">
+                <div class="gp-priv-lbl">游戏库/成就可见性</div>
+                <div class="gp-priv-opts" data-key="game_visibility">
+                    <button type="button" class="gp-priv-btn" data-val="2">公开</button>
+                    <button type="button" class="gp-priv-btn" data-val="1">仅好友</button>
+                    <button type="button" class="gp-priv-btn" data-val="0">私密</button>
+                </div>
+            </div>
+            <!-- row 3: 好友列表可见性 -->
+            <div class="gp-priv-row">
+                <div class="gp-priv-lbl">好友列表可见性</div>
+                <div class="gp-priv-opts" data-key="friend_visibility">
+                    <button type="button" class="gp-priv-btn" data-val="2">公开</button>
+                    <button type="button" class="gp-priv-btn" data-val="1">仅好友</button>
+                    <button type="button" class="gp-priv-btn" data-val="0">私密</button>
+                </div>
+            </div>
+            <!-- row 4: 留言开关 -->
+            <div class="gp-priv-row">
+                <div class="gp-priv-lbl">允许他人留言</div>
+                <label class="gp-switch">
+                    <input type="checkbox" id="gpPrivacyCmt" checked>
+                    <span class="gp-switch-track"></span>
+                </label>
+            </div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gpPrivacyCancel">取消</button>
+                <button class="gs-btn primary" id="gpPrivacySave">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2.5 P1.5 成就查看弹窗（点击成就展示柜 → 按游戏分组 + 解锁状态） -->
+    <div class="gs-modal-mask hidden" id="gpAchMask">
+        <div class="gs-modal" style="width:640px; max-height:72vh">
+            <div class="gs-modal-title">成就详情</div>
+            <div class="gp-ach-body" id="gpAchBody"></div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn primary" id="gpAchClose">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- P2-b: 头像上传隐藏 file input（accept image/*，选文件后触发 openAvatarCropper） -->
+    <input type="file" id="gpAvatarFile" accept="image/jpeg,image/png,image/gif,image/webp" hidden />
+
+    <!-- P2-b: 圆形裁剪弹窗（固定 320×320 取景框，可拖拽定位 + 滚轮/滑块缩放） -->
+    <div class="gs-modal-mask hidden" id="gpAvatarCropMask">
+        <div class="gs-modal" style="width:420px;display:flex;flex-direction:column;align-items:center">
+            <div class="gs-modal-title">裁剪头像</div>
+            <div class="gp-av-crop-wrap">
+                <!-- 预览画布（256×256）+ 圆形裁剪蒙层 -->
+                <canvas id="gpAvCropCanvas" width="256" height="256"></canvas>
+                <div class="gp-av-crop-ring"></div>
+                <!-- 圆形内透明，圆形外黑色半透明蒙层（CSS 实现） -->
+                <div class="gp-av-crop-mask"></div>
+            </div>
+            <div class="gp-av-crop-controls">
+                <label>缩放</label>
+                <input type="range" id="gpAvCropScale" min="1" max="3" step="0.01" value="1.3" />
+            </div>
+            <div class="gp-av-crop-hint">拖拽图片调整位置，滚轮也可缩放</div>
+            <div class="gs-modal-btns" style="width:100%;justify-content:flex-end;gap:8px">
+                <button class="gs-btn" id="gpAvCropCancel">取消</button>
+                <button class="gs-btn primary" id="gpAvCropConfirm">确认上传</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. 展示柜编辑弹窗：最多 10 个槽位，每槽选类型 + 标题 + 启用开关 -->
+    <div class="gs-modal-mask hidden" id="gpShowcaseMask">
+        <div class="gs-modal" style="width:720px;max-height:85vh;display:flex;flex-direction:column">
+            <div class="gs-modal-title">展示柜编辑</div>
+            <div class="gp-showcase-hint">等级越高可解锁越多槽位；点击下拉选择类型，拖动调整顺序</div>
+            <div class="gp-showcase-safety-note">
+                <b>自定义 HTML 安全规则：</b>
+                支持 <code>div/span/a/img/table/b/i/u/code/pre/blockquote</code> 和 <code>inline style</code>；
+                自动过滤 <code>&lt;script&gt;</code>、<code>onclick/onerror</code> 等事件属性、<code>javascript:</code> 协议、<code>&lt;iframe/object/embed/form/input/button&gt;</code> 等危险标签；单段上限 8KB
+            </div>
+            <div class="gp-showcase-list" id="gpShowcaseList"></div>
+            <div class="gp-showcase-add">
+                <button class="gs-btn" id="gpShowcaseAdd">＋ 添加展示柜</button>
+            </div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gpShowcaseCancel">取消</button>
+                <button class="gs-btn primary" id="gpShowcaseSave">保存</button>
             </div>
         </div>
     </div>
@@ -3925,7 +5091,13 @@
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
     <script src="js/game-common.js?v=1.0"></script>
-    <script src="js/game-store.js?v=79"></script>
+    <script src="js/game-store.js"></script>
+    <!-- 成就桥接 SDK（方案 §14.4 链路 B，仅 PC 端）：sha256.js 提供 HMAC 基元须先加载；
+         会话密钥由 game-store.js 在库/详情响应到达时喂入 ImGameSDK.setSession -->
+    <script src="js/sha256.js?v=1.0"></script>
+    <script src="js/im-game-sdk.js?v=1.0"></script>
+    <!-- 游戏成就解锁 toast（Steam 同款，方案 §14.3.4；游戏中心窗经链路 B 桥接回调 AchievementToast.show 触发） -->
+    <script src="js/achievement-toast.js?v=1.0"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

@@ -21,6 +21,21 @@
     --text-secondary: #999999;                    /* 次级文字（原各处 fallback #999 归口主题管理） */
     --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.08); /* 浮层阴影（控制台抽屉等，随主题深浅） */
     --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.10); /* 轻阴影（浮标胶囊等小浮层） */
+    /* 阶段二百九十五 P0-P1：个人资料扩展主题变量 */
+    --gp-input-bg: #ffffff;         /* 编辑资料/隐私弹窗输入框背景 */
+    --gp-hero-from: #1b2838;        /* 资料页横幅渐变起点 */
+    --gp-hero-mid: #2a475e;         /* 资料页横幅渐变中间 */
+    --gp-hero-to: #1b2838;          /* 资料页横幅渐变终点 */
+    --gp-title-bg: rgba(43, 108, 184, 0.15);   /* 称号/副标题标签背景 */
+    --gp-title-border: rgba(43, 108, 184, 0.35);/* 称号/副标题标签边框 */
+    --gp-title-color: #2b6cb8;      /* 称号/副标题标签文字 */
+    --gp-level-bg: rgba(232, 197, 71, 0.18);   /* 等级标签背景 */
+    --gp-level-border: rgba(232, 197, 71, 0.4);/* 等级标签边框 */
+    --gp-level-color: #b89a36;      /* 等级标签文字（浅色主题降饱和避免刺眼） */
+    --gp-prog-from: #e8c547;        /* 等级进度条渐变起点 */
+    --gp-prog-to: #f1d768;          /* 等级进度条渐变终点 */
+    --gp-friend-online: #22c55e;    /* 好友在线态描边颜色（浅主题饱和绿） */
+    --gp-card-title: #666666;       /* 资料页卡片标题文字色 */
 }
 
 /* 阶段二百一十九：关闭 Android WebView 触点高亮——手机端点击按钮/列表项会闪现
@@ -58,6 +73,21 @@
     --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
     --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.45);  /* 深色下阴影加重才可见 */
     --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.5);
+    /* 阶段二百九十五 P0-P1：深色主题个人资料扩展变量 */
+    --gp-input-bg: #2a2a2a;
+    --gp-hero-from: #0f1923;
+    --gp-hero-mid: #1b2d3e;
+    --gp-hero-to: #0f1923;
+    --gp-title-bg: rgba(102, 192, 244, 0.18);
+    --gp-title-border: rgba(102, 192, 244, 0.35);
+    --gp-title-color: #66c0f4;
+    --gp-level-bg: rgba(232, 197, 71, 0.2);
+    --gp-level-border: rgba(232, 197, 71, 0.45);
+    --gp-level-color: #f0d87a;
+    --gp-prog-from: #e8c547;
+    --gp-prog-to: #f1d768;
+    --gp-friend-online: #4ade80;
+    --gp-card-title: #8a8a8a;
 }
 
 /* 跟随系统：系统为深色时应用深色变量 */
@@ -90,6 +120,21 @@
         --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
         --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.45);
         --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.5);
+        /* 阶段二百九十五 P0-P1：跟随系统深色——同 dark 主题 */
+        --gp-input-bg: #2a2a2a;
+        --gp-hero-from: #0f1923;
+        --gp-hero-mid: #1b2d3e;
+        --gp-hero-to: #0f1923;
+        --gp-title-bg: rgba(102, 192, 244, 0.18);
+        --gp-title-border: rgba(102, 192, 244, 0.35);
+        --gp-title-color: #66c0f4;
+        --gp-level-bg: rgba(232, 197, 71, 0.2);
+        --gp-level-border: rgba(232, 197, 71, 0.45);
+        --gp-level-color: #f0d87a;
+        --gp-prog-from: #e8c547;
+        --gp-prog-to: #f1d768;
+        --gp-friend-online: #4ade80;
+        --gp-card-title: #8a8a8a;
     }
 }
 
@@ -3363,6 +3408,449 @@ html.m .mobile-plus-panel:not(.hidden) {
     background: rgba(230, 67, 64, 0.08);
 }
 
+/* ===== 动态弹窗体系（JS createElement 创建，game-store / 未来新页面通用） =====
+   与上方 .modal-mask / game-store.html .gs-modal-mask 同质感：全屏遮罩 + flex 居中框体，
+   区别：.modal-mask 是预定义 DOM + 显示/隐藏切类（.hidden），.gp-mask 是运行时 createElement
+   直接 appendChild，无预定义 DOM，故走淡入动画而非 opacity 切换。z-index:2000 与 .modal-mask
+   同层，如需嵌套/置顶可在具体弹窗 id 上覆盖。子变体尺寸（.gp-ss-upload-modal / .gp-card-workshop …）
+   留在各页面内联 CSS（max-width 按弹窗内容调整） */
+.gp-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.18s ease, visibility 0s;
+}
+.gp-mask.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+}
+.gp-modal {
+    width: 400px;
+    max-width: 85vw;
+    max-height: 90vh;
+    padding: 20px 20px 16px;
+    border-radius: 10px;
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-pop, 0 8px 32px rgba(0, 0, 0, 0.35));
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    animation: gp-modal-in 0.16s ease-out;
+}
+@keyframes gp-modal-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.gp-modal-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: left;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--divider, var(--border));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.gp-modal-title .gp-points-badge {
+    float: none;
+}
+.gp-modal-body {
+    font-size: 13px;
+    padding: 0;
+    overflow-y: auto;
+    flex: 1 1 auto;
+}
+.gp-modal-body input[type="text"],
+.gp-modal-body input:not([type]),
+.gp-modal-body select,
+.gp-modal-body textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--panel-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+    font-family: inherit;
+}
+.gp-modal-body input:focus,
+.gp-modal-body select:focus,
+.gp-modal-body textarea:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+.gp-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid var(--divider, var(--border));
+    flex-shrink: 0;
+}
+/* JS 动态弹窗内直接用 <button class="gp-btn">（独立于 .gp-btns 容器） */
+.gp-btn {
+    padding: 7px 18px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, filter 0.15s;
+    white-space: nowrap;
+    line-height: 1.4;
+    font-family: inherit;
+}
+.gp-btn:hover {
+    background: var(--hover);
+    border-color: var(--primary);
+}
+.gp-btn.primary {
+    background: var(--gs-btn, var(--primary));
+    border-color: transparent;
+    color: var(--gs-btn-text, #fff);
+}
+.gp-btn.primary:hover { filter: brightness(1.1); }
+.gp-btn:active { transform: translateY(1px); }
+
+/* ==================== 阶段二百九十六 P2.7：艺术作品独立展示柜 ==================== */
+.gp-art-wrap { width: 100%; }
+.gp-art-hero { position: relative; overflow: hidden; border-radius: 8px; transition: transform 0.2s, box-shadow 0.2s; }
+.gp-art-hero:hover { transform: scale(1.01); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+.gp-art-cell { position: relative; overflow: hidden; border-radius: 6px; transition: transform 0.2s; }
+.gp-art-cell:hover { transform: scale(1.03); }
+.gp-art-more img { transition: transform 0.15s; }
+.gp-art-more img:hover { transform: scale(1.1); }
+
+/* ==================== 阶段二百九十六 P2.6：展示柜主题（积分商店） ==================== */
+/* 给 .gp-main 加主题类后，其子卡片会自动继承主题背景 */
+.gp-theme-dark {
+    background: linear-gradient(160deg, #0a0e1a 0%, #1a1f3a 50%, #0d1326 100%) !important;
+}
+.gp-theme-dark .gp-card, .gp-theme-dark .gs-lib-side, .gp-theme-dark .gs-lib-main,
+.gp-theme-dark .gp-panel, .gp-theme-dark .gp-item {
+    background: rgba(30, 35, 55, 0.85) !important;
+    border-color: rgba(100, 120, 200, 0.3) !important;
+}
+
+.gp-theme-ocean {
+    background: linear-gradient(160deg, #0c4a6e 0%, #0369a1 50%, #075985 100%) !important;
+}
+.gp-theme-ocean .gp-card, .gp-theme-ocean .gs-lib-side, .gp-theme-ocean .gs-lib-main,
+.gp-theme-ocean .gp-panel, .gp-theme-ocean .gp-item {
+    background: rgba(14, 116, 144, 0.75) !important;
+    border-color: rgba(125, 211, 252, 0.35) !important;
+}
+
+.gp-theme-forest {
+    background: linear-gradient(160deg, #052e16 0%, #14532d 50%, #064e3b 100%) !important;
+}
+.gp-theme-forest .gp-card, .gp-theme-forest .gs-lib-side, .gp-theme-forest .gs-lib-main,
+.gp-theme-forest .gp-panel, .gp-theme-forest .gp-item {
+    background: rgba(20, 83, 45, 0.75) !important;
+    border-color: rgba(134, 239, 172, 0.35) !important;
+}
+
+.gp-theme-sunset {
+    background: linear-gradient(160deg, #7c2d12 0%, #c2410c 35%, #db2777 70%, #a21caf 100%) !important;
+}
+.gp-theme-sunset .gp-card, .gp-theme-sunset .gs-lib-side, .gp-theme-sunset .gs-lib-main,
+.gp-theme-sunset .gp-panel, .gp-theme-sunset .gp-item {
+    background: rgba(194, 65, 12, 0.70) !important;
+    border-color: rgba(251, 191, 36, 0.35) !important;
+}
+
+/* ===== P0：金色昵称（积分商店 golden_name 商品） =====
+   .gp-golden-name 挂在 .gp-nick 本身上（JS: nickEl.classList.toggle('gp-golden-name', hasGolden)）
+   纯 CSS 渐变 + shimmer 动画，与主题无关（金色是确定视觉效果，不跟随主题色） */
+.gp-nick.gp-golden-name {
+    color: transparent !important;                         /* 让 background-clip:text 生效 */
+    background: linear-gradient(100deg,
+        #b8860b 0%, #ffd700 15%, #fff4b8 28%, #ffd700 42%,
+        #b8860b 55%, #ffd700 68%, #fff4b8 82%, #ffd700 95%, #b8860b 100%);
+    background-size: 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 12px rgba(255, 215, 0, 0.35);      /* 金色光晕，替代原白色阴影 */
+    animation: gp-golden-shimmer 3.2s linear infinite;
+    font-weight: 800 !important;
+}
+@keyframes gp-golden-shimmer {
+    0%   { background-position: 0% 50%; }
+    100% { background-position: 250% 50%; }
+}
+
+/* ===== P2-a: 截图/艺术作品点赞条（右下角 overlay） ===== */
+.gp-like-bar {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 10px;
+    padding: 2px 6px;
+    font-size: 12px;
+    color: #fff;
+    z-index: 2;
+    backdrop-filter: blur(4px);
+}
+.gp-like-btn {
+    background: none;
+    border: none;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    transition: transform 0.15s ease, color 0.15s ease;
+}
+.gp-like-btn:hover { color: #ff5c7a; transform: scale(1.15); }
+.gp-like-btn.liked { color: #ff5c7a; }
+.gp-like-btn:disabled { opacity: 0.5; cursor: default; }
+.gp-like-count { min-width: 14px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* ===== P2-b: 头像裁剪弹窗 ===== */
+.gp-av-crop-wrap {
+    position: relative;
+    width: 256px;
+    height: 256px;
+    margin: 12px 0 8px;
+    border-radius: 50%;
+    overflow: hidden;          /* 关键：把 canvas 裁成圆形 */
+    background: #000;
+    box-shadow: 0 0 0 2px rgba(255,255,255,0.15), 0 4px 16px rgba(0,0,0,0.4);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+.gp-av-crop-wrap:active { cursor: grabbing; }
+.gp-av-crop-wrap canvas {
+    display: block;
+    width: 256px;
+    height: 256px;
+    image-rendering: -webkit-optimize-contrast;
+}
+/* 圆形外的黑色半透明蒙层（双圆环实现：outer=黑色半透明，inner=全透明） */
+.gp-av-crop-mask {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1600px rgba(0,0,0,0.45);  /* 大范围黑色半透明遮罩 */
+    pointer-events: none;
+}
+.gp-av-crop-ring {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    border-radius: 50%;
+    border: 2px dashed rgba(255,255,255,0.5);   /* 圆形虚线参考框 */
+    pointer-events: none;
+    box-sizing: border-box;
+}
+.gp-av-crop-controls {
+    display: flex; align-items: center; gap: 10px;
+    width: 256px;
+    margin: 6px 0 2px;
+}
+.gp-av-crop-controls label { font-size: 12px; color: #aaa; white-space: nowrap; }
+.gp-av-crop-controls input[type=range] {
+    flex: 1; height: 4px; accent-color: var(--theme-primary, #5865f2);
+}
+.gp-av-crop-hint {
+    font-size: 11px; color: #888; margin-bottom: 10px;
+}
+
+/* 资料页自己的头像：hover 显示"编辑头像"蒙层（点击打开裁剪） */
+.gp-av {
+    position: relative; cursor: default;
+}
+.gp-av.gp-can-edit {
+    cursor: pointer;
+}
+.gp-av.gp-can-edit::after {
+    content: attr(data-hint);
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+    pointer-events: none;
+    line-height: 1.3;
+    text-align: center;
+    padding: 4px;
+}
+.gp-av.gp-can-edit:hover::after { opacity: 1; }
+
+.gp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ===== P3: 留言板 + 表情面板 + @提及 ===== */
+/* 输入区容器 */
+.gp-cmt-input-row {
+    position: relative;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+}
+.gp-cmt-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 48px;
+    max-height: 140px;
+    resize: vertical;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 4px 0;
+    font-family: inherit;
+}
+.gp-cmt-input::placeholder { color: #666; }
+.gp-cmt-tools {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 6px;
+}
+.gp-cmt-tool-btn {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+.gp-cmt-tool-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.gp-cmt-send-wrap { margin-left: auto; }
+
+/* Emoji 面板（绝对定位在输入区上方） */
+.gp-emoji-panel {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    width: 280px;
+    background: #1e1f29;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    z-index: 50;
+    overflow: hidden;
+}
+.gp-emoji-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.gp-emoji-tab {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s, background 0.15s;
+}
+.gp-emoji-tab:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+.gp-emoji-tab.active { opacity: 1; }
+.gp-emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 2px;
+    padding: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.gp-emoji-cell {
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    line-height: 1;
+    text-align: center;
+    transition: background 0.1s, transform 0.1s;
+}
+.gp-emoji-cell:hover { background: rgba(255,255,255,0.1); transform: scale(1.15); }
+
+/* @提及下拉 */
+.gp-at-dropdown {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    width: 220px;
+    max-height: 240px;
+    overflow-y: auto;
+    background: #1e1f29;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    z-index: 50;
+}
+.gp-at-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.gp-at-item:hover, .gp-at-item.gp-at-active {
+    background: rgba(255,255,255,0.08);
+}
+.gp-at-av {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #bbb;
+}
+.gp-at-name { font-size: 13px; color: #ddd; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gp-at-empty { padding: 12px; font-size: 12px; color: #777; text-align: center; }
+
+/* 留言 @提及 渲染高亮（renderComments 里用 mark 标签） */
+.gp-comment-text mark {
+    background: transparent;
+    color: var(--theme-primary, #5865f2);
+    font-weight: 600;
+    cursor: pointer;
+}
+.gp-comment-text mark:hover { text-decoration: underline; }
+
+/* 动态弹窗内滚动容器（.gp-modal-body / .gp-exp-log-body / .gp-game-pick-list 等）
+   滚动条走项目统一 osbInit(el) 悬浮滑块（game-store.js 已实现），
+   原生 ::-webkit-scrollbar 被全局归零，勿在此另开伪元素 */
+
 /* Toast 轻提示 */
 .toast {
     position: fixed;
@@ -3391,6 +3879,59 @@ html.m .mobile-plus-panel:not(.hidden) {
     cursor: pointer;
     border: 1px solid var(--primary, #409eff);
     transition: background 0.15s, transform 0.15s;
+}
+
+/* ===== 展示柜编辑器：槽位上限状态 ===== */
+.gp-showcase-hint {
+    font-size: 11.5px;
+    color: var(--text-light, #888);
+    margin-bottom: 10px;
+    font-style: italic;
+    transition: color 0.2s;
+}
+.gp-showcase-add {
+    display: flex;
+    justify-content: center;
+    padding: 10px 0 4px;
+}
+#gpShowcaseAdd.disabled,
+#gpShowcaseAdd:disabled {
+    opacity: 0.55;
+    cursor: not-allowed !important;
+    pointer-events: auto; /* 允许 hover tooltip */
+    background: var(--bg-tertiary, #2a2d35) !important;
+    color: var(--text-light, #888) !important;
+    border-color: var(--border, #3a3d45) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+#gpShowcaseAdd.disabled:hover {
+    opacity: 0.55; /* 禁用态不响应 hover */
+    transform: none;
+}
+#gpShowcaseAdd.disabled::after {
+    /* 禁用态 hover 提示：不能再加了 */
+    content: attr(data-disabled-hint);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-floating, #1a1d25);
+    color: var(--text-primary, #eee);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 200;
+}
+#gpShowcaseAdd.disabled:hover::after {
+    opacity: 1;
+}
+#gpShowcaseAdd {
+    position: relative; /* 让 disabled tooltip 绝对定位相对于按钮 */
 }
 
 .toast-clickable:hover {

@@ -4,4 +4,7 @@ dist/
 _toolchain/
 user-data-t1/
 user-data-t2/
+user-data-1/
+user-data-2/
+user-data-test/
 *.enc

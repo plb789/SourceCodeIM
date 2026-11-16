@@ -436,8 +436,8 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 
 // 服务端地址（默认本地）
-//const SERVER_URL = 'http://127.0.0.1:2087/';
-const SERVER_URL = 'https://im.sxgyxny.com/';
+const SERVER_URL = 'http://127.0.0.1:2087/';
+//const SERVER_URL = 'https://im.sxgyxny.com/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
@@ -1763,7 +1763,9 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=31'); // v31：热键设置改按键捕获录入（微信/QQ 同款，readonly 禁手输）
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=32'); // v32: 背景横幅上传、经验记录、发表评测、卡片工坊等新功能
+    // 每次打开游戏中心强制清 HTTP 缓存，避免 v=31/v=80 这类版本号迭代后 WebView 仍持旧页面
+    try { gameStoreWin.webContents.session.clearCache(function () {}); } catch (e) {}
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {

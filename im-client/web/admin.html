@@ -64,6 +64,7 @@
                 <button class="admin-nav-item sub" data-view="groders">充值订单</button>
                 <button class="admin-nav-item sub" data-view="cards">充值卡</button>
                 <button class="admin-nav-item sub" data-view="gaudit">游戏审核</button>
+                <button class="admin-nav-item sub" data-view="gameach">成就管理</button>
                 <button class="admin-nav-item sub" data-view="quarantine">隔离库管理</button>
                 <button class="admin-nav-item sub" data-view="whitelist">扫描白名单</button>
                 <button class="admin-nav-item sub" data-view="merchants">商户管理</button>
@@ -2141,6 +2142,69 @@
                         </table>
                     </div>
                 </div>
+            </section>
+
+            <!-- 成就管理（阶段二百九十五 B2） -->
+            <section id="admin-view-gameach" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>成就管理</h2>
+                    <span id="ga-status" class="admin-view-tip">选择游戏后加载…</span>
+                </header>
+                <p class="admin-view-tip">维护各游戏的成就定义：新增 / 编辑 / 删除 / 批量导入 / 一键补齐 seed 模板。成就解锁走客户端 SDK 上报，经验值自动按稀有度发放。</p>
+
+                <div style="display:flex;gap:10px;margin:12px 0;align-items:center;flex-wrap:wrap">
+                    <select id="ga-game" class="admin-input" style="min-width:220px">
+                        <option value="">加载中…</option>
+                    </select>
+                    <select id="ga-rarity-filter" class="admin-input" style="min-width:100px">
+                        <option value="">全部稀有度</option>
+                        <option value="0">常见 (10 exp)</option>
+                        <option value="1">罕见 (25 exp)</option>
+                        <option value="2">稀有 (50 exp)</option>
+                        <option value="3">史诗 (100 exp)</option>
+                        <option value="4">传说 (200 exp)</option>
+                    </select>
+                    <input type="text" id="ga-keyword" class="admin-input" placeholder="code 或名称模糊搜索" style="flex:1;min-width:160px">
+                    <button id="ga-search" class="admin-btn">搜索</button>
+                    <button id="ga-reset" class="admin-btn small">重置</button>
+                </div>
+
+                <div style="display:flex;gap:10px;margin-bottom:10px">
+                    <button id="ga-add" class="admin-btn">+ 新增成就</button>
+                    <button id="ga-batch" class="admin-btn small">📋 批量导入 / Upsert</button>
+                    <button id="ga-seed" class="admin-btn small">🎲 一键补齐 seed 模板</button>
+                    <button id="ga-clear" class="admin-btn danger small" title="清空当前游戏全部成就定义（已解锁记录保留）">🗑 清空此游戏成就</button>
+                    <span id="ga-stats" class="admin-view-tip" style="margin-left:auto"></span>
+                </div>
+
+                <div class="vec-table-wrap">
+                    <table class="vec-table" id="ga-table" style="table-layout:fixed">
+                        <colgroup>
+                            <col style="width:48px">
+                            <col style="width:120px">
+                            <col style="width:180px">
+                            <col style="width:auto">
+                            <col style="width:80px">
+                            <col style="width:auto">
+                            <col style="width:180px">
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>稀有度</th>
+                                <th>成就 Code</th>
+                                <th>名称</th>
+                                <th style="text-align:center">EXP</th>
+                                <th>描述</th>
+                                <th style="text-align:center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ga-tbody">
+                            <tr><td colspan="7" class="vec-empty">请先选择左侧游戏…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="ga-pager" style="display:flex;justify-content:center;align-items:center;gap:4px;margin-top:12px"></div>
             </section>
         </main>
     </div>

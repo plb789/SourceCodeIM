@@ -12,6 +12,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	gormlogger "gorm.io/gorm/logger"
 
 	"im-server/config"
@@ -102,8 +103,301 @@ func InitMySQL(cfg *config.Config) error {
 	// （微信同款朋友圈：动态+点赞+评论回复+互动红点归口）
 	// 阶段二百九十三：追加服务号六表 im_official_account / im_official_subscribe / im_official_menu /
 	// im_official_template / im_official_message / im_official_audit（微信同款公众号服务）
-	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}, &model.UserKB{}, &model.PointsLog{}, &model.MCPServer{}, &model.CallLog{}, &model.Group{}, &model.GroupMember{}, &model.GroupInvite{}, &model.Announcement{}, &model.AnnouncementAttachment{}, &model.AnnouncementRead{}, &model.WorkbenchApp{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RemoteLog{}, &model.DriveFile{}, &model.DriveShare{}, &model.DriveUploadSession{}, &model.AppVersion{}, &model.Device{}, &model.RemoteTrust{}, &model.RemoteCard{}, &model.Moment{}, &model.MomentLike{}, &model.MomentComment{}, &model.MomentUnread{}, &model.GatewayBook{}, &model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.OfficialAccount{}, &model.OfficialSubscribe{}, &model.OfficialMenu{}, &model.OfficialKeyword{}, &model.OfficialTemplate{}, &model.OfficialMessage{}, &model.OfficialAudit{}, &model.ClamavQuarantine{}, &model.ClamavWhitelist{}); err != nil {
+	// 阶段二百九十五：追加 Steam 同款个人资料四表 im_game_achievement / im_user_achievement / im_user_badge / im_profile_exp_log
+	// 阶段二百九十五 P1：追加展示柜 + 留言板 im_profile_showcase / im_profile_comment
+	// 阶段二百九十五 P2.3：追加截图表 im_profile_screenshot
+	// 阶段二百九十五 P3：追加卡片合成徽章三表 im_card / im_user_card / im_badge_template
+	// 补充遗漏：Agent/AI 记忆规则/MCP 插件相关 13 表（运行时高频查询，缺失即 500）
+	// A1：追加等级配置表 im_user_level_config（文档附录 A，管理员预设等级权益数据）
+	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}, &model.UserKB{}, &model.PointsLog{}, &model.MCPServer{}, &model.MCPPlugin{}, &model.SysPrompt{}, &model.CallLog{}, &model.Group{}, &model.GroupMember{}, &model.GroupInvite{}, &model.Announcement{}, &model.AnnouncementAttachment{}, &model.AnnouncementRead{}, &model.WorkbenchApp{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RemoteLog{}, &model.DriveFile{}, &model.DriveShare{}, &model.DriveUploadSession{}, &model.AppVersion{}, &model.Device{}, &model.RemoteTrust{}, &model.RemoteCard{}, &model.Moment{}, &model.MomentLike{}, &model.MomentComment{}, &model.MomentUnread{}, &model.GatewayBook{}, &model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.OfficialAccount{}, &model.OfficialSubscribe{}, &model.OfficialMenu{}, &model.OfficialKeyword{}, &model.OfficialTemplate{}, &model.OfficialMessage{}, &model.OfficialAudit{}, &model.ClamavQuarantine{}, &model.ClamavWhitelist{}, &model.GameAchievement{}, &model.UserAchievement{}, &model.UserBadge{}, &model.ProfileExpLog{}, &model.ProfileShowcase{}, &model.ProfileComment{}, &model.ProfileScreenshot{}, &model.ProfileScreenshotLike{}, &model.Card{}, &model.UserCard{}, &model.BadgeTemplate{}, &model.UserShopItem{}, &model.AIMemory{}, &model.AIMemoryPref{}, &model.AIRule{}, &model.AISession{}, &model.AgentTaskRecord{}, &model.AgentTaskTpl{}, &model.AgentCronTask{}, &model.AgentWhitelist{}, &model.AgentStepRecord{}, &model.AgentChangeRecord{}, &model.MsgPurgeApply{}, &model.UserLevelConfig{}); err != nil {
 		return fmt.Errorf("自动建表失败: %w", err)
+	}
+
+	// A1 seed：等级配置表首次建表后自动 INSERT/UPDATE 文档附录 A 预设数据
+	// 必须用 Save 或 OnConflict UPDATE（不是 DoNothing）—— 保证 ShowcaseSlots/Title 等字段是最新值
+	// 否则旧表如果已经有 Lv1-Lv5 行，DoNothing 会跳过更新，seed 里 ShowcaseSlots=4 不会生效
+	levelSeed := []model.UserLevelConfig{
+		{Level: 1, ExpRequired: 0,    BadgeCode: "lv1",  Title: "新人玩家", ShowcaseSlots: 3},
+		{Level: 2, ExpRequired: 500,  BadgeCode: "lv2",  Title: "",        ShowcaseSlots: 3},
+		{Level: 3, ExpRequired: 1125, BadgeCode: "lv3",  Title: "",        ShowcaseSlots: 3},
+		{Level: 4, ExpRequired: 2000, BadgeCode: "lv4",  Title: "",        ShowcaseSlots: 3},
+		{Level: 5, ExpRequired: 3125, BadgeCode: "lv5",  Title: "初级玩家", ShowcaseSlots: 4},
+		{Level: 10, ExpRequired: 50000,  BadgeCode: "lv10",  Title: "资深玩家", ShowcaseSlots: 5},
+		{Level: 15, ExpRequired: 112500, BadgeCode: "lv15",  Title: "",         ShowcaseSlots: 6},
+		{Level: 20, ExpRequired: 200000, BadgeCode: "lv20",  Title: "老玩家",   ShowcaseSlots: 7},
+		{Level: 30, ExpRequired: 450000, BadgeCode: "lv30",  Title: "",         ShowcaseSlots: 8},
+		{Level: 40, ExpRequired: 800000, BadgeCode: "lv40",  Title: "",         ShowcaseSlots: 9},
+		{Level: 50, ExpRequired: 1250000, BadgeCode: "lv50", Title: "传奇玩家", ShowcaseSlots: 10},
+	}
+	for _, lc := range levelSeed {
+		db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "level"}},
+			DoUpdates: clause.AssignmentColumns([]string{"exp_required", "badge_code", "title", "showcase_slots"}),
+		}).Create(&lc)
+	}
+
+	// A2 seed：游戏成就定义（文档附录 B 稀有度 → 经验值映射）
+	// 启动时查所有现有 im_game，按 slug 匹配专属成就模板 + 通用成就池兜底
+	// 用 OnConflict DoNothing 幂等写入（唯一键 idx_game_code(game_id, code)）
+	// 口径：每个游戏至少 12 条成就（Common×6 + Uncommon×3 + Rare×2 + Epic×1）
+	achRarityExp := map[int8]int{0: 10, 1: 25, 2: 50, 3: 100, 4: 200} // Common 0 → Legendary 4
+
+	type achTpl struct {
+		Code   string
+		Name   string
+		Desc   string
+		Rarity int8
+	}
+
+	// 通用成就池：覆盖所有游戏的跨场景里程碑
+	// 分类口径（ExperienceRecall 100016231）：
+	//   Common×6 = 首次游玩 + 3个时长里程碑 + 2个游玩次数里程碑
+	//   Uncommon×3 = 中等时长 + 成就猎人 + 回归玩家
+	//   Rare×2 = 深度玩家 + 百小时
+	//   Epic×1 = 资深玩家
+	//   Legendary×1 = 传奇玩家（200h+）
+	achGeneric := []achTpl{
+		// Common (6) — +10 exp each
+		{"first_play", "初入江湖", "第一次启动该游戏", 0},
+		{"play_1h", "初尝滋味", "累计游玩 1 小时", 0},
+		{"play_5h", "渐入佳境", "累计游玩 5 小时", 0},
+		{"play_10h", "小有成就", "累计游玩 10 小时", 0},
+		{"play_10_times", "常客", "累计启动 10 次", 0},
+		{"first_screenshot", "留影纪念", "在该游戏中截取第一张截图", 0},
+
+		// Uncommon (3) — +25 exp each
+		{"play_25h", "沉浸其中", "累计游玩 25 小时", 1},
+		{"play_30_times", "回头客", "累计启动 30 次", 1},
+		{"early_bird", "早起的鸟儿", "在清晨 6:00-9:00 之间游玩", 1},
+
+		// Rare (2) — +50 exp each
+		{"play_50h", "深度玩家", "累计游玩 50 小时", 2},
+		{"play_night_owl", "夜猫子", "在深夜 23:00-3:00 之间累计游玩 10 小时", 2},
+
+		// Epic (1) — +100 exp
+		{"play_100h", "资深玩家", "累计游玩 100 小时", 3},
+
+		// Legendary (1) — +200 exp
+		{"play_200h", "传奇玩家", "累计游玩 200 小时", 4},
+	}
+
+	// 专属成就模板：按游戏 slug 匹配（仅定义与通用池不同的特色成就，通用池仍然会一并插入）
+	// 格式：slug → []achTpl
+	achBySlug := map[string][]achTpl{
+		// ===== FPS / 射击类 =====
+		"counter-strike-2": {
+			{"first_blood", "初战告捷", "在对战中取得第一次击杀", 0},
+			{"ace", "ACE", "一回合内击杀对方全部 5 人", 3},
+			{"defuse_ace", "拆弹 ACE", "残局 1v5 成功拆除炸弹", 4},
+			{"headshot_master", "爆头大师", "累计完成 1000 次爆头", 2},
+			{"deagle_only", "沙鹰专家", "使用 Desert Eagle 完成 50 次击杀", 2},
+			{"clutch_1v5", "残局大师", "在 1v5 残局中成功翻盘", 4},
+		},
+		"valorant": {
+			{"first_blood", "首杀", "获得第一次击杀", 0},
+			{"ace_round", "王牌回合", "一回合内击杀所有敌人", 3},
+			{"operator_main", "狙击手", "使用 Operator 完成 100 次击杀", 2},
+			{"flawless_victory", "完美胜利", "在竞技模式中以 13:0 获胜", 4},
+		},
+		"overwatch-2": {
+			{"first_elimination", "首杀", "获得第一次消灭", 0},
+			{"teammate_rescue", "救命恩人", "一次对局中复活队友 5 次", 1},
+			{"payload_hero", "推车英雄", "在推车模式中累计推车上限 50 次", 2},
+			{"potg", "全场最佳", "获得一次全场最佳（Play of the Game）", 3},
+		},
+		"rainbow-six-siege": {
+			{"first_blood", "首杀", "取得第一次击杀", 0},
+			{"one_vs_five", "孤胆英雄", "1v5 残局成功获胜", 4},
+			{"drone_master", "侦查大师", "一局中用无人机标记敌人 20 次", 1},
+		},
+
+		// ===== MOBA 类 =====
+		"dota-2": {
+			{"first_blood", "一血", "送出或拿到一血", 0},
+			{"rampage", "暴走", "连续击杀对方 5 人且自己未死", 4},
+			{"triple_kill", "三杀", "一次团战中连续击杀 3 人", 2},
+			{"ward_master", "视野大师", "累计放置 500 个守卫", 1},
+			{"comeback_king", "翻盘之王", "落后 1 万经济差的情况下获胜", 4},
+		},
+		"league-of-legends": {
+			{"first_blood", "一血", "在对局中取得第一次击杀", 0},
+			{"penta_kill", "五杀", "一次团战中连续击杀对方 5 人", 4},
+			{"triple_kill", "三杀", "一次团战中连续击杀 3 人", 2},
+			{"dragon_slayer", "屠龙勇士", "累计击杀 50 条小龙", 1},
+			{"baron_steal", "抢龙", "从对方手中抢到纳什男爵", 4},
+		},
+		"smite": {
+			{"first_blood", "首杀", "获得第一次击杀", 0},
+			{"pentakill", "五杀", "一次团战中连续击杀 5 人", 4},
+			{"fire_giant", "火焰巨人杀手", "累计击杀 20 次火焰巨人", 2},
+		},
+
+		// ===== 沙盒 / 生存类 =====
+		"minecraft": {
+			{"first_craft", "工匠学徒", "完成第一次合成", 0},
+			{"first_mine", "矿工", "挖到第一块矿石", 0},
+			{"diamond_hunter", "钻石猎人", "挖到第一颗钻石", 1},
+			{"ender_dragon", "龙之杀手", "击败末影龙", 3},
+			{"nether_portal", "下界之门", "点亮下界传送门", 1},
+			{"full_armor", "铁甲战士", "集齐一整套钻石护甲", 2},
+			{"wither_killer", "凋灵猎人", "击败凋灵 Boss", 3},
+			{"elytra", "翱翔天际", "获得鞘翅并飞行 1000 格", 4},
+		},
+		"rust": {
+			{"first_survive", "活下来", "存活超过 24 小时（游戏内时间）", 0},
+			{"first_kill", "生存本能", "在 PVP 中取得第一次击杀", 0},
+			{"base_builder", "建筑师", "建造超过 100 个建筑部件", 1},
+			{"raider", "掠夺者", "成功突袭并掠夺他人基地 5 次", 3},
+		},
+		"don_t_starve": {
+			{"first_survive", "活下去", "存活 10 天", 0},
+			{"winter_survivor", "过冬达人", "成功度过第一个冬天", 1},
+			{"ancient_guardian", "远古守护者", "击败远古守卫者", 3},
+		},
+
+		// ===== RPG / 动作类 =====
+		"elden-ring": {
+			{"first_boss", "褪色者的第一步", "击败第一个 Boss", 0},
+			{"margit", "恶兆已除", "击败恶兆玛尔基特", 2},
+			{"godrick", "黄金树种子", "击败接肢葛德文", 2},
+			{"malenia", "米凯拉之刃", "击败米凯拉之刃·玛莲妮亚", 4},
+			{"radahn", "碎星之战", "在碎星之战中击败拉塔恩", 3},
+			{"rune_bearer", "大卢恩持有者", "装备第一个大卢恩", 1},
+			{"all_bosses", "艾尔登之王", "击败所有主线 Boss", 4},
+		},
+		"cyberpunk-2077": {
+			{"first_kill", "街头佣兵", "取得第一次击杀", 0},
+			{"ripperdoc", "赛博改造", "安装第一个义体", 0},
+			{"main_story_end", "夜之城传奇", "通关主线剧情", 3},
+			{"all_romances", "情场浪子", "与所有可攻略对象达成亲密关系", 3},
+			{"legendary_hunter", "传说收藏家", "收集 10 件传说级装备", 2},
+		},
+		"gta-5": {
+			{"first_heist", "江洋大盗", "完成第一次抢劫", 1},
+			{"story_complete", "洛圣都之王", "通关所有主线任务", 3},
+			{"first_million", "百万富翁", "累计资产达到 100 万", 2},
+			{"wanted_5min", "五星通缉", "在五星通缉下存活 5 分钟", 2},
+			{"all_stunts", "特技大师", "完成全部 50 个特技跳跃", 3},
+		},
+		"witcher-3": {
+			{"first_sign", "法印学徒", "第一次使用法印", 0},
+			{"griffin", "狮鹫已除", "击败皇家狮鹫", 1},
+			{"story_complete", "猎魔人传奇", "通关主线剧情", 3},
+			{"all_gwent", "昆特牌大师", "收集所有昆特牌", 3},
+			{"blood_and_wine", "陶森特守护者", "完成血与酒 DLC 主线", 3},
+		},
+
+		// ===== 体育 / 竞速类 =====
+		"fifa-24": {
+			{"first_match", "初登场", "完成第一场比赛", 0},
+			{"first_goal", "破门得分", "打进第一个进球", 0},
+			{"hat_trick", "帽子戏法", "一场比赛中打进 3 球", 2},
+			{"champion", "联赛冠军", "带领球队夺得联赛冠军", 3},
+		},
+		"nba-2k24": {
+			{"first_match", "首秀", "完成第一场比赛", 0},
+			{"first_3pointer", "三分出手", "投进第一个三分球", 0},
+			{"triple_double", "三双机器", "一场比赛中取得三双数据", 3},
+			{"champion", "总冠军", "夺得 NBA 总冠军", 3},
+		},
+		"forza_horizon-5": {
+			{"first_race", "竞速新秀", "完成第一场比赛", 0},
+			{"first_win", "初次夺冠", "赢得第一场比赛", 0},
+			{"all_cars", "车库大师", "收集 100 辆不同的车辆", 2},
+			{"s1_classic", "S1 经典赛冠军", "赢得 S1 赛季经典赛", 3},
+		},
+
+		// ===== 策略 / 模拟类 =====
+		"civilization-6": {
+			{"first_city", "建国之父", "建立第一座城市", 0},
+			{"first_tech", "科技之光", "研究第一项科技", 0},
+			{"science_victory", "科学胜利", "以科学胜利方式通关", 4},
+			{"domination_victory", "统治胜利", "以统治胜利方式通关", 4},
+			{"20_cities", "超级大国", "同时拥有 20 座城市", 3},
+		},
+		"stellaris": {
+			{"first_contact", "第一次接触", "与外星文明第一次接触", 1},
+			{"wonders", "奇观建造者", "建造 5 个不同的奇观", 2},
+			{"galactic_conqueror", "银河征服者", "控制银河系 50% 的领土", 4},
+		},
+		"europa_universalis_4": {
+			{"first_royal_marriage", "王室联姻", "完成第一次王室联姻", 0},
+			{"first_war", "第一次战争", "赢得第一场战争", 0},
+			{"puella_magna", "普鲁士的崛起", "成立普鲁士", 3},
+		},
+
+		// ===== 平台 / 冒险类 =====
+		"hollow_knight": {
+			{"first_charm", "护符收藏家", "收集第一个护符", 0},
+			{"first_boss", "小骑士", "击败第一个 Boss", 0},
+			{"all_bosses", "空洞骑士", "击败所有 Boss（含寻神者）", 4},
+			{"steel_soul", "钢魂通关", "在钢魂模式下通关", 4},
+		},
+		"celeste": {
+			{"first_chapter", "启程", "完成第一章", 0},
+			{"all_chapters", "登顶", "完成所有章节", 3},
+			{"b_sides", "B 面通关", "完成所有 B 面关卡", 3},
+			{"c_sides", "C 面通关", "完成所有 C 面关卡", 4},
+		},
+
+		// ===== 多人合作 / 生存类 =====
+		"left_4_dead_2": {
+			{"first_helped", "救命恩人", "拉起倒下的队友 5 次", 0},
+			{"no_incap", "毫发无损", "一个战役中不被击倒", 2},
+			{"realism_survivor", "绝境求生", "在写实模式下通关一个战役", 3},
+		},
+		"warframe": {
+			{"first_warframe", "战甲收集家", "获得第一个战甲", 0},
+			{"first_sortie", "出击", "完成第一次每日出击", 1},
+			{"mr20", "精通 20 级", "达到精通等级 20", 4},
+		},
+		"destiny-2": {
+			{"first_strike", "打击完成", "完成第一个打击任务", 0},
+			{"first_raid", "初次突袭", "完成第一次突袭", 2},
+			{"lfg_titan", "泰坦征服者", "在《希望的火花》突袭中通关", 4},
+		},
+	}
+
+	// B1：查所有现有游戏，逐个匹配模板
+	var allGames []model.Game
+	if err := db.Select("id, slug, name").Find(&allGames).Error; err != nil {
+		logger.Warn("成就 seed：查询游戏列表失败，跳过：%v", err)
+	} else {
+		totalSeeded := 0
+		for _, g := range allGames {
+			var templates []achTpl
+			// ① 通用池（所有游戏都有）
+			templates = append(templates, achGeneric...)
+			// ② 专属模板（按 slug 精确匹配）
+			if extra, ok := achBySlug[g.Slug]; ok {
+				templates = append(templates, extra...)
+			}
+			// ③ 批量插入（OnConflict DoNothing 幂等）
+			for _, t := range templates {
+				expReward := achRarityExp[t.Rarity]
+				if expReward == 0 {
+					expReward = 10 // 兜底
+				}
+				ach := model.GameAchievement{
+					GameID:    g.ID,
+					Code:      t.Code,
+					Name:      t.Name,
+					Desc:      t.Desc,
+					Icon:      "",
+					Rarity:    t.Rarity,
+					ExpReward: expReward,
+				}
+				res := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&ach)
+				if res.Error == nil && res.RowsAffected > 0 {
+					totalSeeded++
+				}
+			}
+		}
+		if len(allGames) > 0 {
+			logger.Info("成就 seed：覆盖 %d 款游戏，新增 %d 条成就定义（DoNothing 幂等，已存在不计）", len(allGames), totalSeeded)
+		} else {
+			logger.Info("成就 seed：im_game 为空，跳过（游戏上架后下次启动自动补齐）")
+		}
 	}
 
 	sqlDB, err := db.DB()

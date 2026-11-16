@@ -240,7 +240,8 @@ async function main() {
             }
             var code = fs.readFileSync(f.src, 'utf8');
             return esbuild.transform(code, {
-                minify: true,           // 压缩：去空白换行 + 局部变量名 mangle（toplevel 默认不动→全局名保留）
+                minify: true,           // 压缩：去空白换行 + 标识符 mangle
+                keepNames: true,        // 保留全局函数/变量名（避免 window.xxx 入口被混淆掉）
                 charset: 'utf8',        // 保留中文字符（默认 ascii 会把中文转义为 \uXXXX 使体积膨胀）
                 legalComments: 'none',
                 sourcefile: f.rel,

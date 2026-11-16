@@ -275,6 +275,12 @@ const (
 	MsgTypeOfficialSearch    = 119 // 双向：上行搜索服务号（content: keyword）；下行搜索结果 JSON
 	MsgTypeOfficialCard      = 120 // 双向：聊天内服务号名片（类似联系人名片 107；content: {app_id,name,avatar,desc}；落库 msg_type=120）
 	MsgTypeOfficialRecall    = 121 // 下行：服务号消息撤回通知（商户后台撤回已发消息后推给订阅用户；content: {msg_id, official_msg_id}；客户端按 msg_id 移除对应气泡）
+
+	// 游戏端成就解锁对接（方案「十四、游戏端成就解锁对接开发方案」14.3.3）：下行成就解锁实时推送。
+	// 链路 A 自动引擎与链路 B HTTP 上报解锁成功后统一经此帧推送该用户全部在线端（PC/Web 弹成就 toast）；
+	// content 为 JSON {game_id, code, name, desc, icon, rarity, exp_reward, level_up, new_level}
+	// 不落库不进离线队列/历史：历史成就走资料页成就列表，仅推实时解锁（防离线补推轰炸）
+	MsgTypeAchievementUnlock = 122
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

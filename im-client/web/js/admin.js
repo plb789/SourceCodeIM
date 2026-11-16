@@ -465,6 +465,8 @@
             else if (item.dataset.view === 'cards') { cardsPage = 1; cardsLoad(); }
             // 游戏审核（游戏管理二级页）：进入视图拉取商户提交的游戏队列 + 病毒回溯扫描任务态
             else if (item.dataset.view === 'gaudit') { gauditLoad(); clamavStatusLoad(true); }
+            // 成就管理（游戏管理二级页 B2）：加载可选游戏下拉（重置选中）+ 已选游戏成就列表
+            else if (item.dataset.view === 'gameach') { gameachPage = 1; gameachLoadGames(); }
             // 病毒隔离库管理（游戏管理二级页）：进入视图拉取隔离记录列表
             else if (item.dataset.view === 'quarantine') { stopKBPolling(); quarantineLoad(); }
             // 病毒扫描白名单（游戏管理二级页）：进入视图拉取白名单规则列表
@@ -9936,4 +9938,275 @@
     } else {
         showLogin();
     }
+
+    // ===== 阶段二百九十五 B2：成就定义管理 =====
+    // 全局状态
+    let gameachPage = 1;
+    const gameachSize = 20;
+    let gameachGames = []; // [{id, name, slug}]
+    let gameachRarityMap = {}; // {0:{label,exp,color}, ...}
+
+    // 稀有度颜色与标签
+    const GARARITY = {
+        0: { label: '常见',    exp: 10,  color: '#b0b0b0' },
+        1: { label: '罕见',    exp: 25,  color: '#1e90ff' },
+        2: { label: '稀有',    exp: 50,  color: '#9b59b6' },
+        3: { label: '史诗',    exp: 100, color: '#e67e22' },
+        4: { label: '传说',    exp: 200, color: '#f1c40f' },
+    };
+
+    // === 加载可选游戏下拉 ===
+    function gameachLoadGames() {
+        api('GET', '/admin/api/game/list?size=500').then(r => {
+            if (!r.ok) throw new Error(r.msg);
+            // 兼容 items / list 两种返回
+            gameachGames = (r.data && (r.data.items || r.data.list)) || [];
+            const sel = document.getElementById('ga-game');
+            if (!sel) return;
+            sel.innerHTML = '<option value="">— 请选择游戏 —</option>' +
+                gameachGames.map(g => `<option value="${g.id}">${g.name} <small style="opacity:.5">(${g.slug||''})</small></option>`).join('');
+            // 从 hash 恢复上次选择（带 #gameach?game=1 形式）
+            const hashGame = (location.hash.match(/gameach\?game=(\d+)/) || [])[1];
+            if (hashGame) sel.value = hashGame;
+            sel.onchange = () => { gameachPage = 1; gameachLoad(); };
+            // 触发初始加载
+            if (sel.value) gameachLoad();
+            else document.getElementById('ga-status').textContent = '共 ' + gameachGames.length + ' 款游戏，请先选择';
+        }).catch(e => {
+            document.getElementById('ga-status').textContent = '加载游戏失败: ' + e.message;
+        });
+    }
+
+    // === 加载成就列表 ===
+    function gameachLoad() {
+        const gid = document.getElementById('ga-game').value;
+        if (!gid) return;
+        const kw = (document.getElementById('ga-keyword').value || '').trim();
+        const rarity = document.getElementById('ga-rarity-filter').value;
+        const qs = new URLSearchParams({ game_id: gid, page: gameachPage, size: gameachSize });
+        if (kw) qs.set('keyword', kw);
+        if (rarity !== '') qs.set('rarity', rarity);
+
+        const tbody = document.getElementById('ga-tbody');
+        tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">加载中…</td></tr>';
+        document.getElementById('ga-status').textContent = '加载中…';
+
+        api('GET', '/admin/api/game/achievement/list?' + qs.toString()).then(r => {
+            if (!r.ok) throw new Error(r.msg);
+            const d = r.data;
+            document.getElementById('ga-status').textContent = (d.game_name || d.game_id) + ' · 共 ' + d.total + ' 条';
+            document.getElementById('ga-stats').textContent = '第 ' + d.page + '/' + Math.max(1, Math.ceil(d.total / d.size)) + ' 页';
+
+            const list = d.list || [];
+            if (!list.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">暂无成就，点右上「一键补齐 seed 模板」或「+ 新增成就」开始</td></tr>';
+            } else {
+                tbody.innerHTML = list.map((a, i) => {
+                    const ra = GARARITY[a.rarity] || GARARITY[0];
+                    return `<tr data-id="${a.id}">
+                        <td style="text-align:center;color:var(--text-light)">${(d.page - 1) * d.size + i + 1}</td>
+                        <td><span style="display:inline-block;padding:2px 10px;border-radius:10px;background:${ra.color}22;color:${ra.color};font-weight:600;font-size:12px;letter-spacing:.5px">${ra.label}</span></td>
+                        <td style="font-family:monospace;color:#3498db;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(a.code)}">${escapeHtml(a.code)}</td>
+                        <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</td>
+                        <td style="text-align:center;font-weight:600;color:#e67e22">+${a.exp_reward||ra.exp}</td>
+                        <td style="color:var(--text-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(a.desc||'')}">${escapeHtml(a.desc||'—')}</td>
+                        <td style="text-align:center;white-space:nowrap">
+                            <button class="admin-btn small" onclick="gameachEdit(${a.id})">编辑</button>
+                            <button class="admin-btn danger small" style="margin-left:6px" onclick="gameachDelete(${a.id}, '${escapeHtml(a.code)}')">删除</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+            }
+            // 分页
+            gameachRenderPager(d.total, d.page, d.size);
+        }).catch(e => {
+            document.getElementById('ga-status').textContent = '加载失败: ' + e.message;
+            tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">加载失败</td></tr>';
+        });
+    }
+
+    function gameachRenderPager(total, page, size) {
+        const p = document.getElementById('ga-pager');
+        const pages = Math.max(1, Math.ceil(total / size));
+        // 单页时隐藏分页器；多页时显示「上一页 / 共 N 条 · 第 x / y 页 / 下一页」
+        if (pages <= 1) { p.innerHTML = ''; return; }
+        p.innerHTML =
+            `<button class="admin-btn small" data-p="${page - 1}" ${page <= 1 ? 'disabled' : ''}>上一页</button>` +
+            `<span style="padding:0 14px;color:var(--text-light);font-size:12px;user-select:none">共 ${total} 条 · 第 ${page} / ${pages} 页</span>` +
+            `<button class="admin-btn small" data-p="${page + 1}" ${page >= pages ? 'disabled' : ''}>下一页</button>`;
+        p.querySelectorAll('button').forEach(b => b.onclick = () => { gameachPage = parseInt(b.dataset.p); gameachLoad(); });
+    }
+
+    // === 事件绑定（进入视图后 DOM 存在） ===
+    document.addEventListener('click', e => {
+        if (e.target.id === 'ga-search') { gameachPage = 1; gameachLoad(); }
+        else if (e.target.id === 'ga-reset') {
+            document.getElementById('ga-keyword').value = '';
+            document.getElementById('ga-rarity-filter').value = '';
+            gameachPage = 1; gameachLoad();
+        }
+        else if (e.target.id === 'ga-add') gameachEdit(null);
+        else if (e.target.id === 'ga-seed') gameachSeed();
+        else if (e.target.id === 'ga-clear') gameachClear();
+        else if (e.target.id === 'ga-batch') gameachBatch();
+    });
+    // 回车搜索
+    document.addEventListener('keydown', e => {
+        if (e.target.id === 'ga-keyword' && e.key === 'Enter') { gameachPage = 1; gameachLoad(); }
+    });
+
+    // === 单行 新增/编辑 弹窗（复用 admin.js 全局 openEditModal / closeEditModal）===
+    function gameachEdit(id) {
+        const gid = document.getElementById('ga-game').value;
+        if (!gid && id === null) { showToast('请先选择游戏'); return; }
+
+        const openModal = (data) => {
+            const gopts = gameachGames.map(g => ({ value: String(g.id), label: g.name + (g.slug ? ' (' + g.slug + ')' : '') }));
+            const rarityOpts = Object.entries(GARARITY).map(([k, v]) => ({ value: k, label: v.label + ' (默认+' + v.exp + ' EXP)' }));
+            const fields = [
+                { key: 'game_id', label: '游戏', type: 'select', options: gopts, hint: id ? '（游戏不可改）' : '', disabled: !!id },
+                { key: 'code', label: 'Code', type: 'text', hint: '英文/下划线/数字，同一游戏下唯一', disabled: !!id },
+                { key: 'name', label: '名称', type: 'text', placeholder: '成就显示名称' },
+                { key: 'rarity', label: '稀有度', type: 'select', options: rarityOpts },
+                { key: 'exp_reward', label: '经验值', type: 'number', placeholder: '留空按稀有度自动推导', hint: '0 或空 → 自动推导' },
+                { key: 'desc', label: '描述', type: 'textarea', placeholder: '玩家如何解锁该成就', hint: '可选' },
+                { key: 'icon', label: '图标', type: 'text', placeholder: 'URL 或 emoji，可选', hint: '可选' },
+            ];
+            const values = {
+                game_id: String(data.game_id || gid),
+                code: data.code || '',
+                name: data.name || '',
+                rarity: String(data.rarity !== undefined ? data.rarity : 0),
+                exp_reward: data.exp_reward || '',
+                desc: data.desc || '',
+                icon: data.icon || '',
+            };
+            openEditModal(
+                id !== null ? '编辑成就 #' + id : '新增成就',
+                fields,
+                values,
+                function (formData) {
+                    gameachSubmitForm(id, formData);
+                }
+            );
+            // 游戏 / Code 在编辑时禁用
+            if (id !== null) {
+                const gSel = document.getElementById('af_game_id');
+                const cInput = document.getElementById('af_code');
+                if (gSel) gSel.disabled = true;
+                if (cInput) cInput.disabled = true;
+            }
+        };
+
+        if (id !== null) {
+            api('GET', '/admin/api/game/achievement/' + id).then(r => {
+                if (!r.ok) throw new Error(r.msg);
+                openModal(r.data);
+            }).catch(e => showToast('加载失败: ' + e.message));
+        } else {
+            openModal({ game_id: parseInt(gid) });
+        }
+    }
+
+    function gameachSubmitForm(id, formData) {
+        const body = {
+            game_id: parseInt(formData.game_id),
+            code: formData.code.trim(),
+            name: formData.name.trim(),
+            rarity: parseInt(formData.rarity),
+            exp_reward: parseInt(formData.exp_reward) || 0,
+            desc: formData.desc,
+            icon: formData.icon,
+        };
+        if (!body.code || !body.name) { showToast('Code 和名称必填'); return false; }
+        if (body.exp_reward <= 0) body.exp_reward = GARARITY[body.rarity].exp;
+
+        const method = id !== null ? 'PUT' : 'POST';
+        const url = id !== null ? '/admin/api/game/achievement/' + id : '/admin/api/game/achievement';
+        // PUT 只允许更新非 game_id/code 字段
+        if (id !== null) { body.game_id = undefined; body.code = undefined; }
+        return api(method, url, body).then(r => {
+            if (!r.ok) throw new Error(r.msg);
+            showToast('保存成功');
+            closeEditModal();
+            gameachLoad();
+        }).catch(e => { showToast('保存失败: ' + e.message); return false; });
+    }
+
+    function gameachDelete(id, code) {
+        confirmBox('确定删除成就「' + code + '」? 已解锁的玩家成就记录保留不受影响。', function () {
+            api('DELETE', '/admin/api/game/achievement/' + id).then(r => {
+                if (!r.ok) throw new Error(r.msg);
+                showToast('已删除');
+                gameachLoad();
+            }).catch(e => showToast('删除失败: ' + e.message));
+        });
+    }
+
+    // === 一键应用 seed 模板到当前游戏 ===
+    function gameachSeed() {
+        const gid = document.getElementById('ga-game').value;
+        if (!gid) { showToast('请先选择游戏'); return; }
+        const gname = document.getElementById('ga-game').selectedOptions[0].text;
+        confirmBox('对「' + gname + '」应用 seed 模板（通用 13 条 + 若命中专属 slug 则附加特色成就）?\n已存在的成就会跳过，不会被覆盖。', function () {
+            api('POST', '/admin/api/game/achievement/seed', { game_id: parseInt(gid) }).then(r => {
+                if (!r.ok) throw new Error(r.msg);
+                showToast('完成：' + r.data.games + ' 款游戏共新增 ' + r.data.inserted + ' 条');
+                gameachLoad();
+            }).catch(e => showToast('失败: ' + e.message));
+        });
+    }
+
+    // === 清空当前游戏全部成就定义 ===
+    function gameachClear() {
+        const gid = document.getElementById('ga-game').value;
+        if (!gid) { showToast('请先选择游戏'); return; }
+        const gname = document.getElementById('ga-game').selectedOptions[0].text;
+        confirmBox('⚠️ 谨慎操作：将清空「' + gname + '」全部成就定义（已解锁记录保留不级联），确定?', function () {
+            api('DELETE', '/admin/api/game/achievement/clear?game_id=' + gid).then(r => {
+                if (!r.ok) throw new Error(r.msg);
+                showToast('已删除 ' + r.data.deleted + ' 条成就定义');
+                gameachLoad();
+            }).catch(e => showToast('失败: ' + e.message));
+        });
+    }
+
+    // === 批量导入弹窗（复用 openEditModal，textarea + checkbox）===
+    function gameachBatch() {
+        const gid = document.getElementById('ga-game').value;
+        if (!gid) { showToast('请先选择游戏'); return; }
+        const gname = document.getElementById('ga-game').selectedOptions[0].text;
+
+        const fields = [
+            { key: 'json_text', label: 'JSON', type: 'textarea', placeholder: '[  {"code":"play_300h","name":"300小时达人","desc":"累计游玩300小时","rarity":4}  ]', hint: '目标游戏：' + gname + '；JSON 数组格式，每行一条，最多 200 条' },
+            { key: 'upsert', label: 'Upsert', type: 'checkbox', default: true, hint: '勾选后 code 已存在则更新，不勾选则跳过冲突' },
+        ];
+
+        openEditModal(
+            '批量导入成就 — ' + gname,
+            fields,
+            { json_text: '', upsert: true },
+            function (formData) {
+                let items;
+                try { items = JSON.parse(formData.json_text); }
+                catch (e) { showToast('JSON 格式错误: ' + e.message); return false; }
+                if (!Array.isArray(items) || !items.length) { showToast('至少 1 条'); return false; }
+                if (items.length > 200) { showToast('单次最多 200 条'); return false; }
+                const upsert = formData.upsert === true || formData.upsert === 'true' || formData.upsert === 'on';
+                return api('POST', '/admin/api/game/achievement/batch', {
+                    game_id: parseInt(gid), items: items, upsert: upsert,
+                }).then(r => {
+                    if (!r.ok) throw new Error(r.msg);
+                    const d = r.data;
+                    showToast('完成：新增 ' + d.inserted + ' · 更新 ' + d.updated + ' · 跳过 ' + d.skipped);
+                    closeEditModal();
+                    gameachLoad();
+                }).catch(e => { showToast('失败: ' + e.message); return false; });
+            }
+        );
+    }
+
+    // ===== 暴露到 window 供表格 inline onclick 调用 =====
+    window.gameachEdit = gameachEdit;
+    window.gameachDelete = gameachDelete;
 })();

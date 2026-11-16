@@ -766,3 +766,145 @@ func (s *Server) handleMerchantVersionDelete(w http.ResponseWriter, r *http.Requ
 	}
 	s.gameVersionDeleteCore(w, &v, &g, me)
 }
+
+// ==================== P2.2：商户成就定义 CRUD + 图标上传 ====================
+
+// achievementIconExts 成就图标扩展名白名单
+var achievementIconExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true}
+
+// handleMerchantAchievementSave POST /api/merchant/games/{id}/achievement
+// multipart/form-data 字段：id（可选，更新时传）、code、name、desc、rarity、exp_reward、file（图标）
+// 创建/更新成就定义，图标可选上传（复用 handleAdminGameImage 同款落位逻辑）
+func (s *Server) handleMerchantAchievementSave(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	me := merchantUserFromCtx(r)
+	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	g, ok := merchantOwnGame(me, id)
+	if !ok {
+		adminFail(w, http.StatusNotFound, "游戏不存在")
+		return
+	}
+
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		adminFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	achID, _ := strconv.ParseUint(strings.TrimSpace(r.FormValue("id")), 10, 64)
+	code := strings.TrimSpace(r.FormValue("code"))
+	name := strings.TrimSpace(r.FormValue("name"))
+	desc := strings.TrimSpace(r.FormValue("desc"))
+	rarity, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("rarity")))
+	expReward, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("exp_reward")))
+
+	if code == "" || name == "" {
+		adminFail(w, http.StatusBadRequest, "code 与 name 必填")
+		return
+	}
+	if rarity < 0 {
+		rarity = 0
+	}
+	if rarity > 4 {
+		rarity = 4
+	}
+	if expReward <= 0 {
+		// 按稀有度默认经验
+		expMap := map[int]int{0: 10, 1: 25, 2: 50, 3: 100, 4: 200}
+		expReward = expMap[rarity]
+	}
+
+	// 图标处理（可选）
+	iconURL := ""
+	if file, header, err := r.FormFile("file"); err == nil {
+		defer file.Close()
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		if !achievementIconExts[ext] {
+			adminFail(w, http.StatusBadRequest, "图标仅支持 png/jpg/jpeg/gif/webp")
+			return
+		}
+		if header.Size > 5<<20 {
+			adminFail(w, http.StatusBadRequest, "图标超出 5MB 上限")
+			return
+		}
+		dir := filepath.Join(s.cfg.WebDir, "static", "upload", "achievements")
+		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+			adminFail(w, http.StatusInternalServerError, "目录创建失败")
+			return
+		}
+		fname := fmt.Sprintf("ach%d_%d%s", g.ID, time.Now().UnixNano(), ext)
+		dst, err := os.Create(filepath.Join(dir, fname))
+		if err != nil {
+			adminFail(w, http.StatusInternalServerError, "文件写入失败")
+			return
+		}
+		defer dst.Close()
+		if _, err := io.Copy(dst, file); err != nil {
+			os.Remove(filepath.Join(dir, fname))
+			adminFail(w, http.StatusInternalServerError, "文件写入失败")
+			return
+		}
+		iconURL = "/static/upload/achievements/" + fname
+	}
+
+	// 创建或更新
+	if achID > 0 {
+		var ach model.GameAchievement
+		if err := store.DB.Where("id = ? AND game_id = ?", achID, g.ID).First(&ach).Error; err != nil {
+			adminFail(w, http.StatusNotFound, "成就不存在")
+			return
+		}
+		upd := map[string]interface{}{
+			"code": code, "name": name, "desc": desc,
+			"rarity": int8(rarity), "exp_reward": expReward,
+		}
+		if iconURL != "" {
+			upd["icon"] = iconURL
+		}
+		if err := store.DB.Model(&ach).Updates(upd).Error; err != nil {
+			adminFail(w, http.StatusInternalServerError, "保存失败")
+			return
+		}
+		ach.Icon = iconURL
+		if iconURL == "" {
+			// 读取当前 icon 返回
+			store.DB.Where("id = ?", achID).First(&ach)
+		}
+		adminJSON(w, map[string]interface{}{"achievement": ach})
+		return
+	}
+
+	// 新建：同游戏内 code 唯一
+	var dup model.GameAchievement
+	if err := store.DB.Where("game_id = ? AND code = ?", g.ID, code).First(&dup).Error; err == nil {
+		adminFail(w, http.StatusBadRequest, "该游戏下 code 已存在")
+		return
+	}
+	ach := model.GameAchievement{
+		GameID: g.ID, Code: code, Name: name, Desc: desc,
+		Rarity: int8(rarity), ExpReward: expReward, Icon: iconURL,
+	}
+	if err := store.DB.Create(&ach).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "创建失败")
+		return
+	}
+	adminJSON(w, map[string]interface{}{"achievement": ach})
+}
+
+// handleMerchantAchievementsGet GET /api/merchant/games/{id}/achievements
+// 返回商户某游戏的全部成就定义（用于管理列表）
+func (s *Server) handleMerchantAchievementsGet(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	me := merchantUserFromCtx(r)
+	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	g, ok := merchantOwnGame(me, id)
+	if !ok {
+		adminFail(w, http.StatusNotFound, "游戏不存在")
+		return
+	}
+	var list []model.GameAchievement
+	store.DB.Where("game_id = ?", g.ID).Order("id ASC").Find(&list)
+	adminJSON(w, map[string]interface{}{"list": list})
+}

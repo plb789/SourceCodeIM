@@ -63,6 +63,12 @@ func InitGame(cfg *config.Config) {
 	if migrateFailed {
 		return
 	}
+	// 成就上报签名模式启动日志（方案 §14.9：防开关误配导致线上上报全拒，运维可直接核对生效模式）
+	if cfg.Game.AchievementSignRequired {
+		logger.Info("成就上报签名模式：强制（achievement_sign_required=true，无会话密钥的上报一律拒绝）")
+	} else {
+		logger.Info("成就上报签名模式：降级（achievement_sign_required=false，无会话密钥的上报放行，登录 token+在库+防重放+限流兜底）")
+	}
 	// 商店布局配置单行表种子（幂等：已存在则跳过；缺省全默认=Steam 布局+全区块开+无置顶）
 	var cnt int64
 	store.DB.Model(&model.GameConfig{}).Count(&cnt)
@@ -506,10 +512,11 @@ var (
 
 const gamePlayingTTL = 180 * time.Second // 心跳周期 60s，超 3 个周期未续期即判定为残留
 
-// gamePresenceStart 记入/续期"正在玩"（同账号同游戏重复上报幂等，仅刷新心跳时刻）
-func gamePresenceStart(username string, gid uint) {
+// gamePresenceStart 记入/续期"正在玩"（同账号同游戏重复上报幂等，仅刷新心跳时刻）。
+// 返回 true = 新会话（此前无在玩标记：真实启动而非心跳续期），调用方据此累加 play_count
+func gamePresenceStart(username string, gid uint) bool {
 	if username == "" || gid == 0 {
-		return
+		return false
 	}
 	gamePlayMu.Lock()
 	set := gamePlaying[username]
@@ -517,8 +524,10 @@ func gamePresenceStart(username string, gid uint) {
 		set = map[uint]time.Time{}
 		gamePlaying[username] = set
 	}
+	_, existed := set[gid]
 	set[gid] = time.Now()
 	gamePlayMu.Unlock()
+	return !existed
 }
 
 // gamePresenceEnd 摘除单款游戏的"正在玩"（同账号多款并行时仅移除本款；集合空即删账号键）
@@ -628,6 +637,43 @@ func RegisterGameRoutes(s *Server) {
 	// 服务号功能（微信同款公众号）：API 公共网关 + 商户后台扩展路由
 	registerOfficialAPIRoutes(s)
 	registerOfficialMerchantRoutes(s)
+	// 阶段二百九十五：Steam 同款个人资料 HTTP API（profile.go 归口）
+	// 所有 handler 内部已通过 gameAuthToken() 校验登录态，不再套 guardGame
+	// （guardGame 强制 tokenUser==queryUsername，但留言/删评是"操作别人资料"场景，不适用此约束）
+	http.HandleFunc("GET /api/profile", s.HandleProfileGet)
+	http.HandleFunc("POST /api/game/achievement/unlock", s.HandleGameAchievementUnlock)
+	// P1-b 轻量独立接口（文档 §5.1 声明，让前端按需 fetch）
+	http.HandleFunc("GET /api/profile/stats", s.HandleProfileStatsGet)
+	http.HandleFunc("GET /api/profile/badges", s.HandleProfileBadgesGet)
+	// 阶段二百九十五 P1.5：成就查看页
+	http.HandleFunc("GET /api/profile/achievements", s.HandleProfileAchievementsGet)
+	// P2：用户评测列表（资料页展示柜）
+	http.HandleFunc("GET /api/profile/reviews", s.HandleProfileReviewsGet)
+	// 阶段二百九十五 P1：展示柜 + 留言板 + 隐私 + 资料更新 + 好友列表
+	http.HandleFunc("GET /api/profile/showcase", s.HandleProfileShowcaseGet)
+	http.HandleFunc("PUT /api/profile/showcase", s.HandleProfileShowcasePut)
+	http.HandleFunc("GET /api/profile/comments", s.HandleProfileCommentsGet)
+	http.HandleFunc("POST /api/profile/comments", s.HandleProfileCommentsPost)
+	http.HandleFunc("DELETE /api/profile/comments/{id}", s.HandleProfileCommentDelete)
+	http.HandleFunc("PUT /api/profile/privacy", s.HandleProfilePrivacyPut)
+	http.HandleFunc("PUT /api/profile/basic", s.HandleProfileBasicPut)
+	http.HandleFunc("GET /api/profile/friends", s.HandleProfileFriendsGet)
+	// P2.3：截图/艺术作品上传与列表
+	http.HandleFunc("POST /api/profile/screenshot", s.HandleProfileScreenshotUpload)
+	http.HandleFunc("GET /api/profile/screenshots", s.HandleProfileScreenshotsGet)
+	// P2-a：截图/艺术作品点赞 toggle（文档 §4.1，被点赞作者获得 +2 exp）
+	http.HandleFunc("POST /api/profile/screenshot/like", s.HandleProfileScreenshotLike)
+	// 增强：背景横幅上传 + 经验值日志
+	http.HandleFunc("POST /api/profile/background", s.HandleProfileBgUpload)
+	http.HandleFunc("DELETE /api/profile/background", s.HandleProfileBgDelete)
+	http.HandleFunc("GET /api/profile/exp-log", s.HandleProfileExpLogGet)
+	// P3：卡片合成徽章 + 积分商店（card.go 归口）
+	http.HandleFunc("GET /api/cards", s.HandleCardsGet)
+	http.HandleFunc("POST /api/card/draw", s.HandleCardDraw)
+	http.HandleFunc("GET /api/profile/cards", s.HandleProfileCardsGet)
+	http.HandleFunc("GET /api/badge/templates", s.HandleBadgeTemplatesGet)
+	http.HandleFunc("POST /api/badge/craft", s.HandleBadgeCraft)
+	http.HandleFunc("POST /api/points/shop/buy", s.HandlePointsShopBuy)
 	// 端口透传·网关写库内部接口（网关专用 HMAC 鉴权，与用户端/管理端隔离；见 gatewaydbwrite.go）
 	http.HandleFunc("GET /internal/gateway/dbwrite", s.handleInternalGatewayDbwrite)
 	http.HandleFunc("POST /internal/gateway/dbwrite/ack", s.handleInternalGatewayDbwriteAck)
@@ -777,7 +823,13 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	// token 门控（guardDrive 敏感字段同款语义）：detail 为公开浏览面，启动密码仅对 token 校验通过的
 	// 本人请求下发——防冒名 username 拉取他人游戏启动密码（网关写库游戏可凭密码登录他人游戏账号）
 	if tu, ok := gameAuthToken(r); ok && tu == username {
-		item["launch_password"] = gameLaunchPassword(s.gameLaunchSecretOf(&g), username, g.ID)
+		sec := s.gameLaunchSecretOf(&g)
+		item["launch_password"] = gameLaunchPassword(sec, username, g.ID)
+		// 成就会话签名密钥（方案 §14.2）：随 launch_password 同步下发本人（24h TTL 存 Redis，
+		// 存在即复用不轮换）；launch_secret 本体永不下发，客户端用它签成就上报
+		if k := achSessionSignKeyIssue(username, g.ID, sec); k != "" {
+			item["session_sign_key"] = k
+		}
 	}
 	// 游戏公告（库内游戏页"动态"区左栏公告卡；管理端发布，倒序；images 解析为数组下发）
 	var notices []model.GameNotice
@@ -844,6 +896,8 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 	if gw := s.gameGatewayResp(username); gw != nil {
 		gwResp = gw
 	}
+	// 成就会话签名密钥整库批量预取（一次 MGET 覆盖，防逐游戏 N 次 Redis 往返；缺失项循环内补签）
+	achKeys := achSessionKeysMGet(username, ids)
 	for _, l := range libs {
 		g, ok := gameByID[l.GameID]
 		if !ok {
@@ -853,6 +907,10 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 		if fs, ok := playOf[l.GameID]; ok {
 			gm["friends_playing"] = fs
 		}
+		// 启动参数 {1} 专属密码（按当前账号+本游戏专属密钥派生；真实登录密码不下发）
+		// + 成就会话签名密钥（方案 §14.2，24h TTL 存 Redis，存在即复用不轮换，客户端记入
+		// 内存用于本会话成就上报签名）
+		sec := s.gameLaunchSecretOf(&g)
 		list = append(list, map[string]interface{}{
 			"lib": map[string]interface{}{
 				"game_id": l.GameID,
@@ -863,11 +921,17 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 				"install_path":      l.InstallPath,
 				"play_seconds":      l.PlaySeconds,
 				"last_play_at":      l.LastPlayAt.Format("2006-01-02 15:04"),
-				// 启动参数 {1} 专属密码（按当前账号+本游戏专属密钥派生；真实登录密码不下发）
-				"launch_password": gameLaunchPassword(s.gameLaunchSecretOf(&g), username, l.GameID),
+				"launch_password":   gameLaunchPassword(sec, username, l.GameID),
 			},
 			"game": gm,
 		})
+		k := achKeys[l.GameID]
+		if k == "" {
+			k = achSessionSignKeyIssue(username, l.GameID, sec)
+		}
+		if k != "" {
+			gm["session_sign_key"] = k
+		}
 	}
 	adminJSON(w, func() map[string]interface{} {
 		out := map[string]interface{}{"list": list}
@@ -1735,15 +1799,26 @@ func (s *Server) HandleGamePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updates := map[string]interface{}{"last_play_at": store.DB.NowFunc()}
+	// 成就引擎快照（方案 §14.3）：本次上报后的累计秒数/次数（start 新会话才计次，心跳续期不计）
+	event := req.Action
+	playSecondsSnap := lib.PlaySeconds
+	playCountSnap := lib.PlayCount
+	newSession := false
 	switch req.Action {
 	case "end":
 		if req.Seconds > 0 && req.Seconds <= 86400 {
 			updates["play_seconds"] = lib.PlaySeconds + req.Seconds
+			playSecondsSnap = lib.PlaySeconds + req.Seconds
 		}
 		gamePresenceEnd(username, uint(id)) // 退出即摘除"好友正在玩"标记（读侧另按心跳新鲜度兜底）
 	case "start":
 		// 开始游玩仅刷新最近游玩时间；同时记入/续期"正在玩"presence（客户端运行期间周期心跳复用本动作）
-		gamePresenceStart(username, uint(id))
+		newSession = gamePresenceStart(username, uint(id))
+		if newSession {
+			// 新会话计数（成就引擎次数型判定数据源：first_play / play_10_times / play_30_times）
+			playCountSnap = lib.PlayCount + 1
+			updates["play_count"] = playCountSnap
+		}
 		// 端口透传·网关写库兜底补队（网关开发文档 §3.1 触发点三）：异步不阻塞心跳，
 		// 覆盖"玩家先装后登录/登录早于游戏上架"等队列缺口（内部自过滤网关规则+幂等）
 		go gwDbwriteEnqueue(username, s.cfg.Game.LaunchSecret, []uint{uint(id)})
@@ -1752,6 +1827,9 @@ func (s *Server) HandleGamePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store.DB.Model(&lib).Updates(updates)
+	// 成就自动判定（方案 §14.3 链路 A）：落库后异步执行，不阻塞上报响应；
+	// 规则比对纯内存 + 成就定义缓存，未命中规则的成就静默跳过（留给链路 B/C）
+	go s.achEngineEvaluate(username, uint(id), event, playSecondsSnap, playCountSnap)
 	adminJSON(w, map[string]interface{}{"ok": true, "play_seconds": lib.PlaySeconds})
 }
 

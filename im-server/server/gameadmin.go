@@ -441,6 +441,8 @@ func registerGameAdminRoutes(s *Server) {
 	http.HandleFunc("GET /admin/api/game/card/list", s.adminGuard(s.HandleAdminCardList))
 	http.HandleFunc("POST /admin/api/game/card/void", s.adminGuard(s.HandleAdminCardVoid))
 	http.HandleFunc("GET /admin/api/game/card/export", s.adminGuard(s.HandleAdminCardExport))
+	// 阶段二百九十五 B2：成就定义管理（gameachievement.go 归口）
+	registerAchievementAdminRoutes(s)
 }
 
 // 网关地址簿条目清洗正则（包级编译一次：name 规则 / addr host / fingerprint hex）
