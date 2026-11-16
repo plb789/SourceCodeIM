@@ -20,6 +20,23 @@ contextBridge.exposeInMainWorld('desktop', {
     onNotifyClick: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('desktop-notify-click', function () { cb(); });
     },
+    // 成就桌面卡片弹窗（游戏端成就解锁对接 §14.3.4 补充）：主窗口转发成就 payload 到
+    // 独立不夺焦通知窗（样式与页内成就 toast 同源，不复用好友消息的系统通知）
+    achNotify: function (payload) {
+        ipcRenderer.send('ach-notify:show', payload || {});
+    },
+    // 成就通知窗渲染层上行：栈非空显窗（showInactive 不夺焦，height=堆叠动态高度）/ 栈空隐藏
+    achNotifyVisible: function (on, height) {
+        ipcRenderer.send('ach-notify:visible', !!on, parseInt(height, 10) || 0);
+    },
+    // 成就卡片点击：主进程聚焦主窗口
+    achNotifyOpen: function () {
+        ipcRenderer.send('ach-notify:open');
+    },
+    // 成就通知窗渲染层下行订阅：主进程转发主窗口上报的成就 payload
+    onAchNotifyShow: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('ach-notify:show', function (e, p) { cb(p || null); });
+    },
     // 阶段三十七（第三期）：静默抓屏（无系统共享弹窗），返回 PNG dataURL（Promise）
     // 阶段一百三十九：可选参数 hideMain——截图时是否隐藏主窗口画面（QQ 同款"隐藏当前窗口"
     // 开关，undefined 时主进程走自身状态，Alt+A 全局截图同源）

@@ -985,7 +985,11 @@ func achUnlockCore(username string, gameID uint, code string) (bool, int64, int,
 - 稀有度描边颜色跟随主题色体系（与展示柜稀有度色板一致）；
 - 动画：滑入 → 停留 4s → 滑出；多条排队依次弹出；
 - 触发源（3 个，均调 achievement-toast.js 暴露的同一入口 `AchievementToast.show(payload)`）：WS 推送（链路 A）、链路 B 桥接上报回调、未来活动/运营系统；
-- **禁止系统默认弹窗；主题色必须跟随现有主题；滚动/样式沿用项目自绘组件**。
+- **禁止系统默认弹窗；主题色必须跟随现有主题；滚动/样式沿用项目自绘组件**；
+- **实施补充（2026-11-17）**：
+  - 页内 toast 动画在后台/被遮挡窗口会被 Chromium 冻结在起点（opacity 卡 0、transform 卡滑出位）——窗口无焦点时跳过滑入动画直接以可见态呈现，前台正常播放，150ms 自检兜底；
+  - **桌面卡片弹窗**（独立于好友消息的系统通知）：主窗口失焦/被遮挡/最小化时，经 `desktop.achNotify` 转发主进程，弹**独立透明不夺焦通知窗**（`web/achievement-notify.html` + `js/achievement-notify.js`，卡片经 `AchievementToast.buildCard` 构建与页内完全同源，改样式一处生效）。屏幕右下角 workArea 内缩 12px，堆叠最多 4 条动态高度、悬停暂停、点击聚焦主窗口、Win7 回退系统通知。排障截图常驻：`userData/ach-notify-debug.png`；
+  - 经验教训：通知窗"整窗不可见"曾误判透明合成失败，实为渲染层卡片漏 `appendChild` 挂载——窗口层级/位置/生命周期日志均正常时优先怀疑 DOM 挂载而非合成层。
 
 ### 14.4 链路 B：PC 客户端桥接 SDK（P1）
 

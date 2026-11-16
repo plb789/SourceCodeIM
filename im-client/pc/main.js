@@ -969,6 +969,144 @@ ipcMain.on('notify', function (event, payload) {
     showNotification(String((payload && payload.title) || '即时通'), String((payload && payload.body) || ''), (payload && payload.avatar) || '');
 });
 
+// ===== 成就桌面卡片弹窗（游戏端成就解锁对接 §14.3.4 补充）=====
+// 独立不夺焦通知窗（Overlay 通知窗 game-overlay.js 同范式）：透明窗体即通知区域，屏幕右下角
+// workArea 内缩 12px，栈空隐藏/非空 showInactive 显示；卡片视觉与页内成就 toast 完全同源
+// （渲染层经 AchievementToast.buildCard 构建，改样式只改组件一处），透明底上卡片自带圆角阴影
+// 悬浮呈现（无"卡片套卡片"感）。
+// 与好友消息的系统通知（上方 'notify' 通道）互不复用：成就卡片要还原页内样式，系统通知做不到。
+// 排障备忘：透明窗"整窗不可见"曾误判为透明合成失败，实为渲染层卡片漏挂载 DOM（appendChild
+// 缺失，2026-11-17 实测修复后透明窗正常）；Win7 不启用（老系统兼容口径）→ 渲染层回退系统通知。
+const ACH_NOTIFY_WIN7 = /^6\.1\./.test(os.release());
+var achNotifyWin = null;        // 成就通知窗（懒创建，常驻隐藏；栈空即隐藏不挡桌面）
+var achNotifyReady = false;     // 通知页监听器就绪（did-finish-load + 500ms）
+var achNotifyBuf = [];          // 冷启动缓存：页面加载期间到达的成就 payload（首启高发窗口）
+var achNotifyFlushTimer = null;
+function ensureAchNotifyWindow() {
+    if (achNotifyWin && !achNotifyWin.isDestroyed()) return achNotifyWin;
+    if (ACH_NOTIFY_WIN7) return null; // Win7：透明窗禁用（渲染层回退系统通知）
+    achNotifyWin = new BrowserWindow({
+        width: 360,
+        height: 103,                 // 初始 1 张卡片高（卡片 71 + 间距 8 + 内边距 24），随堆叠数动态调整
+        show: false,
+        frame: false,
+        transparent: true,           // 透明窗体：卡片自带圆角阴影直接悬浮于桌面（无卡片套卡片感）
+        hasShadow: false,
+        backgroundColor: '#00000000',
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        focusable: false,            // 不参与焦点竞争：弹窗出现/消失不夺游戏与主窗口焦点
+        title: '成就通知',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    achNotifyWin.setAlwaysOnTop(true, 'screen-saver');
+    achNotifyWin.webContents.on('did-fail-load', function (e2, code, desc, url) {
+        mainLog('[ach-notify] 页面加载失败 code=' + code + ' desc=' + desc + ' url=' + url);
+    });
+    achNotifyWin.loadURL(SERVER_URL + 'achievement-notify.html?v=1');
+    achNotifyReady = false;
+    achNotifyBuf = [];
+    achNotifyWin.webContents.on('did-finish-load', function () {
+        setTimeout(function () {
+            if (achNotifyReady) return;
+            achNotifyReady = true;
+            flushAchNotifyBuf();
+        }, 500);
+    });
+    achNotifyWin.on('closed', function () { achNotifyWin = null; });
+    return achNotifyWin;
+}
+// 冷启动缓存补投（game-overlay 通知窗同款：页面监听器就绪前到达的 payload 不丢）
+function flushAchNotifyBuf() {
+    if (achNotifyBuf.length && achNotifyWin && !achNotifyWin.isDestroyed()) {
+        for (var i = 0; i < achNotifyBuf.length; i++) {
+            try { achNotifyWin.webContents.send('ach-notify:show', achNotifyBuf[i]); } catch (e) { }
+        }
+    }
+    achNotifyBuf = [];
+    if (achNotifyFlushTimer) { clearInterval(achNotifyFlushTimer); achNotifyFlushTimer = null; }
+}
+// 定位：主窗口所在显示器（多屏跟随用户当前主界面）workArea 内缩 12px，缺省主显示器。
+// height 由渲染层按堆叠卡片数上报（卡片 71 + 间距 8 + 内边距 24）
+function positionAchNotifyWindow(height) {
+    if (!achNotifyWin || achNotifyWin.isDestroyed()) return;
+    try {
+        var display = null;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            display = screen.getDisplayNearestPoint(mainWindow.getBounds().x > -2147483648
+                ? { x: mainWindow.getBounds().x + 100, y: mainWindow.getBounds().y + 100 }
+                : { x: 0, y: 0 });
+        }
+        if (!display) display = screen.getPrimaryDisplay();
+        var b = display.workArea || display.bounds; // workArea 扣除任务栏：弹窗不被任务栏遮住
+        var h = Math.max(103, Math.min(parseInt(height, 10) || 103, 348)); // 1~4 张卡片高度钳制
+        achNotifyWin.setBounds({
+            x: b.x + b.width - 360 - 12,
+            y: b.y + b.height - h - 12,
+            width: 360,
+            height: h
+        });
+        mainLog('[ach-notify] 定位 display=' + JSON.stringify(display.bounds)
+            + ' workArea=' + JSON.stringify(b)
+            + ' 窗口=' + JSON.stringify(achNotifyWin.getBounds()));
+    } catch (e) { /* 显示器热拔出等极端态：保持原位 */ }
+}
+// 主窗口上行：成就 payload（主窗口 achievement-toast.js 失焦场景转发）。
+// 安全归口（gn:signal-recv 同款）：只接受主窗口来源，防被攻陷渲染进程伪造成就弹窗
+ipcMain.on('ach-notify:show', function (event, payload) {
+    mainLog('[ach-notify] show 收到 payload=' + JSON.stringify(payload || {}).slice(0, 150)
+        + ' senderIsMain=' + (mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents)
+        + ' ready=' + achNotifyReady);
+    if (!gnFromMain(event)) { mainLog('[ach-notify] show 丢弃：sender 非主窗口'); return; }
+    var win = ensureAchNotifyWindow();
+    if (!win) { mainLog('[ach-notify] 窗口未创建（Win7 或禁用）'); return; } // Win7：渲染层已回退系统通知，此处不创建
+    if (!payload || typeof payload !== 'object') return;
+    if (!achNotifyReady) {
+        achNotifyBuf.push(payload);
+        if (achNotifyBuf.length > 20) achNotifyBuf.shift();
+        if (!achNotifyFlushTimer) achNotifyFlushTimer = setInterval(flushAchNotifyBuf, 500);
+        mainLog('[ach-notify] 页面未就绪，已入缓存 buf=' + achNotifyBuf.length);
+        return;
+    }
+    positionAchNotifyWindow();
+    try { win.webContents.send('ach-notify:show', payload); mainLog('[ach-notify] payload 已投递通知窗'); } catch (e) { mainLog('[ach-notify] 投递异常: ' + e.message); }
+});
+// 渲染层上行：栈非空 → showInactive 显窗（不夺焦点，动态高度随堆叠数）；栈空 → 隐藏。
+// 显窗后对通知窗截屏存档 userData/ach-notify-debug.png（排障证据：内容是否实际渲染）
+ipcMain.on('ach-notify:visible', function (event, on, height) {
+    mainLog('[ach-notify] visible=' + !!on + ' height=' + (parseInt(height, 10) || 0));
+    if (!achNotifyWin || achNotifyWin.isDestroyed()) { mainLog('[ach-notify] visible 丢弃：窗口不存在'); return; }
+    try {
+        if (on) {
+            positionAchNotifyWindow(height);
+            achNotifyWin.showInactive();
+            achNotifyWin.webContents.capturePage().then(function (img) {
+                try {
+                    var p = path.join(app.getPath('userData'), 'ach-notify-debug.png');
+                    fs.writeFileSync(p, img.toPNG());
+                    mainLog('[ach-notify] 内容截图已存 ' + p);
+                } catch (e2) { mainLog('[ach-notify] 截图写盘失败: ' + e2.message); }
+            }).catch(function (e2) { mainLog('[ach-notify] 截图失败: ' + e2.message); });
+        } else achNotifyWin.hide();
+    } catch (e) { mainLog('[ach-notify] visible 异常: ' + e.message); }
+});
+// 成就卡片点击：聚焦主窗口（用户查看成就/资料入口）。sender 校验：仅成就通知窗自身
+ipcMain.on('ach-notify:open', function (event) {
+    if (!achNotifyWin || achNotifyWin.isDestroyed() || event.sender !== achNotifyWin.webContents) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+    }
+});
+
 // 阶段七十七：渲染层主题切换时同步原生窗口按钮（titleBarOverlay）配色，浅色/深色跟随主题；
 // 非 Windows 平台无 overlay 支持时 setTitleBarOverlay 会抛错，静默失败即可（按钮本就不存在）
 ipcMain.handle('titlebar:overlay', function (event, colors) {

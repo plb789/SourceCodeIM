@@ -43,15 +43,26 @@
         // 桌面系统通知（好友新消息同款，Electron Notification 弹屏幕右下角/进通知中心）：
         // 仅主窗口触发（有 WS + 有 desktop 桥），且本窗口未持有焦点（被其他窗口/游戏遮挡、
         // 最小化、失焦）时才发——用户正看着本窗口时页内 toast 已足够，避免双重打扰；
-        // 游戏中心窗经中继弹页内 toast，系统通知由主窗口归口单发
-        if (window.IMSocket && window.desktop && typeof window.desktop.notify === 'function'
-            && !document.hasFocus()) {
-            var icon = /^(https?:|data:)/i.test(p.icon || '') ? p.icon
-                : (p.icon ? location.origin + (p.icon.charAt(0) === '/' ? '' : '/') + p.icon : '');
-            var title = p.name || t('成就解锁');
-            var body = (p.desc ? p.desc + '　' : '') + '+' + (parseInt(p.exp_reward, 10) || 0) + ' EXP'
-                + (p.level_up ? '　' + t('升级') + ' Lv ' + (p.new_level || '') : '');
-            try { window.desktop.notify(title, body, icon); } catch (eNf) { /* 通知失败不影响页内 toast */ }
+        // 游戏中心窗经中继弹页内 toast，系统通知由主窗口归口单发。
+        // 独立成就卡片弹窗优先（desktop.achNotify → 主进程不夺焦通知窗，样式与页内 toast 同源）；
+        // 旧主进程无该 API 时回退系统通知（desktop.notify）
+        if (window.IMSocket && window.desktop && !document.hasFocus()) {
+            var payloadOut = {
+                name: p.name || '', desc: p.desc || '', icon: p.icon || '', rarity: p.rarity || 0,
+                exp_reward: parseInt(p.exp_reward, 10) || 0,
+                level_up: !!p.level_up, new_level: p.new_level || 0
+            };
+            if (typeof window.desktop.achNotify === 'function') {
+                console.debug('[ach-toast] 桌面卡片通知已转发主进程');
+                try { window.desktop.achNotify(payloadOut); } catch (eAn) { /* 弹窗失败不影响页内 toast */ }
+            } else if (typeof window.desktop.notify === 'function') {
+                var icon = /^(https?:|data:)/i.test(p.icon || '') ? p.icon
+                    : (p.icon ? location.origin + (p.icon.charAt(0) === '/' ? '' : '/') + p.icon : '');
+                var title = p.name || t('成就解锁');
+                var body = (p.desc ? p.desc + '　' : '') + '+' + payloadOut.exp_reward + ' EXP'
+                    + (p.level_up ? '　' + t('升级') + ' Lv ' + (p.new_level || '') : '');
+                try { window.desktop.notify(title, body, icon); } catch (eNf) { /* 通知失败不影响页内 toast */ }
+            }
         }
     }
 
@@ -211,6 +222,12 @@
             queue.push(payload);
             if (queue.length > 10) queue = queue.slice(-10); // 队列上限保护
             playNext();
+        },
+        // 卡片构建器（桌面成就通知窗 achievement-notify.html 复用，与页内 toast 视觉完全同源：
+        // 同一 CSS 注入 + 同一 DOM 结构，改样式只改此处一处）
+        buildCard: function (payload) {
+            injectStyle();
+            return buildNode(payload);
         }
     };
 
