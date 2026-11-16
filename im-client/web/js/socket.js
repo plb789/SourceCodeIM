@@ -875,7 +875,7 @@
         // 9（通用错误帧）一并中继：游戏建房/加入/匹配的服务端拒绝一律以 9 回包（109 层无成功回执），
         // 不中继则游戏中心窗完全静默（实测"你已加入的房间过多"等拒绝无任何提示）；
         // 游戏中心窗仅在本端请求在途（busy.create/busy.join）时呈现，不与其他模块错误混淆。
-        if (msg.msg_type === 9 || msg.msg_type === 109 || msg.msg_type === 110 || msg.msg_type === 112) {
+        if (msg.msg_type === 9 || msg.msg_type === 109 || msg.msg_type === 110 || msg.msg_type === 112 || msg.msg_type === 122) {
             if (window.desktop && typeof window.desktop.gnSignalForward === 'function') {
                 window.desktop.gnSignalForward({ msg_type: msg.msg_type, from_user: msg.from_user || '', content: msg.content || '' });
             }

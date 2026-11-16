@@ -33,6 +33,28 @@
     var showing = false;
     var recent = {}; // code → ts（去重窗口）
 
+    // 122 帧统一处理（主窗 WS 直收 / 游戏中心窗 GNSignal 中继共用）
+    function achFrameHandler(msg) {
+        var p = null;
+        try { p = JSON.parse(msg.content); } catch (e) { return; }
+        console.debug('[ach-toast] 收到成就推送帧', msg.msg_type, msg.content);
+        if (!p) return;
+        window.AchievementToast.show(p);
+        // 桌面系统通知（好友新消息同款，Electron Notification 弹屏幕右下角/进通知中心）：
+        // 仅主窗口触发（有 WS + 有 desktop 桥），且本窗口未持有焦点（被其他窗口/游戏遮挡、
+        // 最小化、失焦）时才发——用户正看着本窗口时页内 toast 已足够，避免双重打扰；
+        // 游戏中心窗经中继弹页内 toast，系统通知由主窗口归口单发
+        if (window.IMSocket && window.desktop && typeof window.desktop.notify === 'function'
+            && !document.hasFocus()) {
+            var icon = /^(https?:|data:)/i.test(p.icon || '') ? p.icon
+                : (p.icon ? location.origin + (p.icon.charAt(0) === '/' ? '' : '/') + p.icon : '');
+            var title = p.name || t('成就解锁');
+            var body = (p.desc ? p.desc + '　' : '') + '+' + (parseInt(p.exp_reward, 10) || 0) + ' EXP'
+                + (p.level_up ? '　' + t('升级') + ' Lv ' + (p.new_level || '') : '');
+            try { window.desktop.notify(title, body, icon); } catch (eNf) { /* 通知失败不影响页内 toast */ }
+        }
+    }
+
     function t(s) {
         try { if (window.I18N && I18N.t) return I18N.t(s); } catch (e) { /* 无 I18N 环境兜底原文 */ }
         return s;
@@ -133,10 +155,37 @@
         var wrap = ensureContainer();
         var node = buildNode(p);
         wrap.appendChild(node);
-        // 强制回流后滑入
-        void node.offsetWidth;
-        node.classList.add('ach-in');
+        // 滑入动画仅在窗口持焦点时播放；后台/被遮挡/失焦窗口下 CSS transition 会被冻结在起点
+        // （实测 opacity 卡 0、transform 卡滑出位，且自愈定时器本身也被节流拖慢）——直接内联
+        // 置为可见态，保证任何窗口状态创建即见
+        if (document.hasFocus() && document.visibilityState === 'visible') {
+            void node.offsetWidth;
+            node.classList.add('ach-in');
+            // 150ms 自检兜底：动画中途窗口失焦/被遮挡导致过渡冻结 → 内联直置可见
+            setTimeout(function () {
+                var cs = getComputedStyle(node);
+                var tx = 0;
+                var m = cs.transform.match(/matrix\(([^)]+)\)/);
+                if (m) {
+                    var parts = m[1].split(',');
+                    if (parts.length >= 6) tx = parseFloat(parts[4]) || 0;
+                }
+                if (parseFloat(cs.opacity) < 0.5 || tx > 50) {
+                    node.style.transition = 'none';
+                    node.style.opacity = '1';
+                    node.style.transform = 'none';
+                }
+            }, 150);
+        } else {
+            node.style.transition = 'none';
+            node.style.opacity = '1';
+            node.style.transform = 'none';
+        }
         setTimeout(function () {
+            // 清除内联样式恢复 class 过渡（正常窗口滑出生效；冻结窗口 opacity 即时归零不可见）
+            node.style.transition = '';
+            node.style.opacity = '';
+            node.style.transform = '';
             node.classList.remove('ach-in');
             node.classList.add('ach-out');
             setTimeout(function () {
@@ -150,6 +199,7 @@
     // 对外统一入口（方案 §14.3.4 触发源三处共用）：WS 推送 / 链路 B 桥接回调 / 未来运营活动
     window.AchievementToast = {
         show: function (payload) {
+            console.debug('[ach-toast] show:', payload && payload.code, 'queue=', queue.length);
             if (!payload || !payload.code) return;
             var now = Date.now();
             if (recent[payload.code] && now - recent[payload.code] < DEDUP_MS) return; // 竞态去重
@@ -165,23 +215,41 @@
     };
 
     // WS 推送自动接入（链路 A）：主窗口（index.html）持有 WS，socket.js 在本文件之前加载；
-    // 游戏中心窗无 WS，注册为空操作（该窗经 show() 直接触发）
+    // 游戏中心窗无 WS：socket.js 将 122 帧经主进程中继（desktop.onGnSignalIn → GNSignal），
+    // gn-signal.js 在本文件之后加载，故 GNSignal 绑定走就绪重试
+    var socketBound = false;
+    var gnBound = false;
+
     function bindSocket() {
+        if (socketBound) return true;
         if (!window.IMSocket || !IMSocket.on || !IMSocket.MSG) return false;
-        IMSocket.on(IMSocket.MSG.ACHIEVEMENT_UNLOCK, function (msg) {
-            var p = null;
-            try { p = JSON.parse(msg.content); } catch (e) { return; }
-            if (p) window.AchievementToast.show(p);
-        });
+        IMSocket.on(IMSocket.MSG.ACHIEVEMENT_UNLOCK, achFrameHandler);
+        console.debug('[ach-toast] WS 122 处理器已注册');
+        socketBound = true;
         return true;
     }
 
-    if (!bindSocket()) {
-        // socket.js 尚未加载完（脚本顺序兜底）：等待就绪后注册
+    function bindGnSignal() {
+        if (gnBound) return true;
+        if (!window.GNSignal || typeof GNSignal.on !== 'function') return false;
+        GNSignal.on(122, achFrameHandler); // 与 socket.js MSG.ACHIEVEMENT_UNLOCK 同帧号（中继保真）
+        console.debug('[ach-toast] GNSignal 122 处理器已注册（游戏中心窗中继）');
+        gnBound = true;
+        return true;
+    }
+
+    function bindAll() {
+        var a = bindSocket();
+        var b = bindGnSignal();
+        return a && b; // 两端各自只需其一成功（主窗=IMSocket，游戏中心窗=GNSignal）
+    }
+
+    if (!bindAll()) {
+        // 脚本顺序兜底（socket.js / gn-signal.js 尚未就绪）：等待就绪后注册
         var waited = 0;
         var timer = setInterval(function () {
             waited += 200;
-            if (bindSocket() || waited >= 15000) clearInterval(timer);
+            if (bindAll() || waited >= 15000) clearInterval(timer);
         }, 200);
     }
 })();
