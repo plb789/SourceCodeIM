@@ -3589,6 +3589,7 @@
                     v.autoplay = true;
                     v.playsInline = true;
                     v.setAttribute('playsinline', '');
+                    v.preload = 'metadata'; // 只下元数据，play() 时才拉完整视频
                     v.src = assetUrl(vids[0]);
                     v.addEventListener('error', function () { if (chprev.el === v) stopCarPreview(); }); // 源失效回退封面
                     // 起播淡入：首帧渲染前保持透明露出封面，防加载期黑块闪现
@@ -3871,6 +3872,7 @@
             v.muted = true;
             v.loop = true;
             v.autoplay = true;
+            v.preload = 'metadata'; // 只下元数据（几 KB）+ 浏览器自动渲染首帧，play() 时才下完整视频
             v.setAttribute('playsinline', '');
             v.onerror = function () { vt.remove(); tiles--; addImg(g.screenshots && g.screenshots[0]); };
             vt.appendChild(v);
@@ -4073,6 +4075,7 @@
                     v.autoplay = true;
                     v.playsInline = true;
                     v.setAttribute('playsinline', '');
+                    v.preload = 'metadata'; // 只下元数据，play() 时才拉完整视频
                     v.src = assetUrl(vids[0]);
                     v.addEventListener('error', function () { if (hprev.el === v) stopHoverPreview(); }); // 源失效回退封面
                     // 起播淡入：首帧渲染前保持透明露出封面，防加载期黑块闪现
