@@ -786,6 +786,8 @@
 
     // ---------- P1.5 成就辅助 ----------
     var ACH_RARITY_LABEL = [T('常见'), T('罕见'), T('稀有'), T('史诗'), T('传说')];
+    var ACH_UNLOCK_LABEL = [T('全部'), T('已解锁'), T('未解锁')]; // 解锁状态筛选：all/unlocked/locked
+    var achFilterState = { unlocked: 'all', rarity: 'all' }; // 成就弹窗筛选状态（模态内持久，关闭即重置）
     function makeAchievementCell(it) {
         var cell = el('div', 'gp-ach-cell' + (it.unlocked ? '' : ' locked'));
         var iconBox = el('div', 'gp-ach-icon');
@@ -866,32 +868,108 @@
     function openAchievementsModal() {
         var data = state.profile.achievements;
         if (!data || !data.groups) { toast(T('成就数据加载中…')); return; }
+        // 打开弹窗时重置所有临时状态（每次打开从零开始）
+        achFilterState = { unlocked: 'all', rarity: 'all' };
+        pendingAchOpen = null; // 清掉成就通知点击悬挂态（API 失败/用户手动打开时不应该再触发自动弹窗）
         renderAchievementsModal(data);
         showMask('gpAchMask');
+    }
+    // 成就弹窗筛选：根据 achFilterState 判断成就项是否匹配
+    function achItemMatchesFilter(it) {
+        if (achFilterState.unlocked === 'unlocked' && !it.unlocked) return false;
+        if (achFilterState.unlocked === 'locked' && it.unlocked) return false;
+        if (achFilterState.rarity !== 'all') {
+            if ((it.rarity || 0) !== achFilterState.rarity) return false;
+        }
+        return true;
     }
     function renderAchievementsModal(data) {
         var body = $('gpAchBody');
         body.innerHTML = '';
-        // 顶部统计条
+
+        // 顶部统计条（带筛选后计数）
+        // 先算筛选后的总匹配数和解锁数
+        var filterTotal = 0, filterUnlocked = 0;
+        data.groups.forEach(function (g) {
+            (g.items || []).forEach(function (it) {
+                if (achItemMatchesFilter(it)) {
+                    filterTotal++;
+                    if (it.unlocked) filterUnlocked++;
+                }
+            });
+        });
+
         var header = el('div', 'gp-ach-header');
-        header.innerHTML = '<span class="gp-ach-progress-text">' + T('总进度') + ': <b>' + data.unlocked + '</b> / ' + data.total + '</span>';
+        var headerText = '<span class="gp-ach-progress-text">' + T('总进度') + ': <b>' + filterUnlocked + '</b> / ' + filterTotal;
+        headerText += '</span>';
+        header.innerHTML = headerText;
         var progress = el('div', 'gp-ach-progress');
-        var pct = data.total > 0 ? Math.round(data.unlocked * 100 / data.total) : 0;
+        var pct = filterTotal > 0 ? Math.round(filterUnlocked * 100 / filterTotal) : 0;
         var bar = el('div', 'gp-ach-progress-bar');
         bar.style.width = pct + '%';
         progress.appendChild(bar);
         header.appendChild(progress);
         body.appendChild(header);
 
-        // 按游戏分组渲染
+        // ===== 筛选栏 =====
+        var filterBar = el('div', 'gp-ach-filter-bar');
+
+        // 解锁状态按钮组：全部 / 已解锁 / 未解锁
+        var unlockWrap = el('div', 'gp-ach-filter-group');
+        unlockWrap.appendChild(el('span', 'gp-ach-filter-label', T('解锁状态')));
+        ['all', 'unlocked', 'locked'].forEach(function (val) {
+            var btn = el('button', 'gp-ach-filter-btn' + (achFilterState.unlocked === val ? ' active' : ''), ACH_UNLOCK_LABEL[['all', 'unlocked', 'locked'].indexOf(val)]);
+            btn.setAttribute('data-filter', 'unlocked');
+            btn.setAttribute('data-val', val);
+            btn.addEventListener('click', function () {
+                achFilterState.unlocked = val;
+                renderAchievementsModal(data);
+            });
+            unlockWrap.appendChild(btn);
+        });
+        filterBar.appendChild(unlockWrap);
+
+        // 稀有度按钮组：全部 / 常见 → 传说
+        var rarityWrap = el('div', 'gp-ach-filter-group');
+        rarityWrap.appendChild(el('span', 'gp-ach-filter-label', T('稀有度')));
+        var rarityAllBtn = el('button', 'gp-ach-filter-btn' + (achFilterState.rarity === 'all' ? ' active' : ''), T('全部'));
+        rarityAllBtn.addEventListener('click', function () {
+            achFilterState.rarity = 'all';
+            renderAchievementsModal(data);
+        });
+        rarityWrap.appendChild(rarityAllBtn);
+        for (var ri = 0; ri < ACH_RARITY_LABEL.length; ri++) {
+            (function (rVal, rLabel) {
+                var rarityBtn = el('button', 'gp-ach-filter-btn gp-ach-rarity-' + rVal + (achFilterState.rarity === rVal ? ' active' : ''), rLabel);
+                rarityBtn.setAttribute('data-filter', 'rarity');
+                rarityBtn.setAttribute('data-val', rVal);
+                rarityBtn.addEventListener('click', function () {
+                    achFilterState.rarity = rVal;
+                    renderAchievementsModal(data);
+                });
+                rarityWrap.appendChild(rarityBtn);
+            })(ri, ACH_RARITY_LABEL[ri]);
+        }
+        filterBar.appendChild(rarityWrap);
+
+        body.appendChild(filterBar);
+
+        // ===== 按游戏分组渲染（筛选后 items 为空的 group 跳过）=====
+        var hasAnyGroup = false;
         data.groups.forEach(function (g) {
+            // 应用筛选
+            var filteredItems = (g.items || []).filter(achItemMatchesFilter);
+            if (!filteredItems.length) return; // 筛选后无匹配成就，跳过该游戏分组
+
+            hasAnyGroup = true;
             var gDiv = el('div', 'gp-ach-group');
             var gHead = el('div', 'gp-ach-group-head');
             gHead.appendChild(el('span', 'gp-ach-group-name', g.game_name || (T('游戏 #') + g.game_id)));
-            gHead.appendChild(el('span', 'gp-ach-group-stat', g.unlocked + ' / ' + g.total));
+            var groupUnlocked = filteredItems.filter(function (it) { return it.unlocked; }).length;
+            gHead.appendChild(el('span', 'gp-ach-group-stat', groupUnlocked + ' / ' + filteredItems.length));
             gDiv.appendChild(gHead);
             var grid = el('div', 'gp-ach-group-grid');
-            g.items.forEach(function (it) {
+            filteredItems.forEach(function (it) {
                 var cell = makeAchievementCell(it);
                 // 悬停提示完整信息
                 cell.title = it.name + '\n' + it.desc + '\n' + T('稀有度') + ': ' + (ACH_RARITY_LABEL[it.rarity] || '?') +
@@ -902,8 +980,12 @@
             body.appendChild(gDiv);
         });
 
-        if (data.groups.length === 0) {
-            body.appendChild(el('div', 'gp-empty', T('暂无成就数据')));
+        // 空态（筛选后没有任何匹配的成就）
+        if (!hasAnyGroup) {
+            var emptyTip = T('当前筛选条件下暂无成就')
+                + (achFilterState.unlocked !== 'all' || achFilterState.rarity !== 'all'
+                    ? '（' + T('点"全部"重置筛选') + '）' : '');
+            body.appendChild(el('div', 'gp-empty', emptyTip));
         }
     }
 
