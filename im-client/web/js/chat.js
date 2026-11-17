@@ -2975,6 +2975,10 @@
                   userAvatars[IMSocket.getUsername()] = data.avatar;
                   // 阶段三十：资料面板内大头像同步更新（面板打开时换图即时可见）
                   setProfileAvatar(data.avatar);
+                  // 跨窗口同步：通知游戏中心窗/悬浮窗（经主进程 gn:profile-updated 广播）
+                  if (window.desktop && window.desktop.profileUpdated) {
+                      window.desktop.profileUpdated({ avatar: data.avatar });
+                  }
               }
               else if (data.error) showToast(data.error);
           }).catch(function () { showToast(I18N.t('头像上传失败')); });
@@ -3066,6 +3070,15 @@
                 setNavAvatar(info.avatar);
                 setProfileAvatar(info.avatar);
                 userAvatars[info.username] = info.avatar;
+            }
+            // 跨窗口同步：PROFILE_RESP 可能来自「本端刚发 PROFILE_UPDATE 服务端回推」或「兄弟设备改资料」
+            // ——本端头像上传处已主动广播 avatar，此处又广播会造成 gameStoreWin 收到两条重复 IPC；
+            // 只有"值真的变了"才发，避免冗余广播（兄弟设备改资料 myAvatar 仍是旧值 → 照常触发）
+            if (window.desktop && window.desktop.profileUpdated) {
+                var upd = {};
+                if (info.avatar && info.avatar !== myAvatar) upd.avatar = info.avatar;
+                if (typeof info.nickname === 'string' && info.nickname !== (myProfile.nickname || '')) upd.nickname = info.nickname;
+                if (Object.keys(upd).length) window.desktop.profileUpdated(upd);
             }
         } else if (info.username === friendCardTarget) {
             fillFriendCard(info);
@@ -9015,6 +9028,24 @@
     if (window.desktop && window.desktop.onMainToast) {
         window.desktop.onMainToast(function (text) {
             showToast(text); // 主进程侧失败反馈（全局截图失败等无窗口场景）
+        });
+    }
+    // ===== 跨窗口本人资料同步（游戏中心窗改头像/昵称 → 主聊天窗口即时刷新） =====
+    // Electron 多窗口独立渲染进程，game-store.html 的头像上传/昵称修改无法直接更新本窗口 DOM
+    // 经主进程 gn:profile-updated 广播通道接收，调 setNavAvatar/syncMyDisplayName 归口更新
+    if (window.desktop && window.desktop.onProfileUpdated) {
+        window.desktop.onProfileUpdated(function (p) {
+            if (!p || !IMSocket || !IMSocket.isConnected()) return; // 未登录丢弃
+            if (p.avatar && typeof p.avatar === 'string') {
+                myAvatar = p.avatar;
+                userAvatars[IMSocket.getUsername()] = p.avatar;
+                setNavAvatar(p.avatar);
+                setProfileAvatar(p.avatar);
+            }
+            if (typeof p.nickname === 'string') {
+                myProfile.nickname = p.nickname;
+                syncMyDisplayName();
+            }
         });
     }
     // GDI 帧录制兜底：主进程 BitBlt 逐帧 JPEG → 当前裁剪矩形绘制（提权 WGC 不可用场景，见 recState 注释）

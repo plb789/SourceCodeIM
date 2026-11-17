@@ -1418,6 +1418,14 @@ contextBridge.exposeInMainWorld('desktop', {
     gnContactsReply: function (id, list, u, ma) {
         ipcRenderer.send('gn:contacts-reply', id, list || [], u || '', ma || ''); // u=本端账号（二期 M2：注入式面板回显 self 判定）；ma=自己头像 URL（M5.9：自己消息头像下发）
     },
+    // ===== 跨窗口本人资料更新（游戏中心窗改头像/昵称 → 主聊天窗口同步刷新） =====
+    profileUpdated: function (payload) {
+        ipcRenderer.send('gn:profile-updated', payload || {});
+    },
+    onProfileUpdated: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:profile-updated', function (event, p) { cb(p || {}); });
+    },
     // ===== 游戏内 Overlay 悬浮窗（docs/游戏内Overlay功能技术设计.md）=====
     // 呼出/收起请求（设置页测试按钮/托盘扩展用）；悬浮窗内 Esc/×/点遮罩走 overlayHide（收起+焦点归还游戏）
     overlayToggle: function () {

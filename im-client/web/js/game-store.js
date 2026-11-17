@@ -1467,9 +1467,14 @@
                 if (res && res.ok) {
                     toast(T('保存成功'));
                     hideMask('gpEditMask');
-                    // 刷新资料
+                    // 刷新资料 + 标题栏账号区（昵称修改后标题栏同步，头像刷新同款归口）
+                    refreshGsUserArea();
                     state.profile.username = ''; // 强制重新 load
                     openProfile(username);
+                    // 跨窗口同步：通知主聊天窗口昵称变更（头像不变，头像上传处单独触发）
+                    if (window.desktop && window.desktop.profileUpdated) {
+                        window.desktop.profileUpdated({ nickname: nick });
+                    }
                 } else {
                     toast((res && res.err) || T('保存失败'));
                 }
@@ -8439,8 +8444,10 @@
     $('gsBtnBack').addEventListener('click', closeDetail);
 
     // 标题栏账号区：拉当前用户资料（GET /api/game/me）填充头像+名称（昵称优先回退账号）；
-    // 头像加载失败回退首字母块（主题色底，CSS 归口）
-    (function () {
+    // 头像加载失败回退首字母块（主题色底，CSS 归口）。
+    // 抽成可复用函数：头像上传/昵称修改成功后即时刷新（原实现窗口打开时一次性填充，此后
+    // 永不更新——实测改头像后标题栏仍是字母占位块，2026-11-17）
+    function refreshGsUserArea() {
         var avEl = $('gsUserAv'), nameEl = $('gsUserName');
         if (!avEl || !nameEl || !username) return;
         api('GET', '/api/game/me').then(function (res) {
@@ -8448,6 +8455,7 @@
             myNickname = String(res.data.nickname || '').trim(); // SmartSteamEmu 启动 PersonaName 数据源
             nameEl.textContent = res.data.nickname || res.data.username;
             var ch = String(res.data.nickname || res.data.username || '?').charAt(0).toUpperCase();
+            avEl.innerHTML = ''; // 重填前清空（防刷新叠加旧图/旧字母块）
             if (res.data.avatar) {
                 var img = document.createElement('img');
                 img.src = assetUrl(res.data.avatar);
@@ -8456,8 +8464,36 @@
             } else {
                 avEl.appendChild(el('b', '', ch));
             }
+            // 资料面板联动：如果当前正在看自己的资料页，state.profile 也更新并重新 render
+            // （否则资料面板里的头像/昵称还是旧的，关闭重开才刷新——2026-11-17 实测）
+            var p = state.profile;
+            if (p && p.username === username && p.basic) {
+                var needRepaint = false;
+                if (res.data.avatar && p.basic.avatar !== res.data.avatar) {
+                    p.basic.avatar = res.data.avatar; needRepaint = true;
+                }
+                var newNick = String(res.data.nickname || '');
+                if (newNick !== String(p.basic.nickname || '')) {
+                    p.basic.nickname = newNick; needRepaint = true;
+                }
+                if (needRepaint) renderProfile();
+            }
         });
-    })();
+    }
+    refreshGsUserArea();
+
+    // ===== 跨窗口本人资料同步（主聊天窗口/其他端改头像/昵称 → 本窗口即时刷新） =====
+    // 本窗口修改头像/昵称已主动 profileUpdated 通知主窗口；反之主窗口/手机端改资料后
+    // 经主进程 gn:profile-updated 广播回本窗，refreshGsUserArea 重新拉 /api/game/me 归口刷新
+    var gsProfileRefreshTimer = null;
+    if (IN_ELECTRON && DESKTOP.onProfileUpdated) {
+        DESKTOP.onProfileUpdated(function (p) {
+            if (!p) return;
+            // 防抖：500ms 内多次变更合并为一次刷新（头像+昵称可能同帧到达）
+            clearTimeout(gsProfileRefreshTimer);
+            gsProfileRefreshTimer = setTimeout(function () { refreshGsUserArea(); }, 500);
+        });
+    }
 
     // 窗口控制（仅 Electron 显示）：最小化复用通用 call:minimize（sender 窗口归口）；
     // 最大化/还原切换经 game:win-toggle-maximize，图标随状态切换（推送 + invoke 返回双路同步）
@@ -8711,6 +8747,11 @@
                         hideMask('gpAvatarCropMask');
                         cropState.img = null;
                         renderProfile();
+                        refreshGsUserArea(); // 标题栏账号区头像即时刷新（原实现不刷新，见函数注释）
+                        // 跨窗口同步：通知主聊天窗口头像变更（Electron 多窗口独立渲染进程，需主进程转发）
+                        if (window.desktop && window.desktop.profileUpdated) {
+                            window.desktop.profileUpdated({ avatar: res.avatar });
+                        }
                         toast(T('头像更新成功'));
                     } else {
                         toast(T('上传失败'));

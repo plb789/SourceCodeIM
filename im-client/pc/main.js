@@ -1061,12 +1061,21 @@ function positionAchNotifyWindow(height) {
 // 主窗口上行：成就 payload（主窗口 achievement-toast.js 失焦场景转发）。
 // 安全归口（gn:signal-recv 同款）：只接受主窗口来源，防被攻陷渲染进程伪造成就弹窗
 ipcMain.on('ach-notify:show', function (event, payload) {
+    if (ACH_NOTIFY_WIN7) {
+        // Win7：透明通知窗禁用（game-overlay 同口径），渲染层感知不到主进程能力差异——
+        // 此处转系统通知兜底（好友消息同款），保证 Win7 桌面也有成就提示
+        payload = payload || {};
+        var b = (payload.desc ? payload.desc + '　' : '') + '+' + (parseInt(payload.exp_reward, 10) || 0) + ' EXP'
+            + (payload.level_up ? '　升级 Lv ' + (payload.new_level || '') : '');
+        showNotification(String(payload.name || '成就解锁'), b, payload.icon || '');
+        return;
+    }
     mainLog('[ach-notify] show 收到 payload=' + JSON.stringify(payload || {}).slice(0, 150)
         + ' senderIsMain=' + (mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents)
         + ' ready=' + achNotifyReady);
     if (!gnFromMain(event)) { mainLog('[ach-notify] show 丢弃：sender 非主窗口'); return; }
     var win = ensureAchNotifyWindow();
-    if (!win) { mainLog('[ach-notify] 窗口未创建（Win7 或禁用）'); return; } // Win7：渲染层已回退系统通知，此处不创建
+    if (!win) { mainLog('[ach-notify] 窗口未创建'); return; }
     if (!payload || typeof payload !== 'object') return;
     if (!achNotifyReady) {
         achNotifyBuf.push(payload);
@@ -2052,6 +2061,13 @@ ipcMain.on('gn:net-config', function (e, cfg) {
     gnRelayBroadcast('gn:net-config', gnNetConfigCache);
 });
 ipcMain.handle('gn:net-config-get', function () { return gnNetConfigCache; });
+// ===== 跨窗口本人资料更新广播（全窗口双向同步：主窗口↔游戏中心窗↔悬浮窗） =====
+// 不校验来源：任何窗口改的都是本人资料，全部窗口都该收到；payload={avatar, nickname}
+ipcMain.on('gn:profile-updated', function (e, payload) {
+    var data = payload || {};
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('gn:profile-updated', data);
+    gnRelayBroadcast('gn:profile-updated', data); // gameStoreWin / overlayWin 等所有订阅窗
+});
 // 好友快照：游戏中心窗「邀请好友」选人数据源（主窗口 IMContacts 归口应答，避免双源分叉）
 ipcMain.handle('gn:contacts-get', function () {
     return new Promise(function (resolve) {
