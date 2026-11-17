@@ -1,0 +1,38 @@
+User-agent: *
+Allow: /
+
+# ===== 禁止索引：后台与管理页面 =====
+Disallow: /admin.html
+Disallow: /merchant.html
+Disallow: /tray-panel.html
+
+# ===== 禁止索引：内部弹层/悬浮条/通话窗 =====
+Disallow: /bar.html
+Disallow: /rec-bar.html
+Disallow: /remote-bar.html
+Disallow: /call-ring.html
+Disallow: /call-window.html
+Disallow: /overlay.html
+Disallow: /notify.html
+Disallow: /achievement-notify.html
+
+# ===== 禁止索引：更新与技术页面 =====
+Disallow: /update.html
+Disallow: /code-update.html
+
+# ===== 禁止索引：内部资源目录 =====
+Disallow: /js/
+Disallow: /css/
+Disallow: /lib/
+Disallow: /fonts/
+Disallow: /static/
+
+# ===== 禁止索引：开发者工具页 =====
+Disallow: /editor.html
+Disallow: /doc-preview.html
+Disallow: /doc-viewer.html
+Disallow: /file-viewer.html
+Disallow: /image-viewer.html
+Disallow: /pptx-preview.html
+
+Sitemap: https://im.sxgyxny.com/sitemap.xml
