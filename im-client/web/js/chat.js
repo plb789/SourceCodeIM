@@ -31458,8 +31458,10 @@
                     else el._osbTicking = false;
                 })();
             }
-            // 滚动同步：scroll 事件里只排 rAF，回调在"本轮渲染、绘制前"执行，与合成器滚动同帧，无滞后重影
+            // 滚动同步：scroll 事件立即刷新滑块位置，同时排 rAF 兜底（合成器线程滚动时主线程 scrollTop 更新可能有微延迟）
+            // 之前只用 rAF 节流导致滚轮滚动时滑块不跟随（osbUpdate 执行时机滞后于实际滚动）
             el.addEventListener('scroll', function () {
+                osbUpdate();
                 if (!el._osbRaf) {
                     el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; osbUpdate(); });
                 }
@@ -31542,6 +31544,7 @@
                 })();
             }
             el.addEventListener('scroll', function () {
+                osbUpdate();
                 if (!el._osbRaf) {
                     el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; osbUpdate(); });
                 }
@@ -31620,6 +31623,18 @@
         document.addEventListener('transitionstart', osbOnTransition, true);
         document.addEventListener('transitionend', osbOnTransition, true);
         document.addEventListener('transitioncancel', osbOnTransition, true);
+        // ===== 祖先滚动同步：fixed 滑块位置依赖宿主 getBoundingClientRect，外层容器滚动时 rect 变化但宿主自身 scroll 不触发，
+        // 导致横向/嵌套纵向滑块位置漂移（游戏详情缩略图横条、多滚动层嵌套）。捕获阶段监听任何层级的 scroll，
+        // 遍历全部宿主刷新一次 osbUpdate（只读布局缓存 + style 设置，成本可忽略）=====
+        document.addEventListener('scroll', function () {
+            var hosts = window._osbHosts;
+            if (!hosts) return;
+            for (var i = 0; i < hosts.length; i++) {
+                var h = hosts[i];
+                if (h._osbUpdate) h._osbUpdate();
+                if (h._osbUpdateH) h._osbUpdateH();
+            }
+        }, true);
     })();
 
     // 联系人数据源只读暴露（网盘分享弹窗选人归口消费：好友列表/群列表/展示名解析，

@@ -117,12 +117,15 @@ func InitMySQL(cfg *config.Config) error {
 	// 存量数据修复（幂等，每次启动都会跑但只有旧格式数据时才更新）
 	// 把 ProfileExpLog.reason='daily_achievement' 的技术化 detail（"每日成就: game#X code=Y date=Z"）
 	// 自动更新为友好中文（"完成每日任务「<成就名>」"），跨版本部署时历史数据也能自动修正
-	db.Exec(`UPDATE im_profile_exp_log l
+	// 注意：db.Exec 的错误绝对不能 return——迁移失败不影响主流程，服务必须能正常启动
+	if r := db.Exec(`UPDATE im_profile_exp_log l
 		INNER JOIN im_game_daily_achievement d
 		ON d.game_id = CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(l.detail, '#', -1), ' ', 1) AS UNSIGNED)
 		AND d.code   = SUBSTRING_INDEX(SUBSTRING_INDEX(l.detail, 'code=', -1), ' ', 1)
 		SET l.detail = CONCAT('完成每日任务「', d.name, '」')
-		WHERE l.reason = 'daily_achievement' AND l.detail LIKE '每日成就:%'`)
+		WHERE l.reason = 'daily_achievement' AND l.detail LIKE '每日成就:%'`); r.Error != nil {
+		fmt.Printf("[store] WARN 存量 exp_log detail 迁移失败（不影响主流程）: %v\n", r.Error)
+	}
 
 	// A1 seed：等级配置表首次建表后自动 INSERT/UPDATE 文档附录 A 预设数据
 	// 必须用 Save 或 OnConflict UPDATE（不是 DoNothing）—— 保证 ShowcaseSlots/Title 等字段是最新值

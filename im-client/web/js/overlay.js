@@ -136,6 +136,7 @@
         }
         el._osbUpdate = update;
         el.addEventListener('scroll', function () {
+            update();
             if (!el._osbRaf) el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; update(); });
         }, { passive: true });
         if (window.ResizeObserver) new ResizeObserver(function () { update(); }).observe(el);

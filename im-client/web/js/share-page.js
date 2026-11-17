@@ -200,7 +200,7 @@
                     thumb.style.left = Math.round(rect.right - 8) + 'px'; // 右侧 2px 边距（宽 6px）
                 }
             }
-            el.addEventListener('scroll', function () { requestAnimationFrame(update); }, { passive: true });
+            el.addEventListener('scroll', function () { update(); requestAnimationFrame(update); }, { passive: true });
             if (window.ResizeObserver) new ResizeObserver(update).observe(el); // 尺寸变化同步（窗口缩放等）
             if (window.MutationObserver) new MutationObserver(update).observe(el, { childList: true, subtree: true });
             el.addEventListener('click', update, true); // 折叠/切换类点击后布局收敛复查

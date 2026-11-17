@@ -303,7 +303,9 @@
     // 滑块挂 body 上（position:fixed 浮层），悬停宿主容器浮现、可拖拽；原生滚动条已被 style.css 全局归零
     function bindOsbCommon(el, thumb, update, startDrag) {
         el._osbUpdate = update; // 供浮现/渲染后强制重定位
+        (window._osbHosts = window._osbHosts || []).push(el); // 宿主登记：祖先滚动/ResizeObserver 刷新用
         el.addEventListener('scroll', function () {
+            update();
             if (!el._osbRaf) {
                 el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; update(); });
             }
@@ -9126,6 +9128,17 @@
     // 自绘悬浮滚动条 / Toast 归口：主窗口由 chat.js 暴露同名全局，游戏中心窗本页暴露，口径一致
     window._osbInit = osbInit;
     window._osbTick = osbTick;
+    // ===== 祖先滚动同步（与 chat.js 同口径）：外层容器滚动时 fixed 滑块宿主 rect 变化但自身 scroll 不触发，
+    // 横向缩略图滑块会飘出原位。捕获阶段监听任何层级 scroll，遍历全部宿主刷新 osbUpdate =====
+    document.addEventListener('scroll', function () {
+        var hosts = window._osbHosts;
+        if (!hosts) return;
+        for (var i = 0; i < hosts.length; i++) {
+            var h = hosts[i];
+            if (h._osbUpdate) h._osbUpdate();
+            if (h._osbUpdateH) h._osbUpdateH();
+        }
+    }, true);
     window.showToast = toast;
     // 页签切换口（gn-room.js 不直接依赖本模块内部实现，避免耦合）
     window.GSShowOnline = function () { if (state.tab !== 'online') showView('online'); };
