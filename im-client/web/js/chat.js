@@ -13446,18 +13446,9 @@
         var el = bcSymMenuEl;
         bcSymMenuEl = null;
         bcSymAnchor = null;
-        // 自绘滚动条清理：滑块浮层移出 body，宿主登记表移除本容器（菜单每次开关都是新节点，不清理会累积死引用）
+        // 自绘滚动条清理：滑块浮层移出 body，宿主登记表移除本容器，断开 observer 等
         var listEl = el.querySelector('.bc-sym-menu-list');
-        if (listEl) {
-            if (listEl._osbThumb) {
-                listEl._osbThumb.remove();
-                listEl._osbThumb = null;
-            }
-            if (window._osbHosts) {
-                var ix = window._osbHosts.indexOf(listEl);
-                if (ix >= 0) window._osbHosts.splice(ix, 1);
-            }
-        }
+        if (listEl && window._destroyOsb) window._destroyOsb(listEl);
         el.remove();
         document.removeEventListener('mousedown', bcSymMenuOutside, true);
         document.removeEventListener('keydown', bcSymMenuEsc, true);
@@ -31466,14 +31457,17 @@
                     el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; osbUpdate(); });
                 }
             }, { passive: true });
-            if (window.ResizeObserver) new ResizeObserver(function () { osbUpdate(); }).observe(el); // 容器尺寸变化同步（窗口缩放/侧栏切换）
+            if (window.ResizeObserver) { el._osbRo = new ResizeObserver(function () { osbUpdate(); }); el._osbRo.observe(el); } // 容器尺寸变化同步（窗口缩放/侧栏切换）
             // 折叠/展开类点击：click 后时长制复查（默认 600ms）。捕获阶段监听容器内一切点击，
             // 无论折叠由哪个处理器实现（class 切换/懒加载/子树重建），布局收敛后滑块必然归位
             el.addEventListener('click', function () { osbUpdate(); osbTick(); }, true);
-            if (window.MutationObserver) new MutationObserver(function () {
-                osbUpdate();
-                osbTick();
-            }).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            if (window.MutationObserver) {
+                el._osbMo = new MutationObserver(function () {
+                    osbUpdate();
+                    osbTick();
+                });
+                el._osbMo.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            }
             el._osbUpdate = osbUpdate; // 暴露给显隐联动：每次滑块浮现都强制重定位（sbMark 调用），杜绝残留旧位置
             el._osbTick = osbTick;     // 暴露给过渡钩子：布局动画进行中持续跟踪（见下方 transitionrun 监听）
             (window._osbHosts = window._osbHosts || []).push(el); // 宿主登记：过渡钩子按目标节点反查所属滚动容器
@@ -31549,12 +31543,15 @@
                     el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; osbUpdate(); });
                 }
             }, { passive: true });
-            if (window.ResizeObserver) new ResizeObserver(function () { osbUpdate(); }).observe(el);
+            if (window.ResizeObserver) { el._osbRo = new ResizeObserver(function () { osbUpdate(); }); el._osbRo.observe(el); }
             el.addEventListener('click', function () { osbUpdate(); osbTick(); }, true);
-            if (window.MutationObserver) new MutationObserver(function () {
-                osbUpdate();
-                osbTick();
-            }).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            if (window.MutationObserver) {
+                el._osbMo = new MutationObserver(function () {
+                    osbUpdate();
+                    osbTick();
+                });
+                el._osbMo.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            }
             el._osbUpdateH = osbUpdate; // 横向版重定位入口（sbMark/mousemove 双轴同步用）
             if (!el._osbUpdate) el._osbUpdate = osbUpdate; // 纯横滚容器：兼容通用入口（双轴容器保留纵向版）
             if (!el._osbTick) el._osbTick = osbTick;       // 同上：双轴容器保留纵向版 tick
@@ -31581,6 +31578,28 @@
             });
             osbUpdate();
         }
+        // ===== 自绘滚动条销毁：统一清理 observer / rAF / hideTimer / thumb DOM / 宿主注册表 =====
+        function destroyOsb(el) {
+            if (!el) return;
+            if (el._osbHideT) { clearTimeout(el._osbHideT); el._osbHideT = null; }
+            if (el._osbRo) { try { el._osbRo.disconnect(); } catch(e) {} el._osbRo = null; }
+            if (el._osbMo) { try { el._osbMo.disconnect(); } catch(e) {} el._osbMo = null; }
+            if (el._osbRaf) { cancelAnimationFrame(el._osbRaf); el._osbRaf = 0; }
+            if (el._osbTicking) { el._osbTicking = false; }
+            if (el._osbThumb) { el._osbThumb.remove(); el._osbThumb = null; }
+            if (el._osbThumbH) { el._osbThumbH.remove(); el._osbThumbH = null; }
+            if (window._osbHosts) {
+                var ix = window._osbHosts.indexOf(el);
+                if (ix >= 0) window._osbHosts.splice(ix, 1);
+            }
+            el._osb = false;
+            el._osbH = false;
+            el._osbUpdate = null;
+            el._osbUpdateH = null;
+            el._osbTick = null;
+            el.classList.remove('osb-host');
+        }
+        window._destroyOsb = destroyOsb; // 暴露给外部动态销毁场景（符号菜单等）
         // 主窗口全部纵向滚动容器（与 style.css 中 overflow-y: auto 的面板一一对应）
         // 阶段五十六：追加我的知识库弹窗库列表 .kb-list
         // 阶段五十七：追加我的智能体弹窗列表 #ua-list（该元素复用 kb-list 类，querySelector('.kb-list')
@@ -31625,12 +31644,15 @@
         document.addEventListener('transitioncancel', osbOnTransition, true);
         // ===== 祖先滚动同步：fixed 滑块位置依赖宿主 getBoundingClientRect，外层容器滚动时 rect 变化但宿主自身 scroll 不触发，
         // 导致横向/嵌套纵向滑块位置漂移（游戏详情缩略图横条、多滚动层嵌套）。捕获阶段监听任何层级的 scroll，
-        // 遍历全部宿主刷新一次 osbUpdate（只读布局缓存 + style 设置，成本可忽略）=====
+        // 仅刷新当前有可见滑块的宿主（隐藏宿主等 sbShow 浮现时 osbUpdate 自会纠正）=====
         document.addEventListener('scroll', function () {
             var hosts = window._osbHosts;
             if (!hosts) return;
             for (var i = 0; i < hosts.length; i++) {
                 var h = hosts[i];
+                // 只更新当前可见的滑块宿主——隐藏宿主无需追 rect 漂移，等 sbShow 浮现时自身会立即 osbUpdate 纠正
+                var t = h._osbThumb;
+                if (!t || !t.classList.contains('sb-show')) continue;
                 if (h._osbUpdate) h._osbUpdate();
                 if (h._osbUpdateH) h._osbUpdateH();
             }

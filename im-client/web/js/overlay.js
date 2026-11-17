@@ -135,11 +135,13 @@
             thumb.style.left = Math.round(rect.right - 8) + 'px';
         }
         el._osbUpdate = update;
+        if (!window._osbHosts) window._osbHosts = [];
+        window._osbHosts.push(el);
         el.addEventListener('scroll', function () {
             update();
             if (!el._osbRaf) el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; update(); });
         }, { passive: true });
-        if (window.ResizeObserver) new ResizeObserver(function () { update(); }).observe(el);
+        if (window.ResizeObserver) { el._osbRo = new ResizeObserver(function () { update(); }); el._osbRo.observe(el); }
         thumb.addEventListener('mousedown', function (e) {
             e.preventDefault();
             thumb.classList.add('osb-drag');
@@ -807,6 +809,17 @@
         osbInit($('ov-lobby-users'));
         osbInit($('ov-lobby-msgs'));
         osbInit($('ov-invite-list'));
+        // ===== 祖先滚动同步（与 chat.js / game-store.js / share-page.js 同口径）=====
+        document.addEventListener('scroll', function () {
+            var hosts = window._osbHosts;
+            if (!hosts) return;
+            for (var i = 0; i < hosts.length; i++) {
+                var h = hosts[i];
+                var t = h._osbThumb;
+                if (!t || !t.classList.contains('sb-show')) continue;
+                if (h._osbUpdate) h._osbUpdate();
+            }
+        }, true);
         // 数据面订阅
         if (window.GNSignal) {
             GNSignal.on(MSG_ROOM, onRoomSignal);

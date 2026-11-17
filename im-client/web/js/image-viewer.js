@@ -357,13 +357,14 @@
         }
         thumbsEl.addEventListener('scroll', osbUpdate, { passive: true });
         thumbsEl.addEventListener('load', osbUpdate, true); // 捕获阶段监听缩略图加载完成（宽度变化影响滚动范围）
-        if (window.ResizeObserver) new ResizeObserver(osbUpdate).observe(thumbsEl);
+        if (window.ResizeObserver) { thumbsEl._osbRo = new ResizeObserver(osbUpdate); thumbsEl._osbRo.observe(thumbsEl); }
         // renderThumbs 重建 innerHTML 会移除滑块节点：监听子节点变化自动补回并刷新
         if (window.MutationObserver) {
-            new MutationObserver(function () {
+            thumbsEl._osbMo = new MutationObserver(function () {
                 if (!thumbsEl.contains(thumb)) thumbsEl.appendChild(thumb);
                 osbUpdate();
-            }).observe(thumbsEl, { childList: true });
+            });
+            thumbsEl._osbMo.observe(thumbsEl, { childList: true });
         }
         // 滑块拖拽：按位移比例映射回 scrollLeft（比例与 osbUpdate 一致）
         thumb.addEventListener('mousedown', function (e) {

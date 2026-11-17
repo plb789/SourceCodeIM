@@ -432,11 +432,20 @@
         if (el._osbHideT) { clearTimeout(el._osbHideT); el._osbHideT = null; } // 取消 pending 的 180ms 隐藏计时器
         if (typeof sbLast !== 'undefined' && sbLast === el) sbLast = null;     // 清悬停委托状态残留
         if (el._osbRo) { try { el._osbRo.disconnect(); } catch(e) {} el._osbRo = null; } // 断开 ResizeObserver（强引用，不 disconnect 会持有 el）
+        if (el._osbRaf) { cancelAnimationFrame(el._osbRaf); el._osbRaf = 0; } // 取消 pending rAF，防回调访问已销毁宿主
+        if (el._osbTicking) { el._osbTicking = false; } // 中断 tick 递归循环
         if (el._osbThumb) { el._osbThumb.remove(); el._osbThumb = null; }
         if (el._osbThumbH) { el._osbThumbH.remove(); el._osbThumbH = null; }
+        // 从宿主注册表移除（document scroll 遍历用；不 splice 数组会无限增长）
+        if (window._osbHosts) {
+            var ix = window._osbHosts.indexOf(el);
+            if (ix >= 0) window._osbHosts.splice(ix, 1);
+        }
         el._osb = false;
         el._osbH = false;
         el._osbUpdate = null;
+        el._osbUpdateH = null;
+        el._osbTick = null;
         el.classList.remove('osb-host');
     }
 
@@ -9129,12 +9138,14 @@
     window._osbInit = osbInit;
     window._osbTick = osbTick;
     // ===== 祖先滚动同步（与 chat.js 同口径）：外层容器滚动时 fixed 滑块宿主 rect 变化但自身 scroll 不触发，
-    // 横向缩略图滑块会飘出原位。捕获阶段监听任何层级 scroll，遍历全部宿主刷新 osbUpdate =====
+    // 横向缩略图滑块会飘出原位。捕获阶段监听任何层级 scroll，仅刷新当前有可见滑块的宿主 =====
     document.addEventListener('scroll', function () {
         var hosts = window._osbHosts;
         if (!hosts) return;
         for (var i = 0; i < hosts.length; i++) {
             var h = hosts[i];
+            var t = h._osbThumb;
+            if (!t || !t.classList.contains('sb-show')) continue;
             if (h._osbUpdate) h._osbUpdate();
             if (h._osbUpdateH) h._osbUpdateH();
         }

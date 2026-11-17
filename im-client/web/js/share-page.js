@@ -200,9 +200,18 @@
                     thumb.style.left = Math.round(rect.right - 8) + 'px'; // 右侧 2px 边距（宽 6px）
                 }
             }
-            el.addEventListener('scroll', function () { update(); requestAnimationFrame(update); }, { passive: true });
-            if (window.ResizeObserver) new ResizeObserver(update).observe(el); // 尺寸变化同步（窗口缩放等）
-            if (window.MutationObserver) new MutationObserver(update).observe(el, { childList: true, subtree: true });
+            el._osbUpdate = update;
+            if (!window._osbHosts) window._osbHosts = [];
+            window._osbHosts.push(el);
+            el.addEventListener('scroll', function () {
+                update();
+                if (!el._osbRaf) el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; update(); });
+            }, { passive: true });
+            if (window.ResizeObserver) { el._osbRo = new ResizeObserver(update); el._osbRo.observe(el); }
+            if (window.MutationObserver) {
+                el._osbMo = new MutationObserver(update);
+                el._osbMo.observe(el, { childList: true, subtree: true });
+            }
             el.addEventListener('click', update, true); // 折叠/切换类点击后布局收敛复查
             // 悬停显隐：移出延迟 180ms，容器与滑块任一悬停则保持（拖拽可稳定抓住，同主程序口径）
             function show(on) {
@@ -261,6 +270,17 @@
         }
         window._osbInit = function (el) { make(el, false); }; // 纵向（office-preview 归口按需调用）
         window._osbInitH = function (el) { make(el, true); }; // 横向（宽表双轴并存）
+        // ===== 祖先滚动同步（与 chat.js / game-store.js 同口径）：外层容器滚动时 fixed 滑块宿主 rect 变化但自身 scroll 不触发 =====
+        document.addEventListener('scroll', function () {
+            var hosts = window._osbHosts;
+            if (!hosts) return;
+            for (var i = 0; i < hosts.length; i++) {
+                var h = hosts[i];
+                var t = h._osbThumb;
+                if (!t || !t.classList.contains('sb-show')) continue;
+                if (h._osbUpdate) h._osbUpdate();
+            }
+        }, true);
     })();
 
     // ===== 视图切换 =====

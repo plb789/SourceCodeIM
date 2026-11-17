@@ -122,11 +122,13 @@
             thumb.style.left = Math.round(rect.right - 8) + 'px';
         }
         el._osbUpdate = update;
+        if (!window._osbHosts) window._osbHosts = [];
+        window._osbHosts.push(el);
         el.addEventListener('scroll', function () {
             update();
             if (!el._osbRaf) el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; update(); });
         }, { passive: true });
-        if (window.ResizeObserver) new ResizeObserver(update).observe(el);
+        if (window.ResizeObserver) { el._osbRo = new ResizeObserver(update); el._osbRo.observe(el); }
         thumb.addEventListener('mousedown', function (e) {
             e.preventDefault();
             var startY = e.clientY, startTop = el.scrollTop;
