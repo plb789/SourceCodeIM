@@ -1768,6 +1768,43 @@ type UserAchievement struct {
 // TableName 表名沿用 im_ 前缀约定
 func (UserAchievement) TableName() string { return "im_user_achievement" }
 
+// ===== P1 阶段：每日成就（方案 A 独立表，可每日重复解锁） =====
+
+// GameDailyAchievement 每日成就定义表 im_game_daily_achievement
+// 与 GameAchievement 对称但独立——game_code 唯一约束保证同游戏同 code 唯一定义；
+// 所有游戏通用池 seed 覆盖，slug 专属模板可追加。解锁规则在 gameachengine.go 引擎中硬编码匹配
+// （daily_play / daily_play_30m / daily_pay / daily_review_helpful 等）
+type GameDailyAchievement struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	GameID uint `gorm:"column:game_id;not null;index;uniqueIndex:idx_daily_game_code" json:"game_id"`
+	Code   string `gorm:"column:code;type:varchar(64);not null;uniqueIndex:idx_daily_game_code" json:"code"`
+	Name   string `gorm:"column:name;type:varchar(128);not null" json:"name"`
+	Desc   string `gorm:"column:desc;type:varchar(255);default:''" json:"desc"`
+	Icon   string `gorm:"column:icon;type:varchar(255);default:''" json:"icon"`
+	// Rarity 稀有度（同 GameAchievement：0 Common → 4 Legendary）
+	Rarity int8 `gorm:"column:rarity;type:tinyint;default:0" json:"rarity"`
+	// ExpReward 每日解锁发放经验值
+	ExpReward  int       `gorm:"column:exp_reward;type:int;default:10" json:"exp_reward"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+func (GameDailyAchievement) TableName() string { return "im_game_daily_achievement" }
+
+// UserDailyAchievement 用户每日成就解锁记录表 im_user_daily_achievement
+// 唯一约束 (username, game_id, daily_achievement_id, date_key) 保证同一成就同一自然日只解锁一次；
+// date_key 为本地自然日 YYYY-MM-DD 字符串（东八区口径，与 rechargeTodayUsed 的 dayStart 一致）
+type UserDailyAchievement struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;index:idx_daily_user" json:"username"`
+	GameID   uint   `gorm:"column:game_id;not null;index:idx_daily_game" json:"game_id"`
+	DailyAchievementID uint   `gorm:"column:daily_achievement_id;not null;uniqueIndex:idx_daily_unlock" json:"daily_achievement_id"`
+	// DateKey 自然日 YYYY-MM-DD（本地时区零点截断后的日期字符串，跨日自动重置）
+	DateKey    string    `gorm:"column:date_key;type:varchar(10);not null;uniqueIndex:idx_daily_unlock" json:"date_key"`
+	UnlockTime time.Time `gorm:"column:unlock_time;autoCreateTime" json:"unlock_time"`
+}
+
+func (UserDailyAchievement) TableName() string { return "im_user_daily_achievement" }
+
 // UserBadge 用户徽章表 im_user_badge（P0 阶段核心表：等级徽章 + 特殊成就徽章）
 // 等级徽章由经验/等级变化时自动发放；特殊徽章由成就解锁/活动触发发放
 type UserBadge struct {

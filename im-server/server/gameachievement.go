@@ -9,10 +9,14 @@
 //   4. 唯一键保护：idx_game_code(game_id, code) → 后端 Upsert 或 DoNothing 幂等
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"gorm.io/gorm/clause"
 
@@ -722,4 +726,423 @@ func (s *Server) handleAdminAchievementRarities(w http.ResponseWriter, r *http.R
 
 // adminJSON / adminFail 实际在 admin.go 已定义；此处通过编译期验证引用关系确保不遗漏
 
+// ===== 阶段二百九十五 B3：玩家端成就查询接口 =====
+// GET /api/game/achievement/list?game_id=X — 一次性成就列表（含解锁状态 + 进度）
+// GET /api/game/achievement/daily?game_id=X — 每日成就列表（含今日解锁状态 + Redis 进度）
 
+// achievementItem 玩家端成就展示项（一次性 + 每日 共用结构）
+type achievementItem struct {
+	ID              uint    `json:"id"`
+	Code            string  `json:"code"`
+	Name            string  `json:"name"`
+	Desc            string  `json:"desc"`
+	Icon            string  `json:"icon"`
+	Rarity          int8    `json:"rarity"`
+	RarityLabel     string  `json:"rarity_label"`
+	ExpReward       int     `json:"exp_reward"`
+	Unlocked        bool    `json:"unlocked"`
+	UnlockTime      *string `json:"unlock_time,omitempty"`
+	ProgressCurrent float64 `json:"progress_current"` // 0 表示无进度概念（布尔型成就）
+	ProgressTarget  float64 `json:"progress_target"`  // 0 表示无进度概念
+	ProgressPct     int     `json:"progress_pct"`     // 0-100
+}
+
+// achievementListResp GET /api/game/achievement/list 响应顶层
+type achievementListResp struct {
+	GameID   uint              `json:"game_id"`
+	GameName string            `json:"game_name"`
+	Total    int               `json:"total"`
+	Unlocked int               `json:"unlocked"`
+	Items    []achievementItem `json:"items"`
+}
+
+// achievementDailyResp GET /api/game/achievement/daily 响应顶层
+type achievementDailyResp struct {
+	GameID   uint              `json:"game_id"`
+	GameName string            `json:"game_name"`
+	DateKey  string            `json:"date_key"` // YYYY-MM-DD 自然日
+	Total    int               `json:"total"`
+	Unlocked int               `json:"unlocked"`
+	Items    []achievementItem `json:"items"`
+}
+
+// HandleGameAchievementList GET /api/game/achievement/list?game_id=X
+// 玩家端查询指定游戏的一次性成就列表（含自己的解锁状态 + 实时进度）
+// 鉴权：gameAuthToken（X-Drive-Token header 或 dt query 参数）
+func (s *Server) HandleGameAchievementList(w http.ResponseWriter, r *http.Request) {
+	username, ok := gameAuthToken(r)
+	if !ok || username == "" {
+		profileFail(w, "请先登录")
+		return
+	}
+	gameID, _ := strconv.ParseUint(r.URL.Query().Get("game_id"), 10, 64)
+	if gameID == 0 {
+		profileFail(w, "game_id 必填")
+		return
+	}
+
+	// ① 查游戏（顺带校验存在性 + 取 game_name）
+	var game model.Game
+	if err := store.DB.First(&game, gameID).Error; err != nil {
+		profileFail(w, "游戏不存在")
+		return
+	}
+
+	// ② 查成就定义列表（复用引擎缓存）
+	defs := achEngineDefsOf(uint(gameID))
+	if len(defs) == 0 {
+		profileOK(w, achievementListResp{GameID: uint(gameID), GameName: game.Name})
+		return
+	}
+
+	// ③ 查已解锁集合
+	var unlockedRows []model.UserAchievement
+	store.DB.Where("username = ? AND game_id = ?", username, gameID).Find(&unlockedRows)
+	unlockedMap := make(map[uint]time.Time, len(unlockedRows))
+	for _, u := range unlockedRows {
+		unlockedMap[u.AchievementID] = u.UnlockTime
+	}
+
+	// ④ 查用户游戏库累计数据（play_seconds / play_count）
+	var lib model.GameLibrary
+	hasLib := store.DB.Where("username = ? AND game_id = ?", username, gameID).First(&lib).Error == nil
+
+	// ⑤ 查累计充值积分（充值成就进度用）
+	totalPaid := achUserTotalPointsPaid(username, uint(gameID))
+
+	// ⑥ 组装 items
+	now := time.Now()
+	items := make([]achievementItem, 0, len(defs))
+	unlockedCount := 0
+	for _, def := range defs {
+		item := achievementItem{
+			ID:          def.ID,
+			Code:        def.Code,
+			Name:        def.Name,
+			Desc:        def.Desc,
+			Icon:        def.Icon,
+			Rarity:      def.Rarity,
+			RarityLabel: achRarityLabel[def.Rarity],
+			ExpReward:   def.ExpReward,
+		}
+
+		unlockTime, isUnlocked := unlockedMap[def.ID]
+		if isUnlocked {
+			unlockedCount++
+			item.Unlocked = true
+			t := unlockTime.Format(time.RFC3339)
+			item.UnlockTime = &t
+			item.ProgressCurrent = item.ProgressTarget
+			item.ProgressPct = 100
+		} else {
+			// 计算进度（未解锁才算；已解锁直接 100%）
+			cur, tgt := achCalcProgress(def.Code, lib.PlaySeconds, lib.PlayCount, totalPaid, now, hasLib)
+			item.ProgressCurrent = cur
+			item.ProgressTarget = tgt
+			if tgt > 0 {
+				item.ProgressPct = int(math.Min(100, math.Round(cur/tgt*100)))
+			}
+		}
+		items = append(items, item)
+	}
+
+	profileOK(w, achievementListResp{
+		GameID:   uint(gameID),
+		GameName: game.Name,
+		Total:    len(defs),
+		Unlocked: unlockedCount,
+		Items:    items,
+	})
+}
+
+// HandleGameAchievementDaily GET /api/game/achievement/daily?game_id=X
+// 玩家端查询指定游戏的每日成就列表（含今日解锁状态 + Redis 实时进度）
+// 鉴权：gameAuthToken（X-Drive-Token header 或 dt query 参数）
+func (s *Server) HandleGameAchievementDaily(w http.ResponseWriter, r *http.Request) {
+	username, ok := gameAuthToken(r)
+	if !ok || username == "" {
+		profileFail(w, "请先登录")
+		return
+	}
+	gameID, _ := strconv.ParseUint(r.URL.Query().Get("game_id"), 10, 64)
+	if gameID == 0 {
+		profileFail(w, "game_id 必填")
+		return
+	}
+
+	// ① 查游戏
+	var game model.Game
+	if err := store.DB.First(&game, gameID).Error; err != nil {
+		profileFail(w, "游戏不存在")
+		return
+	}
+
+	// ② 查每日成就定义列表（复用引擎缓存）
+	defs := achDailyDefsOf(uint(gameID))
+	if len(defs) == 0 {
+		profileOK(w, achievementDailyResp{GameID: uint(gameID), GameName: game.Name, DateKey: achDailyTodayKey()})
+		return
+	}
+
+	// ③ 查今日已解锁集合
+	dateKey := achDailyTodayKey()
+	var unlockedRows []model.UserDailyAchievement
+	store.DB.Where("username = ? AND game_id = ? AND date_key = ?", username, gameID, dateKey).Find(&unlockedRows)
+	unlockedMap := make(map[uint]time.Time, len(unlockedRows))
+	for _, u := range unlockedRows {
+		unlockedMap[u.DailyAchievementID] = u.UnlockTime
+	}
+
+	// ④ Redis 今日游玩秒数（daily_play_30m 进度用）
+	var todayPlaySecs int64
+	if store.RDB != nil {
+		key := achDailyRedisKeyPlaySecs(username, uint(gameID), dateKey)
+		if v, err := store.RDB.Get(context.Background(), key).Int64(); err == nil {
+			todayPlaySecs = v
+		}
+	}
+
+	// ⑤ 组装 items
+	items := make([]achievementItem, 0, len(defs))
+	unlockedCount := 0
+	for _, def := range defs {
+		item := achievementItem{
+			ID:          def.ID,
+			Code:        def.Code,
+			Name:        def.Name,
+			Desc:        def.Desc,
+			Icon:        def.Icon,
+			Rarity:      def.Rarity,
+			RarityLabel: achRarityLabel[def.Rarity],
+			ExpReward:   def.ExpReward,
+		}
+
+		unlockTime, isUnlocked := unlockedMap[def.ID]
+		if isUnlocked {
+			unlockedCount++
+			item.Unlocked = true
+			t := unlockTime.Format(time.RFC3339)
+			item.UnlockTime = &t
+			item.ProgressCurrent = item.ProgressTarget
+			item.ProgressPct = 100
+		} else {
+			// 每日成就进度：daily_play_30m 走 Redis，其余用 0/1 布尔型
+			switch def.Code {
+			case "daily_play_30m":
+				item.ProgressCurrent = float64(todayPlaySecs)
+				item.ProgressTarget = float64(achDailyPlay30mThreshold)
+				if item.ProgressTarget > 0 {
+					item.ProgressPct = int(math.Min(100, math.Round(item.ProgressCurrent/item.ProgressTarget*100)))
+				}
+			default:
+				// 其他每日成就：0/1 布尔型（已解锁=100%，未解锁=0%）
+				// 这里统一返回 0/1，解锁后上面 isUnlocked 分支会设 100%
+				item.ProgressCurrent = 0
+				item.ProgressTarget = 1
+				item.ProgressPct = 0
+			}
+		}
+		items = append(items, item)
+	}
+
+	profileOK(w, achievementDailyResp{
+		GameID:   uint(gameID),
+		GameName: game.Name,
+		DateKey:  dateKey,
+		Total:    len(defs),
+		Unlocked: unlockedCount,
+		Items:    items,
+	})
+}
+
+// achCalcProgress 计算一条一次性成就的进度（current / target）
+// 返回 0,0 表示该成就无进度概念（布尔型：解锁即 100%，未解锁即 0%）
+func achCalcProgress(code string, playSeconds, playCount int64, totalPaid float64, now time.Time, hasLib bool) (float64, float64) {
+	// 时长型：play_Xh
+	if m := achRuleHoursRe.FindStringSubmatch(code); m != nil {
+		hours, _ := strconv.ParseFloat(m[1], 10)
+		target := hours * 3600
+		if !hasLib {
+			return 0, target
+		}
+		return math.Min(float64(playSeconds), target), target
+	}
+	// 次数型：play_X_times
+	if m := achRuleTimesRe.FindStringSubmatch(code); m != nil {
+		times, _ := strconv.ParseFloat(m[1], 10)
+		if !hasLib {
+			return 0, times
+		}
+		return math.Min(float64(playCount), times), times
+	}
+	// 首次游玩：first_play
+	if achRuleFirstPlay.MatchString(code) {
+		if !hasLib {
+			return 0, 1
+		}
+		if playCount < 1 {
+			return 0, 1
+		}
+		return 1, 1
+	}
+	// 累计充值：pay_X
+	if m := achRulePayRe.FindStringSubmatch(code); m != nil {
+		target, _ := strconv.ParseFloat(m[1], 10)
+		return math.Min(totalPaid, target), target
+	}
+	// 首次充值：first_pay
+	if code == "first_pay" {
+		if totalPaid <= 0 {
+			return 0, 1
+		}
+		return 1, 1
+	}
+	// 时段型（early_bird / play_night_owl）：无进度概念
+	// 其他成就（游戏专属等）：无进度概念
+	return 0, 0
+}
+
+// ===== P1：每日成就手动解锁 + 成就统计 =====
+
+// HandleGameDailyAchievementUnlock POST /api/game/achievement/daily/unlock
+// 客户端主动上报解锁某条每日成就（与一次性成就 unlock 平行）
+// 鉴权：gameAuthToken（X-Drive-Token header 或 dt query 参数）
+// 幂等：同一自然日同一成就重复解锁静默返回 already=true
+// 防刷：复用 achCheckReplayAndRateLimit + HMAC 签名校验
+func (s *Server) HandleGameDailyAchievementUnlock(w http.ResponseWriter, r *http.Request) {
+	username, ok := gameAuthToken(r)
+	if !ok || username == "" {
+		profileFail(w, "请先登录")
+		return
+	}
+
+	var req struct {
+		GameID   uint   `json:"game_id"`
+		Code     string `json:"achievement_code"`
+		ClientTs int64  `json:"client_ts"`
+		Nonce    string `json:"nonce"`
+	}
+	bodyBytes, _ := io.ReadAll(r.Body)
+	if len(bodyBytes) == 0 {
+		profileFail(w, "参数不完整")
+		return
+	}
+	if err := json.Unmarshal(bodyBytes, &req); err != nil || req.GameID == 0 || req.Code == "" {
+		profileFail(w, "参数不完整")
+		return
+	}
+	if len(req.Code) > 64 {
+		profileFail(w, "成就标识过长")
+		return
+	}
+	if len(req.Nonce) > 128 {
+		profileFail(w, "nonce 过长")
+		return
+	}
+
+	// ① 查每日成就定义
+	var dach model.GameDailyAchievement
+	if err := store.DB.Where("game_id = ? AND code = ?", req.GameID, req.Code).First(&dach).Error; err != nil {
+		profileFail(w, "每日成就不存在")
+		return
+	}
+
+	// ② 防重放 + 频率限制 + 签名校验（复用一次性成就口径）
+	if req.Nonce != "" {
+		if ok, reason := achCheckReplayAndRateLimit(username, req.Nonce, req.ClientTs, 300, 60, 10); !ok {
+			profileFail(w, reason)
+			return
+		}
+	}
+	if !achVerifySignature(username, req.GameID, req.ClientTs, req.Nonce, bodyBytes, r.Header.Get("X-Game-Signature")) {
+		profileFail(w, "签名校验失败")
+		return
+	}
+
+	// ③ 游戏在库校验
+	if !achIsGameInLibrary(username, req.GameID) {
+		profileFail(w, "该游戏尚未加入您的游戏库")
+		return
+	}
+
+	// ④ 解锁（调用 achDailyUnlockCore，已内置幂等 + 经验值 + 等级 + 徽章）
+	dateKey := achDailyTodayKey()
+	already, expGain, newLevel, levelUp, err := achDailyUnlockCore(username, dach, dateKey)
+	if err != nil {
+		profileFail(w, "保存失败")
+		return
+	}
+	if already {
+		profileOK(w, map[string]interface{}{"unlocked": true, "already": true})
+		return
+	}
+
+	// ⑤ WS 推送（复用 pushAchievementUnlocked 构造临时 GameAchievement）
+	pushAch := model.GameAchievement{
+		GameID: dach.GameID, Code: dach.Code, Name: dach.Name, Desc: dach.Desc,
+		Icon: dach.Icon, Rarity: dach.Rarity, ExpReward: expGain,
+	}
+	s.pushAchievementUnlocked(username, pushAch, expGain, levelUp, newLevel)
+
+	profileOK(w, map[string]interface{}{
+		"unlocked": true, "exp_gain": expGain,
+		"level_up": levelUp, "new_level": newLevel,
+		"daily":    true,
+		"achievement": map[string]interface{}{
+			"game_id": dach.GameID, "code": dach.Code, "name": dach.Name,
+			"desc": dach.Desc, "icon": dach.Icon, "rarity": dach.Rarity,
+		},
+	})
+}
+
+// HandleGameAchievementStats GET /api/game/achievement/stats?game_id=X
+// 返回该游戏成就统计数据：总成就数、已解锁数、完成率、每日今日已解锁数等
+// 鉴权：gameAuthToken
+func (s *Server) HandleGameAchievementStats(w http.ResponseWriter, r *http.Request) {
+	username, ok := gameAuthToken(r)
+	if !ok || username == "" {
+		profileFail(w, "请先登录")
+		return
+	}
+	gameID, _ := strconv.ParseUint(r.URL.Query().Get("game_id"), 10, 64)
+	if gameID == 0 {
+		profileFail(w, "game_id 必填")
+		return
+	}
+
+	// 一次性成就统计
+	var totalCount int64
+	store.DB.Model(&model.GameAchievement{}).Where("game_id = ?", gameID).Count(&totalCount)
+	var unlockedCount int64
+	store.DB.Model(&model.UserAchievement{}).
+		Where("username = ? AND game_id = ?", username, gameID).Count(&unlockedCount)
+
+	// 每日成就统计
+	var dailyTotalCount int64
+	store.DB.Model(&model.GameDailyAchievement{}).Where("game_id = ?", gameID).Count(&dailyTotalCount)
+	dateKey := achDailyTodayKey()
+	var dailyUnlockedCount int64
+	store.DB.Model(&model.UserDailyAchievement{}).
+		Where("username = ? AND game_id = ? AND date_key = ?", username, gameID, dateKey).
+		Count(&dailyUnlockedCount)
+
+	completionRate := 0.0
+	if totalCount > 0 {
+		completionRate = math.Round(float64(unlockedCount)/float64(totalCount)*1000) / 10
+	}
+	dailyRate := 0.0
+	if dailyTotalCount > 0 {
+		dailyRate = math.Round(float64(dailyUnlockedCount)/float64(dailyTotalCount)*1000) / 10
+	}
+
+	profileOK(w, map[string]interface{}{
+		"game_id":           uint(gameID),
+		"total":             totalCount,
+		"unlocked":          unlockedCount,
+		"completion_rate":   completionRate,
+		"daily_date_key":    dateKey,
+		"daily_total":       dailyTotalCount,
+		"daily_unlocked":    dailyUnlockedCount,
+		"daily_completion":  dailyRate,
+	})
+}

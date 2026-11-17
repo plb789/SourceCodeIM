@@ -1106,13 +1106,31 @@ ipcMain.on('ach-notify:visible', function (event, on, height) {
         } else achNotifyWin.hide();
     } catch (e) { mainLog('[ach-notify] visible 异常: ' + e.message); }
 });
-// 成就卡片点击：聚焦主窗口（用户查看成就/资料入口）。sender 校验：仅成就通知窗自身
-ipcMain.on('ach-notify:open', function (event) {
+// 成就卡片点击：打开游戏中心窗口并投递成就跳转指令（个人资料→成就弹窗）。
+// 对比好友消息 notify:open → showOverlay + overlayWin.webContents.send('overlay:open-chat') 同范式。
+// sender 校验：仅成就通知窗自身，防被攻陷渲染进程伪造点击
+ipcMain.on('ach-notify:open', function (event, payload) {
     if (!achNotifyWin || achNotifyWin.isDestroyed() || event.sender !== achNotifyWin.webContents) return;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        mainWindow.show();
-        mainWindow.focus();
+    var achPayload = payload || {};
+    mainLog('[ach-notify] open 收到 payload=' + JSON.stringify(achPayload).slice(0, 200));
+    try {
+        var gsWin = ensureGameStoreWindow();
+        if (!gsWin) { mainLog('[ach-notify] open 游戏中心窗口创建失败'); return; }
+        // 恢复/显示/聚焦游戏中心窗口
+        if (gsWin.isMinimized()) gsWin.restore();
+        gsWin.show();
+        gsWin.focus();
+        // 如果游戏中心窗口正在加载（首次打开），等 did-finish-load 后再投递指令
+        if (gsWin.webContents.isLoading()) {
+            gsWin.webContents.once('did-finish-load', function () {
+                try { gsWin.webContents.send('achievement:open', achPayload); } catch (e) { }
+            });
+        } else {
+            try { gsWin.webContents.send('achievement:open', achPayload); } catch (e) { }
+        }
+        mainLog('[ach-notify] open 已投递 achievement:open 指令到游戏中心');
+    } catch (e) {
+        mainLog('[ach-notify] open 异常: ' + e.message);
     }
 });
 

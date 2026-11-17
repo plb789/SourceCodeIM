@@ -549,6 +549,22 @@ func (s *Server) handleInternalGatewayRechargeAck(w http.ResponseWriter, r *http
 		if okN < len(req.OK) {
 			logger.Warn("充值回执部分未命中 pending（疑似网关迟到回执，订单已超时退分但游戏库可能已到账，请人工核对）：网关 %s 请求 %d 命中 %d", gwName, len(req.OK), okN)
 		}
+		// 充值成就触发：本次新落 success 的订单按 (username, game_id) 去重后，每对异步触发一次成就判定
+		if okN > 0 {
+			var newlyOK []model.RechargeOrder
+			if err := store.DB.Where("id IN ? AND status = ? AND gw = ?", req.OK, model.RechargeOrderStatusSuccess, gwName).
+				Select("username, game_id").Find(&newlyOK).Error; err == nil {
+				seen := map[string]bool{}
+				for _, o := range newlyOK {
+					key := o.Username + "|" + strconv.FormatUint(uint64(o.GameID), 10)
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					go s.achEngineEvaluatePay(o.Username, o.GameID)
+				}
+			}
+		}
 	}
 	for _, f := range req.Failed {
 		if f.ID == 0 {

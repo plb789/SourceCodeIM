@@ -642,6 +642,11 @@ func RegisterGameRoutes(s *Server) {
 	// （guardGame 强制 tokenUser==queryUsername，但留言/删评是"操作别人资料"场景，不适用此约束）
 	http.HandleFunc("GET /api/profile", s.HandleProfileGet)
 	http.HandleFunc("POST /api/game/achievement/unlock", s.HandleGameAchievementUnlock)
+	// 玩家端成就查询（游戏详情页成就列表 + 每日成就列表）
+	http.HandleFunc("GET /api/game/achievement/list", s.HandleGameAchievementList)
+	http.HandleFunc("GET /api/game/achievement/daily", s.HandleGameAchievementDaily)
+	http.HandleFunc("GET /api/game/achievement/stats", s.HandleGameAchievementStats)
+	http.HandleFunc("POST /api/game/achievement/daily/unlock", s.HandleGameDailyAchievementUnlock)
 	// P1-b 轻量独立接口（文档 §5.1 声明，让前端按需 fetch）
 	http.HandleFunc("GET /api/profile/stats", s.HandleProfileStatsGet)
 	http.HandleFunc("GET /api/profile/badges", s.HandleProfileBadgesGet)
@@ -1827,6 +1832,14 @@ func (s *Server) HandleGamePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store.DB.Model(&lib).Updates(updates)
+	// 每日成就数据采集：end 上报落库后，把**本次会话秒数**（req.Seconds）累加到 Redis 供 daily_play_30m 判定用
+	// 放在落库之后、异步引擎之前，保证引擎查询 Redis 时数据已就绪
+	if req.Action == "end" && req.Seconds > 0 && store.RDB != nil {
+		go func() {
+			dateKey := achDailyTodayKey()
+			achDailyRecordPlaySecs(username, uint(id), int64(req.Seconds), dateKey)
+		}()
+	}
 	// 成就自动判定（方案 §14.3 链路 A）：落库后异步执行，不阻塞上报响应；
 	// 规则比对纯内存 + 成就定义缓存，未命中规则的成就静默跳过（留给链路 B/C）
 	go s.achEngineEvaluate(username, uint(id), event, playSecondsSnap, playCountSnap)
@@ -2157,9 +2170,9 @@ func (s *Server) HandleGameReviewUpsert(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	adminJSON(w, map[string]interface{}{"ok": true, "id": rev.ID, "play_hours": rev.PlayHours})
+	// 每日成就触发：评测 upsert 成功后异步判定 daily_review（每日评测）
+	go s.achEngineEvaluateDaily(username, uint(id), "review_upsert", 0)
 }
-
-// HandleGameReviewDelete 删除自己的评测（连带清理"有帮助"标记，计数随评测删除一并消失）
 func (s *Server) HandleGameReviewDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
@@ -2219,6 +2232,8 @@ func (s *Server) HandleGameReviewHelpful(w http.ResponseWriter, r *http.Request)
 		}
 		store.DB.Model(&model.GameReview{}).Where("id = ?", rev.ID).UpdateColumn("helpful_count", gorm.Expr("helpful_count + 1"))
 		rev.HelpfulCount++
+		// 每日成就触发：首次点"有帮助"（不是取消 toggle 分支）才算
+		go s.achEngineEvaluateDaily(username, rev.GameID, "review_helpful", 0)
 	} else {
 		store.DB.Delete(&exist)
 		store.DB.Model(&model.GameReview{}).Where("id = ?", rev.ID).UpdateColumn("helpful_count", gorm.Expr("GREATEST(helpful_count - 1, 0)"))
@@ -2315,6 +2330,8 @@ func (s *Server) HandleGameReviewReplyUpsert(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	store.DB.Model(&model.GameReview{}).Where("id = ?", rev.ID).UpdateColumn("reply_count", gorm.Expr("reply_count + 1"))
+	// 每日成就触发：回复成功后异步判定 daily_review_reply（每日评论）
+	go s.achEngineEvaluateDaily(username, rev.GameID, "review_reply", 0)
 	adminJSON(w, map[string]interface{}{"ok": true, "id": rp.ID})
 }
 

@@ -48,6 +48,7 @@
         // 旧主进程无该 API 时回退系统通知（desktop.notify）
         if (window.IMSocket && window.desktop && !document.hasFocus()) {
             var payloadOut = {
+                game_id: p.game_id || 0, code: p.code || '',
                 name: p.name || '', desc: p.desc || '', icon: p.icon || '', rarity: p.rarity || 0,
                 exp_reward: parseInt(p.exp_reward, 10) || 0,
                 level_up: !!p.level_up, new_level: p.new_level || 0

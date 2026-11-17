@@ -109,7 +109,8 @@ func InitMySQL(cfg *config.Config) error {
 	// 阶段二百九十五 P3：追加卡片合成徽章三表 im_card / im_user_card / im_badge_template
 	// 补充遗漏：Agent/AI 记忆规则/MCP 插件相关 13 表（运行时高频查询，缺失即 500）
 	// A1：追加等级配置表 im_user_level_config（文档附录 A，管理员预设等级权益数据）
-	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}, &model.UserKB{}, &model.PointsLog{}, &model.MCPServer{}, &model.MCPPlugin{}, &model.SysPrompt{}, &model.CallLog{}, &model.Group{}, &model.GroupMember{}, &model.GroupInvite{}, &model.Announcement{}, &model.AnnouncementAttachment{}, &model.AnnouncementRead{}, &model.WorkbenchApp{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RemoteLog{}, &model.DriveFile{}, &model.DriveShare{}, &model.DriveUploadSession{}, &model.AppVersion{}, &model.Device{}, &model.RemoteTrust{}, &model.RemoteCard{}, &model.Moment{}, &model.MomentLike{}, &model.MomentComment{}, &model.MomentUnread{}, &model.GatewayBook{}, &model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.OfficialAccount{}, &model.OfficialSubscribe{}, &model.OfficialMenu{}, &model.OfficialKeyword{}, &model.OfficialTemplate{}, &model.OfficialMessage{}, &model.OfficialAudit{}, &model.ClamavQuarantine{}, &model.ClamavWhitelist{}, &model.GameAchievement{}, &model.UserAchievement{}, &model.UserBadge{}, &model.ProfileExpLog{}, &model.ProfileShowcase{}, &model.ProfileComment{}, &model.ProfileScreenshot{}, &model.ProfileScreenshotLike{}, &model.Card{}, &model.UserCard{}, &model.BadgeTemplate{}, &model.UserShopItem{}, &model.AIMemory{}, &model.AIMemoryPref{}, &model.AIRule{}, &model.AISession{}, &model.AgentTaskRecord{}, &model.AgentTaskTpl{}, &model.AgentCronTask{}, &model.AgentWhitelist{}, &model.AgentStepRecord{}, &model.AgentChangeRecord{}, &model.MsgPurgeApply{}, &model.UserLevelConfig{}); err != nil {
+	// A2：追加每日成就独立两表 im_game_daily_achievement / im_user_daily_achievement（方案 A，可每日重复解锁）
+	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}, &model.UserKB{}, &model.PointsLog{}, &model.MCPServer{}, &model.MCPPlugin{}, &model.SysPrompt{}, &model.CallLog{}, &model.Group{}, &model.GroupMember{}, &model.GroupInvite{}, &model.Announcement{}, &model.AnnouncementAttachment{}, &model.AnnouncementRead{}, &model.WorkbenchApp{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RemoteLog{}, &model.DriveFile{}, &model.DriveShare{}, &model.DriveUploadSession{}, &model.AppVersion{}, &model.Device{}, &model.RemoteTrust{}, &model.RemoteCard{}, &model.Moment{}, &model.MomentLike{}, &model.MomentComment{}, &model.MomentUnread{}, &model.GatewayBook{}, &model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.OfficialAccount{}, &model.OfficialSubscribe{}, &model.OfficialMenu{}, &model.OfficialKeyword{}, &model.OfficialTemplate{}, &model.OfficialMessage{}, &model.OfficialAudit{}, &model.ClamavQuarantine{}, &model.ClamavWhitelist{}, &model.GameAchievement{}, &model.UserAchievement{}, &model.UserBadge{}, &model.ProfileExpLog{}, &model.ProfileShowcase{}, &model.ProfileComment{}, &model.ProfileScreenshot{}, &model.ProfileScreenshotLike{}, &model.Card{}, &model.UserCard{}, &model.BadgeTemplate{}, &model.UserShopItem{}, &model.AIMemory{}, &model.AIMemoryPref{}, &model.AIRule{}, &model.AISession{}, &model.AgentTaskRecord{}, &model.AgentTaskTpl{}, &model.AgentCronTask{}, &model.AgentWhitelist{}, &model.AgentStepRecord{}, &model.AgentChangeRecord{}, &model.MsgPurgeApply{}, &model.UserLevelConfig{}, &model.GameDailyAchievement{}, &model.UserDailyAchievement{}); err != nil {
 		return fmt.Errorf("自动建表失败: %w", err)
 	}
 
@@ -150,13 +151,12 @@ func InitMySQL(cfg *config.Config) error {
 	}
 
 	// 通用成就池：覆盖所有游戏的跨场景里程碑
-	// 分类口径（ExperienceRecall 100016231）：
-	//   Common×6 = 首次游玩 + 3个时长里程碑 + 2个游玩次数里程碑
-	//   Uncommon×3 = 中等时长 + 成就猎人 + 回归玩家
-	//   Rare×2 = 深度玩家 + 百小时
-	//   Epic×1 = 资深玩家
-	//   Legendary×1 = 传奇玩家（200h+）
+	// 分类口径（P0 游玩类 13 条 + P1 充值类 6 条，共计 19 条/游戏）：
+	//   游玩类：Common×6 + Uncommon×3 + Rare×2 + Epic×1 + Legendary×1
+	//   充值类：Common×2 + Uncommon×1 + Rare×1 + Epic×1 + Legendary×1（积分口径）
 	achGeneric := []achTpl{
+		// ===== 游玩类（链路 A：play/start/end/时段） =====
+
 		// Common (6) — +10 exp each
 		{"first_play", "初入江湖", "第一次启动该游戏", 0},
 		{"play_1h", "初尝滋味", "累计游玩 1 小时", 0},
@@ -179,6 +179,24 @@ func InitMySQL(cfg *config.Config) error {
 
 		// Legendary (1) — +200 exp
 		{"play_200h", "传奇玩家", "累计游玩 200 小时", 4},
+
+		// ===== 充值类（链路 D：积分充值成功 ack 后触发，points 口径） =====
+
+		// Common (2) — +10 exp each
+		{"first_pay", "初次充值", "在该游戏中完成第一次充值", 0},
+		{"pay_100", "小试牛刀", "累计充值 100 积分", 0},
+
+		// Uncommon (1) — +25 exp
+		{"pay_500", "小有投入", "累计充值 500 积分", 1},
+
+		// Rare (1) — +50 exp
+		{"pay_1000", "慷慨解囊", "累计充值 1000 积分", 2},
+
+		// Epic (1) — +100 exp
+		{"pay_5000", "氪金玩家", "累计充值 5000 积分", 3},
+
+		// Legendary (1) — +200 exp
+		{"pay_10000", "至尊金主", "累计充值 10000 积分", 4},
 	}
 
 	// 专属成就模板：按游戏 slug 匹配（仅定义与通用池不同的特色成就，通用池仍然会一并插入）
@@ -398,6 +416,50 @@ func InitMySQL(cfg *config.Config) error {
 		} else {
 			logger.Info("成就 seed：im_game 为空，跳过（游戏上架后下次启动自动补齐）")
 		}
+	}
+
+	// ===== P1 每日成就 seed（方案 A 独立表，覆盖所有已上架游戏，DoNothing 幂等） =====
+	// 分类：游戏使用类 3 条 + 充值类 1 条 + 社交互动类 3 条，共计 7 条/游戏
+	achDailyGeneric := []achTpl{
+		// --- 游戏使用类 ---
+		{"daily_play", "每日游玩", "当日启动该游戏至少一次", 0},
+		{"daily_play_30m", "每日耕耘", "当日累计游玩 30 分钟以上", 1},
+		{"daily_save", "每日存档", "当日完成一次云存档上传", 0},
+
+		// --- 充值类 ---
+		{"daily_pay", "每日充值", "当日在该游戏完成一次充值", 1},
+
+		// --- 社交互动类 ---
+		{"daily_review_helpful", "乐于助人", "当日给他人评测点「有帮助」", 0},
+		{"daily_review", "每日评测", "当日发布一条游戏评测", 1},
+		{"daily_review_reply", "每日评论", "当日在评测区回复一条", 0},
+		// TODO: daily_card_redeem（每日兑换）——卡密充值无 game_id，暂不触发；
+		// 后续可改为触发时遍历用户所有已加入游戏，在每个游戏下都尝试解锁
+	}
+	if len(allGames) > 0 {
+		totalDailySeeded := 0
+		for _, g := range allGames {
+			for _, t := range achDailyGeneric {
+				expReward := achRarityExp[t.Rarity]
+				if expReward == 0 {
+					expReward = 10
+				}
+				dach := model.GameDailyAchievement{
+					GameID:    g.ID,
+					Code:      t.Code,
+					Name:      t.Name,
+					Desc:      t.Desc,
+					Icon:      "",
+					Rarity:    t.Rarity,
+					ExpReward: expReward,
+				}
+				res := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&dach)
+				if res.Error == nil && res.RowsAffected > 0 {
+					totalDailySeeded++
+				}
+			}
+		}
+		logger.Info("每日成就 seed：覆盖 %d 款游戏，新增 %d 条每日成就定义（DoNothing 幂等）", len(allGames), totalDailySeeded)
 	}
 
 	sqlDB, err := db.DB()

@@ -91,6 +91,8 @@ func NewServer(cfg *config.Config) *Server {
 	// 游戏分片临时目录启动清理 + 后台定时扫描（解决 tmp_chunks 孤儿目录只靠懒清理的问题）
 	s.sweepGameTmpChunksDisk() // 启动立即清一次历史垃圾
 	s.startGameTmpSweeper()    // 后台每小时定时
+	// 成就系统：每日成就历史过期清理（启动立即清 + 每 24h 定时）
+	s.startDailyAchHistoryCleanup()
 	return s
 }
 

@@ -2481,6 +2481,11 @@
                     state.profile.achievements = a2.data;
                     var hasAch = (state.profile.showcase || []).some(function (s) { return s.type === 'achievements'; });
                     if (hasAch) renderShowcases();
+                    // 成就通知点击：等成就数据就绪后自动打开弹窗（pendingAchOpen 在 onAchievementOpen 里置位）
+                    if (pendingAchOpen && targetUser === username) {
+                        openAchievementsModal();
+                        pendingAchOpen = null;
+                    }
                 }
             });
             // P2: 异步拉取用户评测列表（用于 reviews 展示柜类型）
@@ -8382,6 +8387,24 @@
             var gidStr = gid;
             var isLocal = gidStr.indexOf('local_') === 0 || (state.localLib && state.localLib[gid]);
             if (isLocal) launchLocalGame(gid); else launchGame(gid);
+        });
+    }
+
+    // 成就通知点击 → 主进程 send('achievement:open', payload) → 打开游戏中心个人资料页 → 成就弹窗
+    // 对比好友消息 overlay:open-chat 直达同范式；成就弹窗依赖 state.profile.achievements，
+    // 若资料页未加载则先 openProfile，等成就 API 回落再开弹窗（pendingAchOpen 标志位兜底）
+    var pendingAchOpen = null; // {game_id, code, ...} 成就通知 payload，loadProfile 回调里消费
+    if (DESKTOP && DESKTOP.onAchievementOpen) {
+        DESKTOP.onAchievementOpen(function (payload) {
+            console.debug('[achievement:open] 收到 payload=', payload);
+            pendingAchOpen = payload || {};
+            // 切到自己的资料页（成就归属自己）
+            openProfile(username);
+            // 如果成就数据已就绪，直接开弹窗；否则等 loadProfile 里成就 API 回调后自动开
+            if (state.profile.achievements && state.profile.achievements.groups) {
+                openAchievementsModal();
+                pendingAchOpen = null;
+            }
         });
     }
 

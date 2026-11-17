@@ -651,6 +651,8 @@ func (s *Server) HandleGameSaveFinalize(w http.ResponseWriter, r *http.Request) 
 		adminFail(w, http.StatusConflict, err.Error())
 		return
 	}
+	// 每日成就触发：存档定稿成功后异步判定 daily_save
+	go s.achEngineEvaluateDaily(username, gid, "save_finalize", 0)
 	adminJSON(w, map[string]interface{}{"ok": true, "revision": rev})
 }
 

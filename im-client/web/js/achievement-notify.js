@@ -35,10 +35,10 @@
         var el = window.AchievementToast.buildCard(p); // 与页内 toast 同源视觉
         el.addEventListener('mouseenter', function () { t.paused = true; });
         el.addEventListener('mouseleave', function () { t.paused = false; t.deadline = Date.now() + TTL; });
-        // 点击：移除卡片并聚焦主窗口（用户查看成就详情/资料页入口）
+        // 点击：移除卡片并打开成就专属页面（游戏中心个人资料→成就弹窗）
         el.addEventListener('click', function () {
             removeCard(t);
-            if (typeof desktop.achNotifyOpen === 'function') desktop.achNotifyOpen();
+            if (typeof desktop.achNotifyOpen === 'function') desktop.achNotifyOpen(t.payload);
         });
         var t = { key: key, payload: p, deadline: Date.now() + TTL, paused: false, el: el };
         toasts.push(t);
