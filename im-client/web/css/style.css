@@ -4731,6 +4731,365 @@ html.m .mobile-plus-panel:not(.hidden) {
     color: var(--primary);
 }
 
+/* ===== 头像悬停资料卡（QQ/Steam 同款宽卡 popover，轻量预览，鼠标离开自动收起） ===== */
+.hc-card {
+    position: fixed;
+    z-index: 1800;
+    width: 320px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px 14px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22), 0 4px 10px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    opacity: 0;
+    transform: translateY(-4px);
+    transform-origin: left top;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    pointer-events: none;
+    user-select: none;
+}
+
+.hc-card.show {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+/* === 顶部：头像 + 名称/等级 === */
+.hc-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.hc-avatar-wrap {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    overflow: visible;
+    flex-shrink: 0;
+}
+
+.hc-avatar-wrap::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary) 30%, color-mix(in srgb, var(--primary) 40%, transparent) 100%);
+    -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    padding: 2px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 1;
+}
+
+.hc-card:hover .hc-avatar-wrap::after {
+    opacity: 1;
+}
+
+.hc-avatar {
+    position: relative;
+    z-index: 0;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    object-fit: cover;
+    display: block;
+    background: var(--placeholder-bg);
+}
+
+.hc-avatar-ph {
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 26px;
+    font-weight: 600;
+    background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 60%, #000));
+    pointer-events: none;
+}
+
+.hc-online-dot {
+    position: absolute;
+    z-index: 2;
+    bottom: 2px;
+    right: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--primary);
+    border: 2px solid var(--panel-bg);
+    box-sizing: border-box;
+}
+
+/* 右侧头部信息（名称 + 等级行） */
+.hc-head-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 2px;
+}
+
+.hc-name-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.hc-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    word-break: break-all;
+    line-height: 1.3;
+}
+
+.hc-gender {
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.hc-gender.male { color: #1e88e5; }
+.hc-gender.female { color: #ec407a; }
+
+.hc-online-badge {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    padding: 1px 6px;
+    border-radius: 10px;
+    line-height: 1.4;
+    flex-shrink: 0;
+}
+
+/* 等级行（Steam 同款 Lv.N 徽章 + 称号） */
+.hc-level-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* 正在玩（绿点 + "正在玩"标签 + 游戏名，QQ/Steam 同款 presence 行） */
+.hc-playing {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 2px;
+}
+
+.hc-playing-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4caf50;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px color-mix(in srgb, #4caf50 25%, transparent);
+    animation: hc-playing-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes hc-playing-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+}
+
+.hc-playing-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #4caf50;
+    flex-shrink: 0;
+}
+
+.hc-playing-games {
+    font-size: 11.5px;
+    color: var(--text);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 145px;
+}
+
+.hc-level-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 55%, #000));
+    padding: 2px 7px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+}
+
+.hc-level-num {
+    font-size: 12px;
+}
+
+.hc-title {
+    font-size: 11px;
+    color: var(--text-light);
+    font-style: italic;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* === 次行：账号 · 地区 === */
+.hc-sub-row {
+    font-size: 12px;
+    color: var(--text-light);
+    line-height: 1.5;
+    padding-top: 2px;
+    word-break: break-all;
+}
+
+.hc-region {
+    color: var(--text-light);
+}
+
+/* === 签名 === */
+.hc-signature {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.5;
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.hc-signature.empty {
+    color: var(--text-light);
+    font-style: italic;
+}
+
+/* === 分隔线 === */
+.hc-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 6px 0;
+}
+
+/* === 游戏统计区（4 格：游戏库 / 时长 / 成就 / 徽章） === */
+.hc-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    padding: 2px 0 4px;
+}
+
+.hc-stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+}
+
+.hc-stat-num {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.2;
+}
+
+.hc-stat-label {
+    font-size: 10.5px;
+    color: var(--text-light);
+    letter-spacing: 0.3px;
+}
+
+/* === 按钮区（对齐 friend-card 按钮样式：主按钮独占 + 次按钮并排） === */
+.hc-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.hc-btn {
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s;
+    font-family: inherit;
+}
+
+/* 主按钮（发消息）——独占整行，主题色实底白字（与 friend-card-btn.primary 同款） */
+.hc-btn-primary {
+    padding: 10px 0;
+    background: var(--primary);
+    border: 1px solid var(--primary);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 2px;
+}
+
+.hc-btn-primary:hover:not(:disabled) {
+    opacity: 0.85;
+    background: var(--primary); /* 保持实底，opacity 降一点即可 */
+}
+
+.hc-btn-primary:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+/* 次按钮组（设置备注 + 查看游戏中心）——flex 平分 */
+.hc-sub-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.hc-sub-actions.single .hc-btn-secondary {
+    flex: 1 1 100%;
+}
+
+.hc-btn-secondary {
+    flex: 1 1 0%;
+    min-width: 0;
+    padding: 8px 0;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+}
+
+.hc-btn-secondary:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.hc-btn-secondary:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+/* 左侧翻转时阴影对称（目前无小三角，保持不变） */
+.hc-card.hc-left-side {
+}
+
 /* ===== 阶段三十五：截图编辑器（全屏遮罩 + 工具栏，面板色跟随主题变量） ===== */
 .shot-editor {
     position: fixed;

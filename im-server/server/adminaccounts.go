@@ -113,7 +113,7 @@ func (s *Server) handleAdminUserProfilePut(w http.ResponseWriter, r *http.Reques
 	s.invalidateNickname(username)
 	// 向目标全部在线连接推送最新资料（PROFILE_RESP 与本人改资料同帧同口径，多端实时同步）
 	// 集群模式：sendToUser 归口（总线定向信封覆盖跨实例的连接；原本地 GetAll 循环跨实例漏推）
-	if info, ok := s.buildProfileInfo(username, username); ok {
+	if info, ok := s.buildProfileInfo(username, username, false); ok {
 		pContent, _ := json.Marshal(info)
 		pData, _ := json.Marshal(&protocol.Message{
 			MsgType:   protocol.MsgTypeProfileResp,

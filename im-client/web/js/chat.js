@@ -1024,6 +1024,15 @@
         // 头像失败缓存（防止新账号首帧被误判为失效）
         navAvatarFailedUrl = '';
 
+        // Bug A/C 修复：hover-card 悬停资料卡状态全清——
+        // 登出时 innerHTML='' 会移除 convList/userList/msgList 里的旧头像 DOM，
+        // 它们的 mouseenter/leave 闭包变成 detached listener；
+        // profileCache 残留旧账号缓存数据，换号后首次悬停可能短暂显示脏头像路径。
+        // 先 reset() 清状态，再 innerHTML 清 DOM（闭包随 detached DOM 被 GC）。
+        if (window.imHoverCard && typeof window.imHoverCard.reset === 'function') {
+            window.imHoverCard.reset();
+        }
+
         // ============== 清 DOM 元素 ==============
         // 侧栏会话列表
         if (convListEl) convListEl.innerHTML = '';
@@ -3137,6 +3146,10 @@
         friendCardSignature.textContent = '';
         friendCardRemarkBtn.classList.add('hidden');
         friendCardAddBtn.classList.add('hidden'); // 阶段二百七十六：占位态先隐藏，PROFILE_RESP 回来后按好友关系显隐
+        // 阶段三百：游戏中心关闭则隐藏"查看完整资料"按钮（hover-card 同款开关语义）
+        var _f = window.__imUiFeatures;
+        var _gcOn = !(_f && _f.game_center === false);
+        friendCardSteamBtn.style.display = _gcOn ? '' : 'none';
         friendCardMask.classList.remove('hidden');
         IMSocket.send({ msg_type: MSG.PROFILE_QUERY, to_user: username });
     }
@@ -3173,6 +3186,9 @@
         // 发消息按钮非好友隐藏（会话不存在，避免点开空会话困惑）；好友保持原"发消息+设置备注"
         friendCardAddBtn.classList.toggle('hidden', !!info.is_friend);
         friendCardChatBtn.classList.toggle('hidden', !info.is_friend);
+        // 阶段三百：PROFILE_RESP 回来后再校验一次游戏中心开关（应对管理员在后台刚切换开关的即时场景）
+        var _ff = window.__imUiFeatures;
+        friendCardSteamBtn.style.display = (_ff && _ff.game_center === false) ? 'none' : '';
     }
 
     function closeFriendCard() {
@@ -24400,6 +24416,10 @@
                     e.stopPropagation(); // 阻止触发整行的打开会话
                     openFriendCard(target);
                 });
+                // 头像悬停弹出轻量资料预览卡（hover-card.js；AI 智能体和自己都跳过）
+                if (!isAIAgent(target) && target !== IMSocket.getUsername() && window.imHoverCard) {
+                    window.imHoverCard.bind(avatarNode, target);
+                }
             }
             // 好友右键菜单（群聊条目不显示；阶段一百四十二：多群条目同排除）
             if (target !== '' && !isGroupTarget(target)) {
@@ -25601,6 +25621,20 @@
     // 阶段二百九十二 M5：头像归口外露（游戏房间成员列表等面板复用，避免各自重造头像解析）
     window.IMAvatarUrl = getAvatarUrl;
 
+    // ===== hover-card.js 所需全局接口（头像悬停资料卡） =====
+    window.imFriendInfo = function (username) {
+        for (var i = 0; i < friendList.length; i++) {
+            if (friendList[i].username === username) return friendList[i];
+        }
+        return null;
+    };
+    window.imAvatarOf = getAvatarUrl;
+    window.imDisplayName = function (u) { return senderDisplayName(u); };
+    window.imOpenConversation = openConversation;
+    window.imStartCallPeer = startCallPeer;
+    window.imIsAIAgent = isAIAgent;
+    window.imShowPrompt = showPrompt;
+
     // 头像缺失修复：按发送者解析头像并构建头像元素（返回 DOM 节点）
     // 优先级：自己（LOGIN_RESP/上传成功下发） > 好友列表（FRIEND_LIST 携带 avatar） > 在线用户表（USER_LIST 推送） > 首字母占位
     // 原实现：解析逻辑内联于此，会话列表无法复用（会话列表头像长期为首字母占位）
@@ -25632,6 +25666,10 @@
             img.addEventListener('click', function () {
                 if (!isAIAgent(fromUser)) openFriendCard(fromUser);
             });
+            // 悬停弹出轻量资料预览卡（AI 智能体和自己跳过）
+            if (!isAIAgent(fromUser) && fromUser !== IMSocket.getUsername() && window.imHoverCard) {
+                window.imHoverCard.bind(img, fromUser);
+            }
             return img;
         }
         return buildAvatarPlaceholder(fromUser);
@@ -25654,6 +25692,10 @@
         ph.addEventListener('click', function () {
             if (!isAIAgent(fromUser)) openFriendCard(fromUser);
         });
+        // 悬停弹出轻量资料预览卡（AI 智能体和自己跳过）
+        if (!isAIAgent(fromUser) && fromUser !== IMSocket.getUsername() && window.imHoverCard) {
+            window.imHoverCard.bind(ph, fromUser);
+        }
         return ph;
     }
 
@@ -26009,6 +26051,8 @@
     // 语义归口：显式 false 才隐藏，undefined/缺字段/旧缓存=显示（向后兼容）
     function applyUiFeatures(f) {
         if (!f || typeof f !== 'object') return;
+        // 挂到 window 供子模块（hover-card 等）读取游戏中心/工作台开关
+        window.__imUiFeatures = f;
         var gc = document.getElementById('game-center-btn');
         if (gc) gc.style.display = f.game_center === false ? 'none' : '';
         var wb = document.querySelector('.nav-icon.sidebar-tab[data-tab="workbench"]');

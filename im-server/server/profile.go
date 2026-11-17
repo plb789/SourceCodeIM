@@ -302,6 +302,23 @@ type ProfileInfo struct {
 	// IP 属地（ip2region 离线解析，微信同款口径：国内省份/海外国家/内网「内网」）。
 	// 服务端归口解析，报文只含属地文本不含 IP 明文；空串=不可用（未启用/目标离线/集群跨实例），前端整行隐藏
 	IpRegion string `json:"ip_region"`
+	// 阶段二百九十五+补丁：游戏中心等级/经验/称号（Steam 同款，扩展到 WS PROFILE_RESP 供 hover-card 轻量预览）
+	Level int   `json:"level"`
+	Exp   int64 `json:"exp"`
+	Title string `json:"title"`
+	// 统计数据（一次聚合，前端零计算）
+	Stats ProfileStatsBrief `json:"stats"`
+	// 正在玩的游戏列表（内存 presence 实时态，空列表=当前没在玩任何游戏）
+	PlayingGames []PlayingGameBrief `json:"playing_games,omitempty"`
+}
+
+// ProfileStatsBrief hover-card 用的精简统计（区别于 HTTP API 的完整 ProfileStatsResp，这里只挑 4 个关键数据）
+type ProfileStatsBrief struct {
+	TotalGames        int64   `json:"total_games"`
+	TotalPlayHours    float64 `json:"total_play_hours"`
+	TotalAchievements int64   `json:"total_achievements"`
+	TotalBadges       int64   `json:"total_badges"`
+	FriendsCount      int64   `json:"friends_count"`
 }
 
 // profileUpdateReq 个人资料更新请求（content JSON，仅允许修改这四个字段，用户名/头像走原有通道）
@@ -324,8 +341,10 @@ func (s *Server) sendProfileResp(c *Client, info ProfileInfo) {
 	c.send(data)
 }
 
-// buildProfileInfo 查询目标用户资料并按查询者视角组装（好友关系与备注服务端归口，防前端伪造）
-func (s *Server) buildProfileInfo(viewer, target string) (ProfileInfo, bool) {
+// buildProfileInfo 查询目标用户资料并按查询者视角组装（好友关系与备注服务端归口，防前端伪造）。
+// includeGameExtra=true 时附加游戏中心扩展（stats 聚合 + playing_games presence）——仅用于 handleProfileQuery
+// 路径（别人查我）；handleProfileUpdate / adminaccounts 回推自己路径传 false 减少 6+1 次 SQL 往返。
+func (s *Server) buildProfileInfo(viewer, target string, includeGameExtra bool) (ProfileInfo, bool) {
 	var u model.User
 	if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
 		return ProfileInfo{}, false
@@ -337,6 +356,10 @@ func (s *Server) buildProfileInfo(viewer, target string) (ProfileInfo, bool) {
 		Region:    u.Region,
 		Signature: u.Signature,
 		Avatar:    u.Avatar,
+		// 阶段二百九十五+补丁：游戏中心等级/经验/称号（Steam 同款）—— User 表字段，随 First 查出无额外 SQL
+		Level: u.Level,
+		Exp:   u.Exp,
+		Title: u.Title,
 	}
 	// IP 属地：目标在线时由其连接真实 IP 解析（服务端归口，离线/跨实例/未启用为空串降级）
 	if ipRegionEnabled() {
@@ -347,6 +370,31 @@ func (s *Server) buildProfileInfo(viewer, target string) (ProfileInfo, bool) {
 		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
 			info.IsFriend = true
 			info.Remark = f.Remark
+		}
+	}
+	// 游戏中心扩展：仅外部查询路径开启（自我回推路径跳过避免冗余 6+1 SQL）
+	if includeGameExtra {
+		var libCount int64
+		var totalPlaySec int64
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
+		store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
+			Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
+		var achCount int64
+		store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
+		var badgeCount int64
+		store.DB.Model(&model.UserBadge{}).Where("username = ?", target).Count(&badgeCount)
+		var friendCount int64
+		store.DB.Model(&model.Friend{}).Where("user_id = ?", target).Count(&friendCount)
+		info.Stats = ProfileStatsBrief{
+			TotalGames:        libCount,
+			TotalPlayHours:    float64(totalPlaySec) / 3600.0,
+			TotalAchievements: achCount,
+			TotalBadges:       badgeCount,
+			FriendsCount:      friendCount,
+		}
+		// 正在玩的游戏（内存 presence，实时态；零常驻 SQL，gamePlayingOf 内部只查一次 game 元数据）
+		if playing := gamePlayingOf(target); len(playing) > 0 {
+			info.PlayingGames = playing
 		}
 	}
 	return info, true
@@ -387,7 +435,7 @@ func (s *Server) handleProfileUpdate(c *Client, msg *protocol.Message) {
 
 	// 回推本人全部在线连接（多端同步），is_friend/remark 对自己无意义固定零值
 	// 集群模式：sendToUser 归口（总线定向信封覆盖跨实例的多端连接；原本地 GetAll 循环跨实例漏推）
-	info, ok := s.buildProfileInfo(c.username, c.username)
+	info, ok := s.buildProfileInfo(c.username, c.username, false) // 自我回推路径跳过游戏扩展（冗余）
 	if !ok {
 		s.sendError(c, "资料读取失败")
 		return
@@ -411,7 +459,7 @@ func (s *Server) handleProfileQuery(c *Client, msg *protocol.Message) {
 		s.sendError(c, "查询目标无效")
 		return
 	}
-	info, ok := s.buildProfileInfo(c.username, msg.ToUser)
+	info, ok := s.buildProfileInfo(c.username, msg.ToUser, true) // 外部查询路径包含游戏扩展（hover-card 好友预览）
 	if !ok {
 		s.sendError(c, "用户不存在")
 		return

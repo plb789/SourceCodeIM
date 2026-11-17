@@ -569,6 +569,69 @@ func gamePlayingUsers(gid uint) []string {
 	return out
 }
 
+// PlayingGameBrief 正在玩游戏的精简描述（hover-card 轻量预览用）
+type PlayingGameBrief struct {
+	GameID uint   `json:"game_id"`
+	Name   string `json:"name"`
+	Cover  string `json:"cover,omitempty"`
+}
+
+// gamePlayingOf 返回某用户正在玩的游戏列表（按心跳最新到最旧排序，最多 3 条）。
+// 空列表=当前没在玩任何游戏。只返回 gamePlayingTTL 新鲜窗口内的条目，TTL 过期自动丢弃。
+func gamePlayingOf(username string) []PlayingGameBrief {
+	if username == "" {
+		return nil
+	}
+	deadline := time.Now().Add(-gamePlayingTTL)
+	gamePlayMu.RLock()
+	set := gamePlaying[username]
+	if len(set) == 0 {
+		gamePlayMu.RUnlock()
+		return nil
+	}
+	// 拷贝 gameID + 心跳时刻，锁外排序
+	type snap struct {
+		gid uint
+		at  time.Time
+	}
+	list := make([]snap, 0, len(set))
+	for gid, t := range set {
+		if t.After(deadline) {
+			list = append(list, snap{gid, t})
+		}
+	}
+	gamePlayMu.RUnlock()
+	if len(list) == 0 {
+		return nil
+	}
+	// 按心跳降序（最新启动的排前），最多 3 条
+	sort.Slice(list, func(i, j int) bool { return list[i].at.After(list[j].at) })
+	if len(list) > 3 {
+		list = list[:3]
+	}
+	gids := make([]uint, len(list))
+	for i, s := range list {
+		gids[i] = s.gid
+	}
+	// 批量查游戏名（一次 SQL，避免 N+1）
+	var games []model.Game
+	store.DB.Where("id IN ?", gids).Find(&games)
+	gm := make(map[uint]*model.Game, len(games))
+	for i := range games {
+		gm[games[i].ID] = &games[i]
+	}
+	out := make([]PlayingGameBrief, 0, len(gids))
+	for _, s := range list {
+		if g, ok := gm[s.gid]; ok {
+			out = append(out, PlayingGameBrief{GameID: s.gid, Name: g.Name, Cover: g.Cover})
+		} else {
+			// 游戏记录被删了但 presence 还留着（罕见），兜底只给 ID
+			out = append(out, PlayingGameBrief{GameID: s.gid, Name: "未知游戏"})
+		}
+	}
+	return out
+}
+
 // RegisterGameRoutes 游戏中心路由注册（用户端 + 管理端归口一次挂载）
 func RegisterGameRoutes(s *Server) {
 	// 用户端（商店/库/下载）。资金/身份/隐私接口挂 guardGame（token 强校验收口，见 guardGame 注释）；
