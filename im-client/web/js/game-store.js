@@ -2058,15 +2058,25 @@
         var ov = document.createElement('div');
         ov.className = 'gp-mask';
         ov.innerHTML = '<div class="gp-modal gp-card-workshop">' +
-            '<div class="gp-modal-title">' + T('卡片工坊') +
-              '<span class="gp-points-badge" id="gpPointsBadge"></span>' +
+            '<div class="gp-modal-title">' +
+              '<span>' + T('卡片工坊') + '</span>' +
+              '<span class="gp-cw-points" id="gpPointsBadge">⚡ 0</span>' +
+              '<button class="gp-modal-x" id="gpCwCloseX" title="' + T('关闭') + '">×</button>' +
             '</div>' +
-            '<div class="gp-modal-body">' +
+            '<div class="gp-cw-head">' +
               '<div class="gp-cw-tabs">' +
-                '<button class="gp-cw-tab active" data-tab="draw">' + T('抽卡') + '</button>' +
-                '<button class="gp-cw-tab" data-tab="craft">' + T('合成徽章') + '</button>' +
-                '<button class="gp-cw-tab" data-tab="shop">' + T('积分商店') + '</button>' +
+                '<button class="gp-cw-tab active" data-tab="draw">' +
+                  '<span class="gp-cw-tab-ico">🎴</span><span>' + T('抽卡') + '</span>' +
+                '</button>' +
+                '<button class="gp-cw-tab" data-tab="craft">' +
+                  '<span class="gp-cw-tab-ico">🏅</span><span>' + T('合成徽章') + '</span>' +
+                '</button>' +
+                '<button class="gp-cw-tab" data-tab="shop">' +
+                  '<span class="gp-cw-tab-ico">🛒</span><span>' + T('积分商店') + '</span>' +
+                '</button>' +
               '</div>' +
+            '</div>' +
+            '<div class="gp-modal-body gp-cw-body">' +
               '<div class="gp-cw-panel" id="gpCwPanel"></div>' +
             '</div>' +
             '<div class="gp-modal-foot">' +
@@ -2080,7 +2090,8 @@
         var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
         document.addEventListener('keydown', _gpEsc);
         var points = (state.profile.basic && state.profile.basic.points != null) ? state.profile.basic.points : 0;
-        ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
+        ov.querySelector('#gpPointsBadge').textContent = '⚡ ' + points;
+        ov.querySelector('#gpCwCloseX').addEventListener('click', gpClose);
         ov.querySelector('#gpCwClose').addEventListener('click', gpClose);
         ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
         ov.querySelectorAll('.gp-cw-tab').forEach(function (tb) {
@@ -2097,20 +2108,28 @@
             else if (tab === 'craft') renderCraftPanel(panel);
             else renderShopPanel(panel);
         }
-        // 抽卡面板：选游戏 → 抽卡按钮 → 结果展示
+        // ================ 抽卡面板 ================
         function renderDrawPanel(panel) {
-            panel.innerHTML = '<div class="gp-cw-draw">' +
-                '<div class="gp-cw-hint">' + T('每次抽卡消耗 50 积分，按稀有度随机掉落，有几率获得闪卡') + '</div>' +
-                '<select id="gpDrawGame"></select>' +
-                '<button class="gp-btn primary gp-cw-draw-btn" id="gpDrawBtn">' + T('抽卡（50 积分）') + '</button>' +
-                '<div class="gp-cw-result" id="gpDrawResult"></div>' +
-              '</div>';
-            // 加载游戏列表（用商店列表简化）
+            panel.innerHTML =
+                '<div class="gp-cw-draw">' +
+                  '<div class="gp-cw-hint">' + T('每次抽卡消耗 50 积分，按稀有度随机掉落，有几率获得闪卡') + '</div>' +
+                  '<div class="gp-cw-game-pick">' +
+                    '<select id="gpDrawGame"></select>' +
+                  '</div>' +
+                  '<div class="gp-cw-draw-stage" id="gpDrawStage">' +
+                    '<div class="gp-cw-card-placeholder">' +
+                      '<div class="gp-cw-card-ph">' + T('选择游戏后开始抽卡') + '</div>' +
+                    '</div>' +
+                  '</div>' +
+                  '<button class="gp-btn primary gp-cw-draw-btn" id="gpDrawBtn">🎴 ' + T('抽卡（50 积分）') + '</button>' +
+                '</div>';
+            // 加载游戏列表
             api('GET', '/api/game/list?page=1&size=50').then(function (res) {
                 var sel = panel.querySelector('#gpDrawGame');
                 if (res && res.ok && res.data && res.data.list) {
                     res.data.list.forEach(function (g) {
-                        var opt = document.createElement('option'); opt.value = g.id; opt.textContent = g.name;
+                        var opt = document.createElement('option');
+                        opt.value = g.id; opt.textContent = g.name;
                         sel.appendChild(opt);
                     });
                 }
@@ -2119,24 +2138,31 @@
                 var gid = parseInt(panel.querySelector('#gpDrawGame').value, 10);
                 if (!gid) { toast(T('请选择游戏')); return; }
                 api('POST', '/api/card/draw', { game_id: gid }).then(function (res) {
-                    var rb = panel.querySelector('#gpDrawResult');
+                    var stage = panel.querySelector('#gpDrawStage');
                     if (res && res.ok) {
                         var c = res.data.card;
-                        rb.innerHTML = '<div class="gp-draw-result-card gp-card-rarity-' + c.rarity + (res.data.foil ? ' gp-card-foil' : '') + '">' +
-                            (c.image ? '<img src="' + assetUrl(c.image) + '">' : '<b>' + String(c.name || '?').charAt(0) + '</b>') +
-                            '<div class="gp-draw-result-name">' + c.name + '</div>' +
-                            '<div class="gp-draw-result-rarity">' + (CARD_RARITY_LABEL[c.rarity] || '') + (res.data.foil ? ' ✨' + T('闪卡') : '') + '</div>' +
-                          '</div>';
-                        // 更新积分显示
+                        stage.innerHTML =
+                            '<div class="gp-draw-result gp-card-rarity-' + c.rarity + (res.data.foil ? ' gp-card-foil' : '') + '">' +
+                              '<div class="gp-draw-card-face">' +
+                                (c.image ? '<img src="' + assetUrl(c.image) + '">' : '<b>' + String(c.name || '?').charAt(0) + '</b>') +
+                              '</div>' +
+                              '<div class="gp-draw-card-info">' +
+                                '<div class="gp-draw-card-name">' + c.name + '</div>' +
+                                '<div class="gp-draw-card-rarity">' +
+                                  (CARD_RARITY_LABEL[c.rarity] || '') +
+                                  (res.data.foil ? '<span class="gp-foil-badge">✨ ' + T('闪卡') + '</span>' : '') +
+                                '</div>' +
+                              '</div>' +
+                            '</div>';
                         points = res.data.points_left;
-                        ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
+                        ov.querySelector('#gpPointsBadge').textContent = '⚡ ' + points;
                     } else {
-                        rb.innerHTML = '<div class="gp-cw-err">' + ((res && res.err) || T('抽卡失败')) + '</div>';
+                        stage.innerHTML = '<div class="gp-cw-err">' + ((res && res.err) || T('抽卡失败')) + '</div>';
                     }
                 });
             });
         }
-        // 合成徽章面板：列出徽章模板 + 所需卡片 + 合成按钮
+        // ================ 合成徽章面板 ================
         function renderCraftPanel(panel) {
             panel.innerHTML = '<div class="gp-cw-craft" id="gpCraftList">' + T('加载中…') + '</div>';
             api('GET', '/api/badge/templates').then(function (res) {
@@ -2144,52 +2170,69 @@
                 var box = panel.querySelector('#gpCraftList');
                 if (list.length === 0) { box.innerHTML = '<div class="gp-empty">' + T('暂无可合成的徽章') + '</div>'; return; }
                 box.innerHTML = '';
-                // 同时加载用户卡片背包用于判断集齐
                 api('GET', '/api/profile/cards?username=' + encodeURIComponent(username)).then(function (cres) {
                     var holdMap = {};
                     (cres && cres.ok && cres.data && cres.data.groups || []).forEach(function (g) {
                         g.items.forEach(function (it) { holdMap[it.card.id] = it; });
                     });
                     list.forEach(function (tpl) {
-                        // 查该卡组卡片
                         api('GET', '/api/cards?game_id=' + tpl.game_id).then(function (cardsRes) {
                             var allCards = (cardsRes && cardsRes.ok && cardsRes.data && cardsRes.data.list) || [];
                             var setCards = allCards.filter(function (c) { return c.card_set === tpl.card_set; });
-                            var haveAll = setCards.length > 0 && setCards.every(function (c) { return holdMap[c.id] && holdMap[c.id].count >= 1; });
-                            var tplDiv = el('div', 'gp-craft-item');
+                            var owned = setCards.filter(function (c) { return holdMap[c.id] && holdMap[c.id].count >= 1; }).length;
+                            var total = setCards.length;
+                            var haveAll = total > 0 && owned === total;
+                            var progress = total > 0 ? Math.round(owned / total * 100) : 0;
+
+                            var item = el('div', 'gp-craft-item');
+                            // 头部
                             var head = el('div', 'gp-craft-head');
-                            head.appendChild(el('span', 'gp-craft-name', tpl.name));
-                            head.appendChild(el('span', 'gp-craft-reward', T('奖励') + ': +' + tpl.exp_reward + T('经验') + (tpl.points_reward > 0 ? ' +' + tpl.points_reward + T('积分') : '')));
-                            tplDiv.appendChild(head);
+                            var nameBox = el('div', 'gp-craft-head-left');
+                            nameBox.appendChild(el('div', 'gp-craft-name', '🏅 ' + tpl.name));
+                            nameBox.appendChild(el('div', 'gp-craft-reward',
+                                T('奖励') + ': +' + tpl.exp_reward + T('经验') +
+                                (tpl.points_reward > 0 ? ' · +' + tpl.points_reward + '⚡' : '')));
+                            head.appendChild(nameBox);
+                            var progBox = el('div', 'gp-craft-progress');
+                            progBox.innerHTML =
+                                '<div class="gp-craft-progress-bar"><div class="gp-craft-progress-fill" style="width:' + progress + '%"></div></div>' +
+                                '<span>' + owned + '/' + total + '</span>';
+                            head.appendChild(progBox);
+                            item.appendChild(head);
+                            // 卡片网格
                             var need = el('div', 'gp-craft-cards');
                             setCards.forEach(function (c) {
                                 var h = holdMap[c.id] && holdMap[c.id].count >= 1;
                                 var cc = el('div', 'gp-craft-card' + (h ? ' have' : ' miss'));
-                                cc.textContent = c.name + (h ? ' ✓' : ' ✗');
+                                cc.innerHTML =
+                                    (c.image ? '<div class="gp-craft-card-img"><img src="' + assetUrl(c.image) + '"></div>' : '<div class="gp-craft-card-img gp-craft-ph">' + String(c.name || '?').charAt(0) + '</div>') +
+                                    '<div class="gp-craft-card-name">' + c.name + '</div>' +
+                                    '<div class="gp-craft-card-ic">' + (h ? '✓' : '✗') + '</div>';
                                 need.appendChild(cc);
                             });
-                            tplDiv.appendChild(need);
-                            var craftBtn = el('button', 'gp-btn' + (haveAll ? ' primary' : ''), haveAll ? T('合成徽章') : T('卡片未集齐'));
+                            item.appendChild(need);
+                            // 合成按钮
+                            var craftBtn = el('button', 'gp-btn' + (haveAll ? ' primary' : ''),
+                                haveAll ? T('合成徽章') : T('卡片未集齐'));
                             craftBtn.disabled = !haveAll;
                             craftBtn.addEventListener('click', function () {
                                 api('POST', '/api/badge/craft', { card_set: tpl.card_set }).then(function (r) {
                                     if (r && r.ok) {
                                         toast(T('合成成功！获得 ') + tpl.name);
                                         renderCraftPanel(panel);
-                                        // 刷新积分
                                         points = (state.profile.basic && state.profile.basic.points) || 0;
-                                        ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
+                                        ov.querySelector('#gpPointsBadge').textContent = '⚡ ' + points;
                                     } else { toast((r && r.err) || T('合成失败')); }
                                 });
                             });
-                            tplDiv.appendChild(craftBtn);
-                            box.appendChild(tplDiv);
+                            item.appendChild(craftBtn);
+                            box.appendChild(item);
                         });
                     });
                 });
             });
         }
-        // 积分商店面板
+        // ================ 积分商店面板 ================
         function renderShopPanel(panel) {
             var items = [
                 { id: 'avatar_frame', name: T('头像框'), price: 200, icon: '🖼️', desc: T('为资料页头像添加精美边框') },
@@ -2202,17 +2245,22 @@
             var box = el('div', 'gp-shop-list');
             items.forEach(function (it) {
                 var card = el('div', 'gp-shop-item');
-                card.appendChild(el('div', 'gp-shop-icon', it.icon));
-                card.appendChild(el('div', 'gp-shop-name', it.name));
-                card.appendChild(el('div', 'gp-shop-desc', it.desc));
-                var buy = el('button', 'gp-btn primary', T('购买') + ' (' + it.price + T('积分') + ')');
-                buy.addEventListener('click', function () {
+                card.innerHTML =
+                    '<div class="gp-shop-ic">' + it.icon + '</div>' +
+                    '<div class="gp-shop-info">' +
+                      '<div class="gp-shop-name">' + it.name + '</div>' +
+                      '<div class="gp-shop-desc">' + it.desc + '</div>' +
+                    '</div>' +
+                    '<div class="gp-shop-actions">' +
+                      '<div class="gp-shop-price">⚡ ' + it.price + '</div>' +
+                      '<button class="gp-btn primary gp-shop-buy">' + T('购买') + '</button>' +
+                    '</div>';
+                card.querySelector('.gp-shop-buy').addEventListener('click', function () {
                     api('POST', '/api/points/shop/buy', { item_id: it.id }).then(function (res) {
                         if (res && res.ok) {
                             toast(T('购买成功！'));
                             points = res.data.points_left;
-                            ov.querySelector('#gpPointsBadge').textContent = T('积分') + ': ' + points;
-                            // 展示柜主题：购买后自动激活
+                            ov.querySelector('#gpPointsBadge').textContent = '⚡ ' + points;
                             if (it.id.indexOf('showcase_theme_') === 0) {
                                 api('PUT', '/api/profile/basic', { profile_theme: it.id }).then(function () {
                                     toast(T('主题已应用！'));
@@ -2222,7 +2270,6 @@
                         } else { toast((res && res.err) || T('购买失败')); }
                     });
                 });
-                card.appendChild(buy);
                 box.appendChild(card);
             });
             panel.appendChild(box);
@@ -2403,7 +2450,10 @@
               '<div class="gp-modal-body gp-exp-log-body gp-exp-timeline" id="gpExpTimeline">' +
                 '<div class="gp-exp-loading">' + T('加载中…') + '</div>' +
               '</div>' +
-              '<div class="gp-exp-log-foot" id="gpExpFoot"></div>' +
+              '<div class="gp-modal-foot">' +
+                '<span class="gp-exp-foot-total" id="gpExpFoot"></span>' +
+                '<button class="gp-btn" id="gpExpClose">' + T('关闭') + '</button>' +
+              '</div>' +
             '</div>';
         document.body.appendChild(ov);
 
@@ -2420,6 +2470,7 @@
         var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
         document.addEventListener('keydown', _gpEsc);
         ov.querySelector('#gpExpCloseX').addEventListener('click', gpClose);
+        ov.querySelector('#gpExpClose').addEventListener('click', gpClose);
         ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
 
         // 填充顶部等级概览（从资料页已加载的数据取，避免额外请求）

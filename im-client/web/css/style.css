@@ -3460,9 +3460,7 @@ html.m .mobile-plus-panel:not(.hidden) {
     display: flex;
     align-items: center;
     justify-content: space-between;
-}
-.gp-modal-title .gp-points-badge {
-    float: none;
+    position: relative; /* 给 .gp-modal-x 关闭按钮定位基准 */
 }
 .gp-modal-body {
     font-size: 13px;
@@ -3536,9 +3534,9 @@ html.m .mobile-plus-panel:not(.hidden) {
 }
 
 /* 弹窗标题栏：左侧标题 + 右侧关闭按钮 + 可选副标题 */
+/* 经验记录弹窗标题栏：留出副标题空间 */
 .gp-exp-log-modal .gp-modal-title {
     gap: 8px;
-    position: relative;
 }
 .gp-exp-title-sub {
     font-size: 12px;
@@ -3841,14 +3839,406 @@ html.m .mobile-plus-panel:not(.hidden) {
     letter-spacing: 1px;
 }
 
-/* 底部统计 */
-.gp-exp-log-foot {
-    border-top: 1px solid var(--divider, var(--border));
-    padding: 8px 16px;
-    font-size: 11px;
+/* 底部统计文字（在 .gp-modal-foot 内左侧） */
+.gp-exp-foot-total {
+    font-size: 12px;
+    opacity: 0.55;
+    flex: 1;
+    text-align: left;
+}
+
+/* ==================== 卡片工坊弹窗（抽卡/合成徽章/积分商店） ==================== */
+.gp-card-workshop {
+    width: 640px !important;
+    max-width: 90vw !important;
+    max-height: 88vh;
+}
+
+/* 弹窗标题栏：积分徽标 + 关闭按钮 */
+.gp-cw-points {
+    margin-left: auto;
+    margin-right: 28px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    padding: 3px 12px;
+    border-radius: 12px;
+    letter-spacing: 0.3px;
+}
+
+/* 头部区域（tab 栏） */
+.gp-cw-head {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--divider, var(--border));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 4%, transparent), transparent);
+}
+.gp-cw-tabs {
+    display: flex;
+    gap: 4px;
+}
+.gp-cw-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    font-family: inherit;
+}
+.gp-cw-tab:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+.gp-cw-tab.active {
+    background: var(--primary);
+    color: #fff;
+}
+.gp-cw-tab-ico {
+    font-size: 14px;
+    line-height: 1;
+}
+
+/* 弹窗 body 滚动容器 */
+.gp-cw-body {
+    flex: 1;
+    min-height: 320px;
+    padding: 16px;
+}
+
+/* ================ 抽卡面板 ================ */
+.gp-cw-draw {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.gp-cw-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    line-height: 1.6;
+}
+.gp-cw-game-pick select {
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    font-family: inherit;
+}
+.gp-cw-game-pick select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
+    outline: none;
+}
+
+/* 抽卡舞台 */
+.gp-cw-draw-stage {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 220px;
+    padding: 16px;
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--primary) 3%, transparent);
+}
+.gp-cw-card-placeholder {
     opacity: 0.5;
     text-align: center;
+}
+.gp-cw-card-ph {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 40px;
+}
+
+/* 抽卡结果卡 */
+.gp-draw-result {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    padding: 20px;
+    border-radius: 10px;
+    border: 3px solid;
+    background: var(--panel-bg);
+    animation: gp-card-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes gp-card-pop {
+    from { opacity: 0; transform: scale(0.8); }
+    to   { opacity: 1; transform: scale(1); }
+}
+.gp-draw-card-face {
+    width: 110px;
+    height: 110px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--gs-btn, var(--primary)), var(--gs-btn-deep, var(--primary)));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
     flex-shrink: 0;
+}
+.gp-draw-card-face img {
+    width: 100%; height: 100%; object-fit: cover;
+}
+.gp-draw-card-face b {
+    color: #fff;
+    font-size: 42px;
+    font-weight: 700;
+}
+.gp-draw-card-info {
+    flex: 1;
+    text-align: left;
+}
+.gp-draw-card-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+.gp-draw-card-rarity {
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.gp-foil-badge {
+    background: linear-gradient(135deg, #f59e0b, #a855f7);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+/* 稀有度颜色边框（沿用旧 CARD_RARITY_LABEL 映射） */
+.gp-card-rarity-0 { border-color: #9ca3af; }
+.gp-card-rarity-1 { border-color: #22c55e; }
+.gp-card-rarity-2 { border-color: #3b82f6; }
+.gp-card-rarity-3 { border-color: #a855f7; }
+.gp-card-rarity-4 { border-color: #f59e0b; }
+.gp-card-foil {
+    box-shadow: 0 0 16px color-mix(in srgb, #f59e0b 40%, transparent);
+}
+
+/* 抽卡按钮 */
+.gp-cw-draw-btn {
+    width: 100%;
+    padding: 11px;
+    font-size: 14px;
+    font-weight: 600;
+}
+.gp-cw-err {
+    color: #ef4444;
+    font-size: 13px;
+    text-align: center;
+    padding: 20px;
+}
+
+/* ================ 合成徽章面板 ================ */
+.gp-cw-craft {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.gp-craft-item {
+    padding: 14px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+.gp-craft-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.gp-craft-head-left {
+    min-width: 0;
+}
+.gp-craft-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 3px;
+}
+.gp-craft-reward {
+    font-size: 11px;
+    color: var(--primary);
+}
+.gp-craft-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    min-width: 120px;
+}
+.gp-craft-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--divider, var(--border));
+    border-radius: 3px;
+    overflow: hidden;
+}
+.gp-craft-progress-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 3px;
+    transition: width 0.4s ease;
+}
+.gp-craft-progress span {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 36px;
+    text-align: right;
+}
+
+/* 卡片网格 */
+.gp-craft-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.gp-craft-card {
+    position: relative;
+    padding: 6px;
+    border-radius: 6px;
+    border: 2px solid var(--border);
+    text-align: center;
+    transition: border-color 0.15s, opacity 0.15s;
+}
+.gp-craft-card.have {
+    border-color: #22c55e;
+    opacity: 1;
+}
+.gp-craft-card.miss {
+    border-color: #ef4444;
+    opacity: 0.5;
+}
+.gp-craft-card-img {
+    width: 100%;
+    aspect-ratio: 1/1;
+    border-radius: 4px;
+    background: var(--divider, var(--border));
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 4px;
+}
+.gp-craft-card-img img {
+    width: 100%; height: 100%; object-fit: cover;
+}
+.gp-craft-ph {
+    background: linear-gradient(135deg, var(--gs-btn, var(--primary)), var(--gs-btn-deep, var(--primary)));
+    color: #fff;
+    font-size: 18px;
+    font-weight: 700;
+}
+.gp-craft-card-name {
+    font-size: 10px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gp-craft-card-ic {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 16px;
+    color: #fff;
+}
+.gp-craft-card.have .gp-craft-card-ic {
+    background: #22c55e;
+}
+.gp-craft-card.miss .gp-craft-card-ic {
+    background: #ef4444;
+}
+
+/* ================ 积分商店面板 ================ */
+.gp-shop-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.gp-shop-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    transition: border-color 0.15s, transform 0.12s;
+}
+.gp-shop-item:hover {
+    border-color: var(--primary);
+}
+.gp-shop-ic {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+}
+.gp-shop-info {
+    flex: 1;
+    min-width: 0;
+}
+.gp-shop-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 3px;
+}
+.gp-shop-desc {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+.gp-shop-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.gp-shop-price {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--primary);
+}
+.gp-shop-buy {
+    padding: 5px 16px;
+    font-size: 12px;
 }
 
 /* ==================== 阶段二百九十六 P2.7：艺术作品独立展示柜 ==================== */
