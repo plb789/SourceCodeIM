@@ -7627,7 +7627,9 @@
             rv.gid = gid; rv.list = []; rv.page = 0; rv.has_more = false;
             rv.total = 0; rv.positive = 0; rv.summary = '';
             rv.rendered = 0; // 渲染游标归位（renderReviews 走全量重建覆盖骨架/旧列表）
-            if (fresh) rv.mine = null;
+            // 切换游戏时强制清掉旧的 loadingRev，避免上一次请求未完成就返回首页/重进时
+            // 新请求因 rv.loadingRev 仍为 true 被防重入直接 return，导致骨架屏卡住永远不覆盖
+            if (fresh) { rv.loadingRev = false; rv.mine = null; }
         }
         if (rv.loadingRev) return; // 无限滚动防重入（IO 可能在加载中反复触发）
         rv.loadingRev = true;
