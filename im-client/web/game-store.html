@@ -4816,6 +4816,15 @@
            style.css 全局把 ::-webkit-scrollbar 归零，禁止在此另开伪元素覆盖！
            启动时注册：osbInit($('gsStoreScroll'/'gsLibSide'/'gsLibMain'/'gsPropPanes'/'gsSetPanes'...))
            动态弹窗内滚动容器在 appendChild 后即时 osbInit */
+
+        /* ===== 未登录状态优化：只保留商店浏览能力 =====
+           body.gs-logged-out 由 game-store.js 根据 username 自动挂/摘：
+           - 隐藏左侧导航栏（商店页全宽展示）
+           - 隐藏需要登录的视图入口（库/下载/联机/个人资料）
+           - 隐藏顶部工具栏账号区 */
+        body.gs-logged-out .gs-nav { display: none; }
+        body.gs-logged-out .gs-main { /* gs-body flex 布局下，无左侧 nav 时主区自动全宽 */ }
+        body.gs-logged-out #gsUser { display: none; }
     </style>
 </head>
 <body>

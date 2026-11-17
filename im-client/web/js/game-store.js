@@ -71,6 +71,30 @@
     var username = (function () { var a = getAuth(); return (a && a.u) || ''; })();
     var myNickname = ''; // 当前登录用户昵称（资料接口异步拉取；SmartSteamEmu 启动写 ini 的 PersonaName，空回退账号）
 
+    // ===== 未登录状态可见性初始化 =====
+    // 未登录时只展示商店浏览能力，隐藏左侧导航栏/顶部账号区/非商店视图
+    function initLoginVisibility() {
+        if (!username) {
+            document.body.classList.add('gs-logged-out');
+            // 跨窗口登录感知：每 3 秒检查一次 im_auth 是否出现
+            // （用户可能在游戏中心打开后才在主窗口完成登录）
+            var checkLoginTimer = setInterval(function () {
+                if (username) { clearInterval(checkLoginTimer); return; } // 已登录不再检查
+                try {
+                    var a = getAuth();
+                    if (a && a.u) {
+                        username = a.u;
+                        document.body.classList.remove('gs-logged-out');
+                        refreshGsUserArea(); // 刷新顶部账号区头像昵称
+                        loadLibrary();       // 拉取游戏库状态
+                        clearInterval(checkLoginTimer);
+                    }
+                } catch (_) { /* 忽略 */ }
+            }, 3000);
+        }
+    }
+    initLoginVisibility();
+
     // ==================== 常量 ====================
     var PAGE_SIZE = 24;                                                              // 商店分页大小
     var LIB_STATE_TEXT = { 0: T('未安装'), 1: T('下载中'), 2: T('已暂停'), 3: T('已安装'), 4: T('待更新') }; // 库状态文案
@@ -675,6 +699,10 @@
     function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
     function showView(name) {
+        // 未登录保护：只能停留在商店视图（详情视图归属商店也允许）
+        if (!username && name !== 'store' && name !== 'detail') {
+            name = 'store';
+        }
         ['store', 'library', 'downloads', 'detail', 'online', 'profile'].forEach(function (v) {
             $('gsView' + cap(v)).classList.toggle('hidden', v !== name);
         });
