@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -1790,8 +1791,14 @@ func (s *Server) HandleProfileCommentsPost(w http.ResponseWriter, r *http.Reques
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil { profileFail(w, "参数错误"); return }
 	if body.ProfileUser == "" { profileFail(w, "目标用户无效"); return }
-	if len(body.Content) == 0 || len(body.Content) > 500 {
-		profileFail(w, "留言内容 1-500 字"); return
+	if len(body.Content) == 0 { profileFail(w, "留言内容不能为空"); return }
+	// 纵深防御：后端强制 HTML 清洗（与评测同策略，复用 sanitizeReviewHTML）
+	body.Content = strings.TrimSpace(sanitizeReviewHTML(body.Content))
+	if body.Content == "" {
+		profileFail(w, "留言内容不合法"); return
+	}
+	if utf8.RuneCountInString(body.Content) > 500 {
+		profileFail(w, "留言内容最长 500 字"); return
 	}
 
 	// 1. 目标用户是否允许留言

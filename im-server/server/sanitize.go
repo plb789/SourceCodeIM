@@ -7,18 +7,20 @@ package server
 //  1. 白名单思维：放行标签显式列出，其他一律剥离壳保留内文
 //  2. RE2 兼容：所有正则不使用 \1 反向引用（Go regexp 引擎不支持）
 //  3. 安全 URL 共用：safeURL 公告+Game 共用，一处修改全局生效
-//  4. 占位符保护：放行标签先替换为 \x00 占位符，再统一剥离外壳，最后还原
-//     （避免正则顺序依赖导致安全标签被误剥）
 //
 // 调用链：
-//  公告正文 → gameNoticeContentClean （gameadmin.go 既有函数，复用 safeURL）
-//  Game 介绍 → gameDescContentClean （本次新增，白名单更大）
+//  公告正文   → gameNoticeContentClean    （正则法，白名单较小）
+//  Game 介绍  → gameDescContentClean      （正则法，白名单含 img/table）
+//  评测/回复  → sanitizeReviewHTML        （DOM 树法，支持 span+style+font）
+//  资料页留言 → sanitizeReviewHTML        （同上）
 // ============================================================================
 
 import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
 // safeURL 统一 URL 安全校验（公告 + Game 共用）
@@ -218,3 +220,230 @@ func extractAttr(attrs, name string) string {
 
 // ----------------------------------------------------------------------------
 // 兼容旧语法：[img]URL → <img src="URL">（在客户端 buildDetailDesc 里做，服务端不需要）
+
+// ----------------------------------------------------------------------------
+// sanitizeReviewHTML 评测/回复/资料页留言 HTML 消毒（DOM 树法）
+//
+// 与 gameDescContentClean 的区别：
+//   - 白名单含 span + font（execCommand foreColor 在 Firefox 里产 <span style="...">，
+//     在 Chrome 里产 <font color="...">，两种都必须保留）
+//   - 允许有限 style 属性（color/background-color/font-weight/font-style/text-decoration）
+//   - 不含 img/table（评测不支持贴图和表格渲染）
+//
+// 与前端 sanitizeRevHtml 同策略，后端强制兜底（绕过前端直接 curl API 也安全）。
+//
+// 调用链：
+//   game.go   HandleGameReviewUpsert       → sanitizeReviewHTML  （评测提交）
+//   game.go   HandleGameReviewReplyUpsert  → sanitizeReviewHTML  （评测回复提交）
+//   profile.go HandleProfileCommentsPost    → sanitizeReviewHTML  （资料页留言提交）
+
+var reviewAllowedTags = map[string]bool{
+	"b": true, "strong": true, "i": true, "em": true,
+	"u": true, "s": true, "strike": true, "del": true, "mark": true,
+	"p": true, "br": true, "div": true, "blockquote": true,
+	"pre": true, "code": true, "hr": true,
+	"ul": true, "ol": true, "li": true,
+	"h1": true, "h2": true, "h3": true, "h4": true,
+	"a": true, "font": true, "span": true,
+}
+
+var reviewDangerTags = map[string]bool{
+	"script": true, "iframe": true, "object": true, "embed": true,
+	"applet": true, "form": true, "input": true, "textarea": true,
+	"button": true, "select": true, "style": true, "link": true,
+	"meta": true, "base": true, "body": true, "head": true,
+	"html": true, "svg": true, "math": true, "template": true,
+	"slot": true, "img": true, "video": true, "audio": true,
+	"canvas": true, "map": true, "area": true, "noscript": true,
+}
+
+// reviewAllowedStyleProps — span/style 中允许的 CSS 属性
+var reviewAllowedStyleProps = map[string]bool{
+	"color":                true,
+	"background-color":     true,
+	"font-weight":          true,
+	"font-style":           true,
+	"text-decoration":      true,
+	"text-decoration-line": true,
+}
+
+// sanitizeReviewHTML 清洗评测内容 HTML：后端强制兜底，与前端同策略。
+// 纯文本直接返回（性能最优路径），有 HTML 标签则走白名单递归清洗。
+func sanitizeReviewHTML(input string) string {
+	if input == "" {
+		return input
+	}
+	hasHTML := strings.Contains(input, "<")
+	if !hasHTML {
+		return input
+	}
+
+	doc, err := html.Parse(strings.NewReader(input))
+	if err != nil {
+		return input
+	}
+
+	// 后序遍历清洗
+	var walk func(n *html.Node)
+	walk = func(n *html.Node) {
+		for c := n.FirstChild; c != nil; {
+			next := c.NextSibling
+			walk(c)
+			c = next
+		}
+		if n.Type != html.ElementNode {
+			return
+		}
+		tag := strings.ToLower(n.Data)
+		// html/head/body 是 html.Parse 自动产生的结构标签，跳过白名单/黑名单检查
+		if tag == "html" || tag == "head" || tag == "body" {
+			return
+		}
+		if reviewDangerTags[tag] {
+			if tag == "script" || tag == "style" || tag == "svg" {
+				if n.Parent != nil {
+					n.Parent.RemoveChild(n)
+				}
+				return
+			}
+			if n.Parent != nil {
+				parent := n.Parent
+				var children []*html.Node
+				for c := n.FirstChild; c != nil; {
+					next := c.NextSibling
+					children = append(children, c)
+					c = next
+				}
+				parent.RemoveChild(n)
+				for _, child := range children {
+					if child.Parent != nil {
+						child.Parent.RemoveChild(child)
+					}
+					parent.AppendChild(child)
+				}
+			}
+			return
+		}
+		if !reviewAllowedTags[tag] {
+			if n.Parent != nil {
+				parent := n.Parent
+				var children []*html.Node
+				for c := n.FirstChild; c != nil; {
+					next := c.NextSibling
+					children = append(children, c)
+					c = next
+				}
+				parent.RemoveChild(n)
+				for _, child := range children {
+					if child.Parent != nil {
+						child.Parent.RemoveChild(child)
+					}
+					parent.AppendChild(child)
+				}
+			}
+			return
+		}
+		newAttrs := make([]html.Attribute, 0, len(n.Attr))
+		for _, attr := range n.Attr {
+			name := strings.ToLower(attr.Key)
+			val := attr.Val
+			switch tag {
+			case "a":
+				if name == "href" {
+					lowVal := strings.ToLower(strings.TrimSpace(val))
+					if strings.HasPrefix(lowVal, "javascript:") ||
+						strings.HasPrefix(lowVal, "data:") ||
+						strings.HasPrefix(lowVal, "vbscript:") {
+						continue
+					}
+					if !strings.HasPrefix(lowVal, "http://") &&
+						!strings.HasPrefix(lowVal, "https://") &&
+						!strings.HasPrefix(lowVal, "mailto:") &&
+						!strings.HasPrefix(lowVal, "/") &&
+						!strings.HasPrefix(lowVal, "#") {
+						continue
+					}
+					newAttrs = append(newAttrs, attr)
+				} else if name == "target" {
+					newAttrs = append(newAttrs, attr)
+				}
+			case "font":
+				if name == "color" {
+					matched, _ := regexp.MatchString(`^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})|[a-zA-Z]+)$`, val)
+					if matched {
+						newAttrs = append(newAttrs, attr)
+					}
+				}
+			case "span", "div", "p", "blockquote":
+				if name == "style" {
+					safe := cleanReviewStyle(val)
+					if safe != "" {
+						newAttrs = append(newAttrs, html.Attribute{Key: "style", Val: safe})
+					}
+				}
+			}
+		}
+		n.Attr = newAttrs
+	}
+	walk(doc)
+
+	var buf strings.Builder
+	body := findBody(doc)
+	if body != nil {
+		for c := body.FirstChild; c != nil; c = c.NextSibling {
+			_ = html.Render(&buf, c)
+		}
+	}
+
+	// 清洗后为空（全是危险标签被剥离）→ 返回空字符串让上游非空校验拦截
+	return strings.TrimSpace(buf.String())
+}
+
+func findBody(n *html.Node) *html.Node {
+	if n.Type == html.ElementNode && strings.EqualFold(n.Data, "body") {
+		return n
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if found := findBody(c); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// cleanReviewStyle 从 style 字符串中提取允许的 CSS 属性
+func cleanReviewStyle(style string) string {
+	allowed := strings.Builder{}
+	decls := strings.Split(style, ";")
+	for _, decl := range decls {
+		parts := strings.SplitN(strings.TrimSpace(decl), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		prop := strings.ToLower(strings.TrimSpace(parts[0]))
+		val := strings.TrimSpace(parts[1])
+		if !reviewAllowedStyleProps[prop] {
+			continue
+		}
+		lowVal := strings.ToLower(val)
+		if strings.Contains(lowVal, "url(") ||
+			strings.Contains(lowVal, "expression(") ||
+			strings.Contains(lowVal, "javascript:") ||
+			strings.Contains(lowVal, "import ") {
+			continue
+		}
+		if prop == "color" || prop == "background-color" {
+			matched, _ := regexp.MatchString(`^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})|rgb(a)?\s*\([^)]+\)|hsl(a)?\s*\([^)]+\)|[a-zA-Z]+)$`, val)
+			if !matched {
+				continue
+			}
+		}
+		if allowed.Len() > 0 {
+			allowed.WriteString(";")
+		}
+		allowed.WriteString(prop)
+		allowed.WriteString(":")
+		allowed.WriteString(val)
+	}
+	return allowed.String()
+}

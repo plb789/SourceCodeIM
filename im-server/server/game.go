@@ -2229,6 +2229,12 @@ func (s *Server) HandleGameReviewUpsert(w http.ResponseWriter, r *http.Request) 
 		adminFail(w, http.StatusBadRequest, "评测内容不能为空")
 		return
 	}
+	// 后端强制 HTML 清洗（绕过前端直接调 API 也安全）
+	content = sanitizeReviewHTML(content)
+	if content == "" {
+		adminFail(w, http.StatusBadRequest, "评测内容不合法")
+		return
+	}
 	if utf8.RuneCountInString(content) > 2000 {
 		adminFail(w, http.StatusBadRequest, "评测内容过长（限 2000 字）")
 		return
@@ -2416,6 +2422,12 @@ func (s *Server) HandleGameReviewReplyUpsert(w http.ResponseWriter, r *http.Requ
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
 		adminFail(w, http.StatusBadRequest, "回复内容不能为空")
+		return
+	}
+	// 回复虽然前端 createTextNode 自动 escape，但后端也强制 sanitize（纵深防御）
+	content = sanitizeReviewHTML(content)
+	if content == "" {
+		adminFail(w, http.StatusBadRequest, "回复内容不合法")
 		return
 	}
 	if utf8.RuneCountInString(content) > 500 {

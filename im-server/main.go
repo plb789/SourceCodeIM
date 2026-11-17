@@ -284,6 +284,14 @@ func main() {
 		// 不符的资源当脚本/样式执行（攻击者把 HTML 改名 .png 上传也无法借嗅探执行）。
 		// 仅影响响应头，类型正确的 HTML/JS/CSS/媒体零变化
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// 评测 HTML 富文本支持后追加：HTML 入口加点击劫持防护 + 温和 CSP
+		// CSP 不限制 script-src/style-src（会破坏内联脚本与 execCommand 产生的内联 style），
+		// 仅封堵 object/base-uri 等与富文本 XSS 无关的向量
+		if strings.HasSuffix(r.URL.Path, ".html") || r.URL.Path == "/" {
+			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+			w.Header().Set("Content-Security-Policy", "object-src 'none'; base-uri 'self'; form-action 'self'")
+			w.Header().Set("Referrer-Policy", "same-origin")
+		}
 		// 阶段二百八十二（安全加固）：/static/upload/** 非内联白名单文件强制 attachment——
 		// 浏览器直链打开即触发下载而非渲染执行，封堵 .html/.svg 等可渲染扩展名的存储型 XSS；
 		// 图片/视频/音频白名单内保持内联（聊天气泡/商店详情/公告图/语音播放不受影响）。

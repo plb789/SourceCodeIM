@@ -299,6 +299,112 @@
     $('gsModalCancel').addEventListener('click', closeModal);
     // 点击遮罩不关闭（与主窗口一致，防误触丢失确认）
 
+    // ==================== 站外链接安全提醒 ====================
+    // 判断一个 URL 是否为站外链接（非当前域名、非相对路径锚点）
+    function isExternalUrl(url) {
+        if (!url) return false;
+        // 相对路径、锚点、javascript: 等非 http(s) 协议不视为外链
+        if (!/^https?:\/\//i.test(url)) return false;
+        try {
+            var u = new URL(url);
+            return u.origin !== location.origin;
+        } catch (e) { return false; }
+    }
+
+    // 链接域名白名单客户端缓存（chat.js 同源实现：/api/link/whitelist 公开拉取，60s TTL）
+    // 命中白名单的可信域名跳过安全确认直接打开——admin「链接安全」配置归口
+    var gsLinkWlState = { raw: null, ts: 0 };
+    var GS_LINK_WL_TTL = 60000;
+    function gsEnsureLinkWhitelist() {
+        if (gsLinkWlState.raw !== null && Date.now() - gsLinkWlState.ts < GS_LINK_WL_TTL) return;
+        fetch('/api/link/whitelist', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+            if (d && d.data && typeof d.data.list === 'string') {
+                gsLinkWlState.raw = d.data.list;
+                gsLinkWlState.ts = Date.now();
+            }
+        }).catch(function () { /* 拉取失败保持旧值，下次点击重试 */ });
+    }
+    // 白名单匹配：项 `*` 放行一切；其余项匹配自身或任意层级子域（*. 前缀解析期剥平）；仅按 hostname 匹配
+    function gsLinkHostWhitelisted(urlStr) {
+        var host = '';
+        try { host = new URL(urlStr).hostname.toLowerCase(); } catch (e) { return false; }
+        if (!host || gsLinkWlState.raw === null) return false;
+        var items = gsLinkWlState.raw.split(/[,\n]/);
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i].trim().toLowerCase().replace(/^\*\./, '');
+            if (!item) continue;
+            if (item === '*' || host === item || host.slice(-(item.length + 1)) === '.' + item) return true;
+        }
+        return false;
+    }
+    gsEnsureLinkWhitelist(); // 预热：页面加载即拉取，首击链接即有现值判定
+
+    // 安全提醒弹窗：用户点击站外链接时调用
+    var linkWarnMask = $('gsLinkWarnMask');
+    var linkWarnOkCb = null;
+
+    // 弹窗国际化文案初始化（HTML 仅放容器，文案从 JS 动态注入）
+    // 注意：这里的 .gs-link-warn-tag span 保留在 gsLinkWarnDesc 内部，不能直接 innerHTML 覆盖
+    (function initLinkWarnI18n() {
+        $('gsLinkWarnTitle').textContent = T('安全提醒');
+        // desc 里的"站外链接"是橙色标签，单独构造 DOM
+        var descBox = $('gsLinkWarnDesc');
+        descBox.innerHTML = '';
+        descBox.appendChild(document.createTextNode(T('您即将访问一个')));
+        var tag = document.createElement('span');
+        tag.className = 'gs-link-warn-tag';
+        tag.textContent = T('站外链接');
+        descBox.appendChild(tag);
+        descBox.appendChild(document.createTextNode(T('，该链接不属于本平台。')));
+        $('gsLinkWarnUrlLabel').textContent = T('链接地址');
+        var tipsBox = $('gsLinkWarnTips');
+        tipsBox.innerHTML = '';
+        [T('• 请勿轻易输入个人信息、账号密码'),
+         T('• 谨慎下载和运行链接中的文件'),
+         T('• 如遇可疑内容请立即关闭')].forEach(function (s) {
+            tipsBox.appendChild(el('div', '', s));
+        });
+        $('gsLinkWarnCancel').textContent = T('取消');
+        $('gsLinkWarnOk').textContent = T('继续访问');
+    })();
+
+    function showExternalLinkWarning(url, onConfirm) {
+        $('gsLinkWarnUrl').textContent = url;
+        linkWarnOkCb = onConfirm;
+        linkWarnMask.classList.remove('hidden');
+    }
+    function closeLinkWarn() {
+        linkWarnMask.classList.add('hidden');
+        linkWarnOkCb = null;
+    }
+    $('gsLinkWarnOk').addEventListener('click', function () {
+        var cb = linkWarnOkCb;
+        closeLinkWarn();
+        if (cb) cb();
+    });
+    $('gsLinkWarnCancel').addEventListener('click', closeLinkWarn);
+
+    // 全局事件委托：拦截评论/评测/公告区内站外 <a> 标签的点击
+    // 白名单域名直接放行不弹确认（/api/link/whitelist 后台归口），其余弹安全提醒
+    // ⚠ 刻意不调用 stopPropagation：document 冒泡链上有多个「点外部关闭」监听
+    // （#1581 评论 emoji/@ 面板、#8756 评测编辑器面板等），需要正常触发以避免残留浮层。
+    // preventDefault 已足够阻止 <a target="_blank"> 默认跳转，冒泡到 document 无害。
+    document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('a') : null;
+        if (!a) return;
+        var href = a.getAttribute('href') || '';
+        if (!isExternalUrl(href)) return;
+        var container = a.closest('.gp-comment-text, .gs-rev-content, .gs-notice-card-text');
+        if (!container) return;
+        // 命中白名单：直接打开（确保白名单已拉取，缓存过期时本击按现值判定）
+        gsEnsureLinkWhitelist();
+        if (gsLinkHostWhitelisted(href)) return;
+        e.preventDefault(); // 阻止 <a> 默认跳转，交给 showExternalLinkWarning 统一处理
+        showExternalLinkWarning(href, function () {
+            window.open(href, '_blank', 'noopener,noreferrer');
+        });
+    });
+
     // ==================== 自绘悬浮滚动条（复用 style.css .osb-thumb 样式，仿主窗口 initOsb 精简版） ====================
     // 滑块挂 body 上（position:fixed 浮层），悬停宿主容器浮现、可拖拽；原生滚动条已被 style.css 全局归零
     function bindOsbCommon(el, thumb, update, startDrag) {
@@ -1220,8 +1326,103 @@
         } catch (e) { return ts; }
     }
 
-    // P3: 渲染留言内容 —— 保留 emoji + @username 高亮 + 换行转 <br>
-    // 安全：先用 document.createTextNode 转义，再用正则替换 @username 为 <mark>
+    // URL 自动识别正则：匹配 http(s)://... 和 www. 开头的链接
+    // 字符集基于 RFC 3986（允许 A-Za-z0-9 -._~:/?#\[\]@!$&'()*+,;=%），
+    // 额外允许 #（锚点）、-（域名和路径）、_（常见文件名字符）
+    // 末尾的中英文标点会被后续 trimTrailingPunctuation 剥离
+    var URL_RE = /(https?:\/\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+)|(www\.[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+)/gi;
+
+    // 剥离 URL 末尾的标点（中英文句号、逗号、感叹号、问号、分号、冒号、引号等），
+    // 防止 "hello, https://example.com." 把句号匹配进 URL。
+    // 注意：不移除圆括号 ()，因为维基百科等常见 URL 路径合法带括号
+    var URL_TRAILING_PUNCT_RE = /[.,;:!?。，；：！？"'】】]+$/;
+    function trimUrlTrailing(url) {
+        return url.replace(URL_TRAILING_PUNCT_RE, '');
+    }
+
+    // 将文本节点中的 URL 转换为 <a> 链接（安全做法：遍历文本节点，拆分替换）
+    function autoLinkify(root) {
+        if (!root) return;
+        // 收集所有需要处理的容器：root 自身（如果匹配）+ 后代匹配元素
+        var boxes = [];
+        var matchSel = '.gp-comment-text, .gs-rev-content, .gs-notice-card-text';
+        if (root.classList && (root.classList.contains('gp-comment-text') || root.classList.contains('gs-rev-content') || root.classList.contains('gs-notice-card-text'))) {
+            boxes.push(root);
+        }
+        // 同时收集后代容器
+        root.querySelectorAll(matchSel).forEach(function (el) { boxes.push(el); });
+
+        boxes.forEach(function (box) {
+            var walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, null, false);
+            // 收集所有纯文本节点（遍历过程中不能修改 DOM，所以先收集）
+            var textNodes = [];
+            var n;
+            while ((n = walker.nextNode())) {
+                // 跳过 @mark 标签内部的文本（@username 保持原样不做链接化）
+                // 跳过已有的 <a> 标签内部的文本（避免嵌套 <a>，HTML 不允许）
+                var parent = n.parentNode;
+                if (parent && parent.nodeName === 'MARK') continue;
+                if (parent && parent.nodeName === 'A') continue;
+                // 向上遍历祖先，确保不在任何 <a> 内部
+                var p = parent;
+                while (p && p !== box) {
+                    if (p.nodeName === 'A') break;
+                    p = p.parentNode;
+                }
+                if (p && p.nodeName === 'A') continue;
+                if (n.nodeValue && URL_RE.test(n.nodeValue)) {
+                    textNodes.push(n);
+                }
+                URL_RE.lastIndex = 0; // 重置 regex state
+            }
+            textNodes.forEach(function (node) {
+                var text = node.nodeValue;
+                var frag = document.createDocumentFragment();
+                var lastIdx = 0;
+                URL_RE.lastIndex = 0;
+                var m;
+                while ((m = URL_RE.exec(text)) !== null) {
+                    // URL 之前的纯文本
+                    if (m.index > lastIdx) {
+                        frag.appendChild(document.createTextNode(text.substring(lastIdx, m.index)));
+                    }
+                    // 剥离 URL 末尾的标点符号（句号、逗号等，不属于 URL 本身）
+                    var rawUrl = m[0];
+                    var url = trimUrlTrailing(rawUrl);
+                    // 剥离后如果为空（不应该，但防御性检查），跳过并整段当纯文本
+                    if (!url) {
+                        frag.appendChild(document.createTextNode(rawUrl));
+                        lastIdx = m.index + rawUrl.length;
+                        continue;
+                    }
+                    // 剥离掉的末尾标点放回纯文本里
+                    var trailingPunct = rawUrl.substring(url.length);
+                    var href = url;
+                    // www. 开头的补全 https://
+                    if (/^www\./i.test(url)) href = 'https://' + url;
+                    var a = document.createElement('a');
+                    a.href = href;
+                    a.textContent = url;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    if (isExternalUrl(href)) a.classList.add('external');
+                    frag.appendChild(a);
+                    // 末尾标点作为纯文本追加回去
+                    if (trailingPunct) frag.appendChild(document.createTextNode(trailingPunct));
+                    lastIdx = m.index + rawUrl.length;
+                }
+                // 最后一段纯文本
+                if (lastIdx < text.length) {
+                    frag.appendChild(document.createTextNode(text.substring(lastIdx)));
+                }
+                node.parentNode.replaceChild(frag, node);
+            });
+        });
+    }
+
+    // P3: 渲染留言内容 —— 保留 emoji + @username 高亮 + 换行转 <br> + URL 自动识别
+    // 安全：先用 document.createTextNode 转义，再用正则替换 @username 为 <mark>，
+    //       最后遍历文本节点自动识别 URL 转换为 <a> 链接（避免正则替换 HTML 导致 XSS）
     function renderCommentContent(text) {
         if (!text) return document.createTextNode('');
         var container = document.createElement('div');
@@ -1233,6 +1434,7 @@
             '<mark data-at="$1">@$1</mark>');
 
         var wrap = document.createElement('div');
+        wrap.className = 'gp-comment-text'; // 确保被 autoLinkify 识别
         wrap.innerHTML = safeHtml;
         wrap.querySelectorAll('mark[data-at]').forEach(function (m) {
             m.addEventListener('click', function () {
@@ -1240,6 +1442,8 @@
                 if (u && u !== username) openProfile(u);
             });
         });
+        // 自动识别 URL 为可点击链接
+        autoLinkify(wrap);
         return wrap;
     }
 
@@ -4875,6 +5079,8 @@
                 top.insertBefore(hint, dateEl);
             });
         }
+        // 自动识别公告纯文本中的 URL 为可点击链接（已有的 <a> 标签保留不变）
+        autoLinkify(card);
         return card;
     }
 
@@ -8083,21 +8289,144 @@
         return card;
     }
 
-    // 评测正文长文展开：超阈值截断 + "阅读全文"原地展开/收起（主列表大卡与右栏小卡通用；
-    // compact=右栏小卡走 4 行 CSS 截断样式）
-    function buildRevContent(text, compact) {
+    // ========== 富文本 HTML sanitize：白名单保留安全格式，过滤危险标签/属性 ==========
+    // 允许的标签（富文本工具条能产生的安全标签）
+    var REV_ALLOWED_TAGS = new Set([
+        'b','strong','i','em','u','s','strike','del','mark',
+        'p','br','div','blockquote','pre','code','hr','span',
+        'ul','ol','li','h1','h2','h3','h4','a',
+        'font'
+    ]);
+    // span/style 中允许的 CSS 属性（execCommand 在 Firefox/IE 里用 span+style 产格式）
+    var REV_ALLOWED_STYLE_PROPS = [
+        'color','background-color',
+        'font-weight','font-style','text-decoration','text-decoration-line'
+    ];
+    // 绝对禁止的危险标签（直接剥离连同其子节点）
+    var REV_DANGER_TAGS = new Set([
+        'script','iframe','object','embed','applet','form','input','textarea','button','select',
+        'style','link','meta','base','body','head','html','svg','math','template','slot',
+        'img','video','audio','canvas','map','area','noscript'
+    ]);
+    // 从 style 字符串中提取允许的属性
+    function cleanStyle(styleStr) {
+        if (!styleStr) return '';
+        var cleaned = [];
+        styleStr.split(';').forEach(function (decl) {
+            var idx = decl.indexOf(':');
+            if (idx < 0) return;
+            var prop = decl.slice(0, idx).trim().toLowerCase();
+            var val = decl.slice(idx + 1).trim();
+            if (!prop || !val) return;
+            // 只允许白名单属性
+            if (REV_ALLOWED_STYLE_PROPS.indexOf(prop) < 0) return;
+            // 禁止 url(...)、expression()、javascript:
+            if (/url\s*\(|expression\s*\(|javascript:/i.test(val)) return;
+            // color 值：允许 hex/rgb/rgba/hsl/合法颜色名
+            if (prop === 'color' || prop === 'background-color') {
+                if (!/^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})|rgb(a)?\s*\([^)]+\)|hsl(a)?\s*\([^)]+\)|[a-zA-Z]+)$/.test(val)) return;
+            }
+            cleaned.push(prop + ':' + val);
+        });
+        return cleaned.join(';');
+    }
+    function sanitizeRevHtml(input) {
+        if (!input) return '';
+        if (!/<[a-zA-Z][\s\S]*>/.test(input)) return input;
+        var parser = new DOMParser();
+        var doc = parser.parseFromString('<div id="__rev_root__">' + input + '</div>', 'text/html');
+        var root = doc.getElementById('__rev_root__');
+        if (!root) return input;
+        function clean(node) {
+            var out = [];
+            node.childNodes.forEach(function (child) {
+                if (child.nodeType === 3) {
+                    out.push(child.textContent);
+                } else if (child.nodeType === 1) {
+                    var tag = child.tagName.toLowerCase();
+                    if (REV_DANGER_TAGS.has(tag)) return;
+                    if (!REV_ALLOWED_TAGS.has(tag)) {
+                        out.push(clean(child));
+                        return;
+                    }
+                    // 通用：先剥所有属性，再按需保留
+                    var keepAttrs = {};
+                    if (tag === 'a') {
+                        var href = child.getAttribute('href') || '';
+                        if (href && !/^(https?:|mailto:|\/|#)/i.test(href)) {
+                            href = '';
+                        }
+                        if (href && !/javascript:/i.test(href)) keepAttrs.href = href;
+                        // 强制统一 target 和 rel：所有用户富文本中的 <a> 都在新标签打开，
+                        // 且带 noopener noreferrer 防止 window.opener 安全漏洞
+                        keepAttrs.target = '_blank';
+                        keepAttrs.rel = 'noopener noreferrer';
+                    }
+                    if (tag === 'font') {
+                        var fc = child.getAttribute('color');
+                        if (fc && /^([#][0-9a-fA-F]{3,6}|[a-zA-Z]+)$/.test(fc)) keepAttrs.color = fc;
+                    }
+                    if (tag === 'span' || tag === 'div' || tag === 'p' || tag === 'blockquote') {
+                        // 允许 style 中有限的几个格式属性（兼容 Firefox 的 execCommand 输出）
+                        var rawStyle = child.getAttribute('style') || '';
+                        var safeStyle = cleanStyle(rawStyle);
+                        if (safeStyle) keepAttrs.style = safeStyle;
+                    }
+                    // 清除所有属性
+                    Array.from(child.attributes).forEach(function (attr) {
+                        child.removeAttribute(attr.name);
+                    });
+                    // 回写安全属性
+                    Object.keys(keepAttrs).forEach(function (name) {
+                        child.setAttribute(name, keepAttrs[name]);
+                    });
+                    child.innerHTML = clean(child);
+                    out.push(child.outerHTML);
+                }
+            });
+            return out.join('');
+        }
+        return clean(root);
+    }
+
+    // 旧 stripHtml：把 HTML 标签全剥掉只留纯文本（用于字数统计等纯文本场景）
+    function stripHtmlToText(s) {
+        if (!s) return '';
+        if (!/<[a-zA-Z][\s\S]*>/.test(s)) return s;
+        var tmp = document.createElement('div');
+        tmp.innerHTML = s;
+        return tmp.innerText || '';
+    }
+
+    // 评测正文渲染：支持安全富文本 HTML，兼容旧纯文本数据
+    function buildRevContent(raw, compact) {
+        var hasHtml = /<[a-zA-Z][\s\S]*>/.test(String(raw || ''));
         var box = el('div', compact ? 'gs-rev-content mini' : 'gs-rev-content');
-        var txt = String(text || '');
-        if (txt.length <= REV_TRUNCATE) {
-            box.textContent = txt;
+        if (!hasHtml) box.classList.add('plain-text'); // 纯文本保留 white-space:pre-wrap
+        var sanitized = sanitizeRevHtml(String(raw || ''));
+        var plainText = stripHtmlToText(String(raw || ''));
+        // 纯文本长度判断用 plainText
+        if (plainText.length <= REV_TRUNCATE) {
+            if (hasHtml) {
+                box.innerHTML = sanitized;
+            } else {
+                box.textContent = plainText;
+            }
+            autoLinkify(box); // 自动识别纯文本中的 URL
             return box;
         }
+        // 长文截断：截断场景不保留 HTML，避免切到标签中间
         var full = false;
         var btn = el('button', 'gs-rev-expand', T('阅读全文'));
         btn.addEventListener('click', function () { full = !full; paint(); });
         function paint() {
-            box.textContent = full ? txt : (txt.slice(0, REV_TRUNCATE) + '…');
-            if (compact) box.classList.toggle('expanded', full); // 右栏小卡展开态解除 4 行 CSS 截断
+            if (full && hasHtml) {
+                box.innerHTML = sanitized;
+            } else {
+                box.textContent = full ? plainText : (plainText.slice(0, REV_TRUNCATE) + '…');
+            }
+            autoLinkify(box); // 每次重绘都自动识别 URL（截断/展开态可能不同）
+            if (compact) box.classList.toggle('expanded', full);
             box.appendChild(btn);
             btn.textContent = full ? T('收起') : T('阅读全文');
         }
@@ -8301,16 +8630,359 @@
         });
     }
 
+    // ==================== 评测弹窗：富文本编辑器 + Emoji ====================
+
+    // Emoji 分类数据（复用留言板的，避免重复维护）
+    var REV_EMOJI_CATS = {
+        smileys: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','😟','🙁','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'],
+        gestures: ['👍','👎','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👋','🤚','🖐️','✋','🖖','👏','🙌','👐','🤲','🤝','🙏','💪','🦾','🦿','🦵','🦶','👂','🦻','👃','🧠','🫀','🫁','🦷','🦴','👀','👁️','👅','👄','🫦','🫵'],
+        hearts: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','💌','💋','💯','💢','💥','💫','💦','💨','🕳️','💣','💬','💭','🗯️','♨️','🗨️'],
+        objects: ['🎉','🎊','🎁','🎈','🎂','🍰','☕','🍺','🍻','🥂','🍷','🥃','🥤','🍾','🎤','🎧','🎸','🎹','🥁','🏆','🥇','🥈','🥉','⚽','🏀','🏈','⚾','🎮','🕹️','🚀','✈️','🚗','💻','📱','📷','📺','🎵','🎶','📚','💡','🔔','🎯','🏆','💯','✅','❌','⭐','🌟','💫','🔥','✨']
+    };
+
+    var revEditorInited = false;
+    var revEmojiPanel = null;
+    var revEmojiGrid = null;
+    var revEmojiCurrentCat = 'smileys';
+
+    // 富文本编辑器初始化（工具条 + Emoji 面板，只绑一次）
+    function initRevEditor() {
+        if (revEditorInited) return;
+        revEditorInited = true;
+
+        var editor = $('gsRevEditor');
+        var toolbar = $('gsRevToolbar');
+
+        // 工具条按钮
+        toolbar.querySelectorAll('.gs-rev-tb-btn').forEach(function (btn) {
+            btn.addEventListener('mousedown', function (e) {
+                // mousedown 防止 editor 失去焦点导致 execCommand 失效
+                e.preventDefault();
+            });
+            btn.addEventListener('click', function () {
+                var cmd = btn.getAttribute('data-cmd');
+                var val = btn.getAttribute('data-val') || null;
+                editor.focus();
+
+                if (cmd === 'emoji') {
+                    toggleRevEmoji();
+                    return;
+                }
+                if (cmd === 'foreColor') {
+                    toggleRevColor();
+                    return;
+                }
+                if (cmd === 'link') {
+                    openRevLinkPanel();
+                    return;
+                }
+                if (cmd === 'code') {
+                    // 代码块：用 pre 包裹
+                    var sel = window.getSelection();
+                    var text = sel.toString();
+                    var pre = document.createElement('pre');
+                    pre.style.cssText = ''; // 用 CSS 类控制样式
+                    if (text) pre.textContent = text; else pre.innerHTML = '<br>';
+                    document.execCommand('insertHTML', false, pre.outerHTML);
+                    return;
+                }
+                if (cmd === 'formatBlock' && val) {
+                    document.execCommand('formatBlock', false, val);
+                    return;
+                }
+                // 普通命令
+                document.execCommand(cmd, false, null);
+            });
+        });
+
+        // 编辑器事件
+        editor.addEventListener('input', updateRevCount);
+        // selectionchange：光标/选中变化时，实时更新工具条按钮 active 高亮
+        document.addEventListener('selectionchange', function () {
+            if (!revEditorInited) return;
+            var sel = window.getSelection();
+            if (!sel.rangeCount) return;
+            var container = sel.getRangeAt(0).commonAncestorContainer;
+            // 只在编辑器内部的选区才高亮
+            if (!editor.contains(container.nodeType === 1 ? container : container.parentNode)) return;
+            // 检查每个格式按钮的状态
+            var checks = [
+                'bold','italic','underline','strikeThrough',
+                'insertUnorderedList','insertOrderedList'
+            ];
+            checks.forEach(function (cmd) {
+                var btn = toolbar.querySelector('.gs-rev-tb-btn[data-cmd="' + cmd + '"]');
+                if (!btn) return;
+                try {
+                    btn.classList.toggle('active', document.queryCommandState(cmd));
+                } catch (e) {}
+            });
+            // formatBlock：检查 h3
+            var h3Btn = toolbar.querySelector('.gs-rev-tb-btn[data-cmd="formatBlock"][data-val="h3"]');
+            if (h3Btn) {
+                try {
+                    var fb = (document.queryCommandValue('formatBlock') || '').toLowerCase().replace(/[<>]/g, '');
+                    h3Btn.classList.toggle('active', fb === 'h3');
+                } catch (e) {}
+            }
+        });
+        editor.addEventListener('keydown', function (e) {
+            // Tab 键插入两个空格
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                document.execCommand('insertText', false, '  ');
+            }
+            // Ctrl+B/I/U 快捷键
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+                if (e.key.toLowerCase() === 'b') { e.preventDefault(); document.execCommand('bold', false, null); }
+                else if (e.key.toLowerCase() === 'i') { e.preventDefault(); document.execCommand('italic', false, null); }
+                else if (e.key.toLowerCase() === 'u') { e.preventDefault(); document.execCommand('underline', false, null); }
+            }
+        });
+
+        // Emoji 面板初始化
+        revEmojiPanel = $('gsRevEmojiPanel');
+        revEmojiGrid = $('gsRevEmojiGrid');
+        renderRevEmojiGrid();
+
+        revEmojiPanel.querySelectorAll('.gs-rev-emoji-tab').forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                revEmojiPanel.querySelectorAll('.gs-rev-emoji-tab').forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                revEmojiCurrentCat = tab.getAttribute('data-cat');
+                renderRevEmojiGrid();
+            });
+        });
+
+        // 点面板外关闭（emoji / 颜色 / 链接 三个面板）
+        document.addEventListener('click', function (e) {
+            // Emoji 面板
+            if (revEmojiPanel && !revEmojiPanel.classList.contains('hidden')) {
+                var emojiBtn = e.target.closest && e.target.closest('.gs-rev-tb-btn[data-cmd="emoji"]');
+                var inEmojiPanel = revEmojiPanel.contains(e.target);
+                if (!emojiBtn && !inEmojiPanel) revEmojiPanel.classList.add('hidden');
+            }
+            // 颜色面板
+            var cp = $('gsRevColorPanel');
+            if (cp && !cp.classList.contains('hidden')) {
+                var colorBtn = e.target.closest && e.target.closest('.gs-rev-color-btn');
+                var inColorPanel = cp.contains(e.target);
+                if (!colorBtn && !inColorPanel) cp.classList.add('hidden');
+            }
+            // 链接面板
+            var lp = $('gsRevLinkPanel');
+            if (lp && !lp.classList.contains('hidden')) {
+                var linkBtn = e.target.closest && e.target.closest('.gs-rev-tb-btn[data-cmd="link"]');
+                var inLinkPanel = lp.contains(e.target);
+                if (!linkBtn && !inLinkPanel) lp.classList.add('hidden');
+            }
+        });
+    }
+
+    function renderRevEmojiGrid() {
+        if (!revEmojiGrid) return;
+        revEmojiGrid.innerHTML = '';
+        var list = REV_EMOJI_CATS[revEmojiCurrentCat] || [];
+        list.forEach(function (em) {
+            var btn = document.createElement('button');
+            btn.className = 'gs-rev-emoji-cell';
+            btn.textContent = em;
+            btn.title = em;
+            btn.addEventListener('click', function () {
+                var editor = $('gsRevEditor');
+                editor.focus();
+                document.execCommand('insertText', false, em);
+                updateRevCount();
+            });
+            revEmojiGrid.appendChild(btn);
+        });
+    }
+
+    function toggleRevEmoji() {
+        if (!revEmojiPanel) return;
+        // 关闭颜色面板（emoji 和颜色互斥显示）
+        var colorPanel = $('gsRevColorPanel');
+        if (colorPanel && !colorPanel.classList.contains('hidden')) colorPanel.classList.add('hidden');
+        if (revEmojiPanel.classList.contains('hidden')) {
+            revEmojiPanel.classList.remove('hidden');
+            renderRevEmojiGrid();
+        } else {
+            revEmojiPanel.classList.add('hidden');
+        }
+    }
+
+    // ========== 颜色面板 ==========
+    var revColorPanel = null;
+    function initRevColor() {
+        revColorPanel = $('gsRevColorPanel');
+        if (!revColorPanel) return;
+        revColorPanel.querySelectorAll('.gs-rev-color-cell').forEach(function (cell) {
+            cell.addEventListener('click', function () {
+                var color = cell.getAttribute('data-color') || '';
+                var editor = $('gsRevEditor');
+                editor.focus();
+                if (color) {
+                    document.execCommand('foreColor', false, color);
+                } else {
+                    // 清除颜色：用 removeFormat 或者设为 inherit
+                    document.execCommand('removeFormat', false, null);
+                }
+                revColorPanel.classList.add('hidden');
+                updateRevCount();
+            });
+        });
+    }
+    function toggleRevColor() {
+        if (!revColorPanel) { initRevColor(); }
+        if (!revColorPanel) return;
+        // 关闭 emoji 面板（emoji 和颜色互斥显示）
+        if (revEmojiPanel && !revEmojiPanel.classList.contains('hidden')) revEmojiPanel.classList.add('hidden');
+        if (revColorPanel.classList.contains('hidden')) {
+            revColorPanel.classList.remove('hidden');
+        } else {
+            revColorPanel.classList.add('hidden');
+        }
+    }
+
+    // ========== 链接面板（自绘 + 保存/恢复选区） ==========
+    var revLinkPanelInited = false;
+    var revSavedRange = null;  // 保存的编辑器选区 Range
+    function saveRevSelection() {
+        var sel = window.getSelection();
+        if (sel.rangeCount > 0) {
+            var range = sel.getRangeAt(0);
+            var editor = $('gsRevEditor');
+            if (editor.contains(range.commonAncestorContainer)) {
+                revSavedRange = range.cloneRange();
+                return sel.toString();
+            }
+        }
+        revSavedRange = null;
+        return '';
+    }
+    function restoreRevSelection() {
+        if (!revSavedRange) return false;
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(revSavedRange);
+        return true;
+    }
+    function openRevLinkPanel() {
+        var editor = $('gsRevEditor');
+        editor.focus();
+        // 保存选区 Range（关键！用户点面板输入框时选区会丢）
+        var selText = saveRevSelection();
+
+        if (!revLinkPanelInited) { initRevLinkPanel(); }
+        var panel = $('gsRevLinkPanel');
+        if (!panel) return;
+        // 关闭其他面板
+        if (revEmojiPanel && !revEmojiPanel.classList.contains('hidden')) revEmojiPanel.classList.add('hidden');
+        if (revColorPanel && !revColorPanel.classList.contains('hidden')) revColorPanel.classList.add('hidden');
+
+        // 预填提示，但 value 留空（让用户自己决定填不填）
+        // 如果用户留空 → 用选中的文字直接套链接（createLink 单行命令）
+        // 如果用户改了 → 用用户输入的文字先插入再套链接
+        var urlInput = $('gsRevLinkUrl');
+        var textInput = $('gsRevLinkText');
+        urlInput.value = 'https://';
+        textInput.value = '';
+        if (selText) {
+            textInput.placeholder = T('留空则用"') + selText + T('"');
+        } else {
+            textInput.placeholder = T('点击确定会插入链接文字');
+        }
+
+        panel.classList.remove('hidden');
+        // 延迟聚焦 URL 输入框，避免 mousedown 抢焦点
+        setTimeout(function () { urlInput.focus(); urlInput.select(); }, 30);
+    }
+    function initRevLinkPanel() {
+        revLinkPanelInited = true;
+        // 取消按钮
+        $('gsRevLinkCancel').addEventListener('click', closeRevLinkPanel);
+        // 确定按钮
+        $('gsRevLinkOk').addEventListener('click', doInsertRevLink);
+        // Enter 提交
+        ['gsRevLinkUrl', 'gsRevLinkText'].forEach(function (id) {
+            var el = $(id);
+            if (!el) return;
+            el.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    doInsertRevLink();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeRevLinkPanel();
+                }
+            });
+        });
+    }
+    function closeRevLinkPanel() {
+        var panel = $('gsRevLinkPanel');
+        if (panel) panel.classList.add('hidden');
+    }
+    function doInsertRevLink() {
+        var url = ($('gsRevLinkUrl').value || '').trim();
+        var text = ($('gsRevLinkText').value || '').trim();
+        if (!url) { toast(T('请输入链接地址')); return; }
+        // 简单校验：必须以 http/https/mailto/ftp 开头
+        if (!/^(https?:|mailto:|ftp:|\/|#)/i.test(url)) {
+            url = 'https://' + url;
+        }
+        var editor = $('gsRevEditor');
+        editor.focus();
+        // 恢复之前保存的选区
+        var restored = restoreRevSelection();
+
+        if (text) {
+            // 用户填了显示文字 → 先插入文字再套链接
+            document.execCommand('insertText', false, text);
+            document.execCommand('createLink', false, url);
+        } else if (restored) {
+            // 有选区但没填文字 → 选中的文字直接变链接
+            document.execCommand('createLink', false, url);
+        } else {
+            // 没选区也没填文字 → 直接插入 <a> 标签
+            var safeHtml = '<a href="' + url.replace(/"/g, '&quot;') + '">' + url + '</a>';
+            document.execCommand('insertHTML', false, safeHtml);
+        }
+
+        closeRevLinkPanel();
+        updateRevCount();
+    }
+
     // 写评测/编辑评测弹窗（自绘；服务端 upsert 一人一评）
     function openReviewModal(gid) {
         revTarget = gid;
+        initRevEditor();
+
+        var editor = $('gsRevEditor');
         var mine = state.reviews.mine;
         revPick = mine ? (mine.recommended === 1 ? 1 : 0) : 1;
         $('gsRevTitle').textContent = mine ? T('编辑我的评测') : T('写评测');
-        $('gsRevText').value = mine ? (mine.content || '') : '';
+        // 加载已有内容：sanitize 后再灌入编辑器，安全恢复格式
+        var content = mine ? (mine.content || '') : '';
+        editor.innerHTML = sanitizeRevHtml(content);
+        // 动态填充游戏封面 + 名称
+        var g = state.games[gid] || {};
+        var lib = state.lib[gid] && state.lib[gid].lib;
+        var gameName = (g.name || (lib && lib.name) || T('游戏 #') + gid);
+        var cover = g.cover || (lib && lib.cover) || '';
+        $('gsRevGName').textContent = gameName;
+        var coverImg = $('gsRevCover');
+        if (cover) {
+            coverImg.src = cover; coverImg.style.display = 'block';
+        } else {
+            coverImg.removeAttribute('src'); coverImg.style.display = 'none';
+        }
         updateRevCount();
         paintRevPick();
         $('gsRevMask').classList.remove('hidden');
+        // 隐藏 emoji 面板
+        if (revEmojiPanel) revEmojiPanel.classList.add('hidden');
+        // 打开后聚焦编辑器
+        setTimeout(function () { editor.focus(); }, 60);
     }
 
     function paintRevPick() {
@@ -8319,23 +8991,35 @@
     }
 
     function updateRevCount() {
-        $('gsRevCount').textContent = $('gsRevText').value.length + ' / 2000';
+        var editor = $('gsRevEditor');
+        var len = editor ? (editor.innerText || '').length : 0;
+        $('gsRevCount').textContent = len + ' / 2000';
     }
 
     // 评测弹窗事件（元素为页面静态节点，此处一次绑定）
     $('gsRevUp').addEventListener('click', function () { revPick = 1; paintRevPick(); });
     $('gsRevDown').addEventListener('click', function () { revPick = 0; paintRevPick(); });
-    $('gsRevText').addEventListener('input', updateRevCount);
     $('gsRevCancel').addEventListener('click', function () { $('gsRevMask').classList.add('hidden'); });
+    $('gsRevClose').addEventListener('click', function () { $('gsRevMask').classList.add('hidden'); });
+    $('gsRevMask').addEventListener('click', function (e) {
+        if (e.target === $('gsRevMask')) $('gsRevMask').classList.add('hidden');
+    });
     $('gsRevSubmit').addEventListener('click', function () {
-        var content = $('gsRevText').value.trim();
-        if (!content) { toast(T('评测内容不能为空')); return; }
-        api('POST', '/api/game/review/' + revTarget, { recommended: revPick, content: content }).then(function (res) {
+        var editor = $('gsRevEditor');
+        // 字数按纯文本算
+        var text = (editor.innerText || '').trim();
+        if (!text) { toast(T('评测内容不能为空')); return; }
+        if (text.length > 2000) { toast(T('评测内容不能超过 2000 字')); return; }
+        // 富文本 HTML → sanitize 后存储（安全保留格式）
+        var html = sanitizeRevHtml(editor.innerHTML || '');
+        // 如果 sanitize 后只剩纯文本（无 HTML 标签），直接存纯文本更干净
+        var finalContent = (/<[a-zA-Z][\s\S]*>/.test(html)) ? html : text;
+        api('POST', '/api/game/review/' + revTarget, { recommended: revPick, content: finalContent }).then(function (res) {
             if (!res.ok) { toast(res.msg || T('评测提交失败')); return; }
             $('gsRevMask').classList.add('hidden');
             toast(T('评测已发布'));
             loadReviews(revTarget, true);
-            loadRecentReviews(revTarget); // 自己的评测也进右栏"最近发布"，提交后同步刷新
+            loadRecentReviews(revTarget);
         });
     });
 

@@ -26156,12 +26156,30 @@
         if (e.key === 'Escape' && linkConfirmMask) closeLinkConfirm();
     });
 
-    // 消息区内 URL 链接点击委托：正文链接与卡片共用安全确认归口
+    // 消息区内 URL 链接点击委托：正文纯文本 URL(.msg-link) + AI Markdown 链接(.ai-md-link)
+    // 全部统一归口 openLinkConfirm 安全确认面板（命中白名单直接打开，其余弹确认）
+    // 注意：.msg-link 分支刻意不调用 preventDefault/stopPropagation——保持与既有实现完全一致，
+    // 避免改变 document 冒泡链上「点外部关闭」等监听的触发行为（稳定运行已久，最小变更原则）。
+    // .ai-md-link 分支必须调 preventDefault：它是原生 <a target="_blank">，不拦截就直接跳转绕过面板。
     messageList.addEventListener('click', function (e) {
-        var link = e.target.closest && e.target.closest('.msg-link');
-        if (!link) return;
-        var href = link.getAttribute('data-href');
-        if (href) openLinkConfirm(href);
+        // 1. 正文纯文本 URL（renderTextWithLinks 生成的 <span class="msg-link" data-href>）
+        var plain = e.target.closest && e.target.closest('.msg-link');
+        if (plain) {
+            var href1 = plain.getAttribute('data-href');
+            if (href1) openLinkConfirm(href1);
+            return;
+        }
+        // 2. AI Markdown 内的 <a class="ai-md-link" href="...">（renderAIMarkdown 生成）
+        //    原实现没有拦截：AI 输出的 [text](url) 直接 target=_blank 绕过安全面板 → 补上归口
+        var ai = e.target.closest && e.target.closest('.ai-md-link');
+        if (ai) {
+            var href2 = ai.getAttribute('href') || '';
+            if (href2 && /^https?:\/\//i.test(href2)) {
+                e.preventDefault(); // 阻止 <a target="_blank"> 默认跳转，交给 openLinkConfirm 统一处理
+                openLinkConfirm(href2);
+            }
+            return;
+        }
     });
 
     // 网页卡片气泡构建（微信同款布局：主区标题/摘要/域名行 + 右侧缩略图，无缩略图退化
