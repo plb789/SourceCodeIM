@@ -7912,17 +7912,18 @@
     function buildReviewMini(it) {
         var card = el('div', 'gs-rev-mini');
         var head = el('div', 'gs-rev-mini-head');
+        var displayName = it.nickname || it.username || T('用户');
         var av = el('div', 'gs-rev-avatar sm');
         if (it.avatar) {
             var im = document.createElement('img');
             im.src = assetUrl(it.avatar);
-            im.onerror = function () { av.innerHTML = ''; av.textContent = initialOf(it.username); };
+            im.onerror = function () { av.innerHTML = ''; av.textContent = initialOf(displayName); };
             av.appendChild(im);
         } else {
-            av.textContent = initialOf(it.username);
+            av.textContent = initialOf(displayName);
         }
         head.appendChild(av);
-        head.appendChild(el('div', 'gs-rev-mini-name', it.username || T('用户')));
+        head.appendChild(el('div', 'gs-rev-mini-name', displayName));
         var meta = el('div', 'gs-rev-mini-meta');
         meta.appendChild(el('span', '', fmtDate(it.create_time)));
         meta.appendChild(el('span', '', T('总时数 ') + fmtRevHours(it.play_hours)));
@@ -7978,14 +7979,15 @@
         // 左栏：头像 + 用户名（+ 我的评测徽标）— 全部可点击跳到该用户的 Steam 风格资料页
         var user = el('div', 'gs-rev-user');
         var isOther = it.username && it.username !== username;
+        var displayName = it.nickname || it.username || T('用户');
         var av = el('div', 'gs-rev-avatar');
         if (it.avatar) {
             var im = document.createElement('img');
             im.src = assetUrl(it.avatar);
-            im.onerror = function () { av.innerHTML = ''; av.textContent = initialOf(it.username); };
+            im.onerror = function () { av.innerHTML = ''; av.textContent = initialOf(displayName); };
             av.appendChild(im);
         } else {
-            av.textContent = initialOf(it.username);
+            av.textContent = initialOf(displayName);
         }
         if (isOther) {
             av.style.cursor = 'pointer';
@@ -7994,7 +7996,7 @@
         }
         user.appendChild(av);
         var uinfo = el('div', 'gs-rev-uinfo');
-        var uname = el('div', 'gs-rev-uname', it.username || T('用户'));
+        var uname = el('div', 'gs-rev-uname', displayName);
         if (isOther) {
             uname.style.cursor = 'pointer';
             uname.title = T('查看该用户资料');
@@ -8098,14 +8100,15 @@
                 repaintBtn();
                 var empty = listEl.querySelector('.gs-rev-reply-empty');
                 if (empty) empty.remove();
-                listEl.appendChild(buildReplyRow({ id: res.data.id, username: username, reply_to: rid, reply_to_user: rname, content: content, create_time: new Date().toISOString() }));
+                listEl.appendChild(buildReplyRow({ id: res.data.id, username: username, nickname: myNickname || username, reply_to: rid, reply_to_user: rname, content: content, create_time: new Date().toISOString() }));
             });
         }
         function buildReplyRow(rp) {
             var row = el('div', 'gs-rev-reply');
             var txt = el('span', 'gs-rev-reply-txt');
             // 回复者名字（可点击跳到资料页，跳过自己）
-            var nameEl = el('span', 'gs-rev-reply-name', rp.username || T('用户'));
+            var rpDisplayName = rp.nickname || rp.username || T('用户');
+            var nameEl = el('span', 'gs-rev-reply-name', rpDisplayName);
             if (rp.username && rp.username !== username) {
                 nameEl.style.cursor = 'pointer';
                 nameEl.title = T('查看该用户资料');
@@ -8114,8 +8117,9 @@
             txt.appendChild(nameEl);
             if (rp.reply_to && rp.reply_to_user) {
                 txt.appendChild(el('span', 'gs-rev-reply-mid', T('回复')));
-                // 回复目标名字（同样可点击）
-                var targetEl = el('span', 'gs-rev-reply-name', rp.reply_to_user);
+                // 回复目标名字（同样可点击）— 后端已返回展示名 reply_to_name（昵称优先）
+                var targetDisplayName = rp.reply_to_name || rp.reply_to_user || T('用户');
+                var targetEl = el('span', 'gs-rev-reply-name', targetDisplayName);
                 if (rp.reply_to_user && rp.reply_to_user !== username) {
                     targetEl.style.cursor = 'pointer';
                     targetEl.title = T('查看该用户资料');
@@ -8128,7 +8132,7 @@
             row.appendChild(el('span', 'gs-rev-reply-time', fmtDate(rp.create_time)));
             if (username) {
                 var act = el('span', 'gs-rev-reply-act', T('回复'));
-                act.addEventListener('click', function () { setReplyTo(rp.id, rp.username); });
+                act.addEventListener('click', function () { setReplyTo(rp.id, rpDisplayName); });
                 row.appendChild(act);
             }
             // 删除口径：回复人或评测主人（服务端二次校验）

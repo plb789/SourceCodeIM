@@ -2072,11 +2072,13 @@ func (s *Server) HandleGameReviews(w http.ResponseWriter, r *http.Request) {
 		revIDs = append(revIDs, rv.ID)
 	}
 	avatars := map[string]string{}
+	userInfos := make(map[string]model.User)
 	if len(unames) > 0 {
 		var us []model.User
-		store.DB.Select("username", "avatar").Where("username IN ?", unames).Find(&us)
+		store.DB.Select("username", "nickname", "avatar").Where("username IN ?", unames).Find(&us)
 		for _, u := range us {
 			avatars[u.Username] = u.Avatar
+			userInfos[u.Username] = u
 		}
 	}
 	likedSet := map[uint]bool{}
@@ -2089,9 +2091,14 @@ func (s *Server) HandleGameReviews(w http.ResponseWriter, r *http.Request) {
 	}
 	list := make([]map[string]interface{}, 0, len(reviews))
 	for _, rv := range reviews {
+		nickname := ""
+		if u, ok := userInfos[rv.Username]; ok {
+			nickname = u.Nickname
+		}
 		list = append(list, map[string]interface{}{
 			"id":          rv.ID,
 			"username":    rv.Username,
+			"nickname":    nickname,
 			"avatar":      avatars[rv.Username],
 			"recommended": rv.Recommended,
 			"content":     rv.Content,
@@ -2260,13 +2267,44 @@ func (s *Server) HandleGameReviewReplies(w http.ResponseWriter, r *http.Request)
 	}
 	var replies []model.GameReviewReply
 	store.DB.Where("review_id = ?", revID).Order("create_time ASC, id ASC").Limit(200).Find(&replies)
+	// 批量查回复者 + 被回复者的用户信息（nickname/avatar）
+	unames := make([]string, 0, len(replies)*2)
+	for _, rp := range replies {
+		unames = append(unames, rp.Username)
+		if rp.ReplyToUser != "" {
+			unames = append(unames, rp.ReplyToUser)
+		}
+	}
+	userInfos := make(map[string]model.User)
+	if len(unames) > 0 {
+		var us []model.User
+		store.DB.Select("username", "nickname", "avatar").Where("username IN ?", unames).Find(&us)
+		for _, u := range us {
+			userInfos[u.Username] = u
+		}
+	}
 	list := make([]map[string]interface{}, 0, len(replies))
 	for _, rp := range replies {
+		var nickname, avatar string
+		if u, ok := userInfos[rp.Username]; ok {
+			nickname = u.Nickname
+			avatar = u.Avatar
+		}
+		// 被回复人展示名：有昵称用昵称，兜底账号
+		replyToName := rp.ReplyToUser
+		if rp.ReplyToUser != "" {
+			if u, ok := userInfos[rp.ReplyToUser]; ok && u.Nickname != "" {
+				replyToName = u.Nickname
+			}
+		}
 		list = append(list, map[string]interface{}{
 			"id":            rp.ID,
 			"username":      rp.Username,
+			"nickname":      nickname,
+			"avatar":        avatar,
 			"reply_to":      rp.ReplyTo,
 			"reply_to_user": rp.ReplyToUser,
+			"reply_to_name": replyToName,
 			"content":       rp.Content,
 			"create_time":   rp.CreateTime,
 		})
