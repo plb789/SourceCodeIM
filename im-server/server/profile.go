@@ -344,6 +344,7 @@ func (s *Server) sendProfileResp(c *Client, info ProfileInfo) {
 // buildProfileInfo 查询目标用户资料并按查询者视角组装（好友关系与备注服务端归口，防前端伪造）。
 // includeGameExtra=true 时附加游戏中心扩展（stats 聚合 + playing_games presence）——仅用于 handleProfileQuery
 // 路径（别人查我）；handleProfileUpdate / adminaccounts 回推自己路径传 false 减少 6+1 次 SQL 往返。
+// 隐私规则与 HTTP 接口完全一致：ProfileVisibility 控制整体可见性，GameVisibility 控制游戏详情。
 func (s *Server) buildProfileInfo(viewer, target string, includeGameExtra bool) (ProfileInfo, bool) {
 	var u model.User
 	if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
@@ -365,36 +366,58 @@ func (s *Server) buildProfileInfo(viewer, target string, includeGameExtra bool) 
 	if ipRegionEnabled() {
 		info.IpRegion = ipRegion(s.onlineIPOf(target))
 	}
-	if viewer != target {
+
+	// 隐私计算（与 HTTP 接口同口径：扁平公式）
+	isSelf := viewer == target
+	isFriend := false
+	if !isSelf && viewer != "" {
 		var f model.Friend
 		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 			info.IsFriend = true
 			info.Remark = f.Remark
 		}
 	}
-	// 游戏中心扩展：仅外部查询路径开启（自我回推路径跳过避免冗余 6+1 SQL）
+	// 资料整体可见性
+	profileVisible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
+	// 游戏详情可见性（控制 stats 里的游戏数据 + playing_games）
+	canSeeGame := isSelf || u.GameVisibility == 2 || (u.GameVisibility == 1 && isFriend)
+
+	// 游戏中心扩展：仅外部查询路径开启（自我回推路径跳过避免冗余 SQL）
 	if includeGameExtra {
-		var libCount int64
-		var totalPlaySec int64
-		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
-		store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
-			Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
-		var achCount int64
-		store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
-		var badgeCount int64
-		store.DB.Model(&model.UserBadge{}).Where("username = ?", target).Count(&badgeCount)
-		var friendCount int64
-		store.DB.Model(&model.Friend{}).Where("user_id = ?", target).Count(&friendCount)
-		info.Stats = ProfileStatsBrief{
-			TotalGames:        libCount,
-			TotalPlayHours:    float64(totalPlaySec) / 3600.0,
-			TotalAchievements: achCount,
-			TotalBadges:       badgeCount,
-			FriendsCount:      friendCount,
+		// ProfileVisibility 本身不通过：Stats 全置零（hover-card 仍显示但游戏统计区显示零值）
+		// ProfileVisibility 通过但 GameVisibility 不通过：Stats 里游戏相关字段置零，徽章/好友数保留
+		if !profileVisible {
+			info.Stats = ProfileStatsBrief{} // 全零
+		} else {
+			var badgeCount int64
+			store.DB.Model(&model.UserBadge{}).Where("username = ?", target).Count(&badgeCount)
+			var friendCount int64
+			store.DB.Model(&model.Friend{}).Where("user_id = ?", target).Count(&friendCount)
+
+			var libCount int64
+			var totalPlaySec int64
+			var achCount int64
+			if canSeeGame {
+				store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
+				store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
+					Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
+				store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
+			}
+			info.Stats = ProfileStatsBrief{
+				TotalGames:        libCount,
+				TotalPlayHours:    float64(totalPlaySec) / 3600.0,
+				TotalAchievements: achCount,
+				TotalBadges:       badgeCount,
+				FriendsCount:      friendCount,
+			}
 		}
-		// 正在玩的游戏（内存 presence，实时态；零常驻 SQL，gamePlayingOf 内部只查一次 game 元数据）
-		if playing := gamePlayingOf(target); len(playing) > 0 {
-			info.PlayingGames = playing
+
+		// 正在玩的游戏（内存 presence；仅资料整体可见且游戏详情可见时返回）
+		if profileVisible && canSeeGame {
+			if playing := gamePlayingOf(target); len(playing) > 0 {
+				info.PlayingGames = playing
+			}
 		}
 	}
 	return info, true
@@ -547,6 +570,8 @@ type ProfileFullResp struct {
 	IsFriend bool `json:"is_friend"`
 	// IsSelf 查询者就是目标本人
 	IsSelf bool `json:"is_self"`
+	// GameVisible 查询者是否有权查看目标的游戏详情（最近游戏/游戏统计/最爱游戏/成就）
+	GameVisible bool `json:"game_visible"`
 	// LevelPerks 等级权益（P0：展示柜槽位上限 / 自动称号 / 下一级需求）
 	LevelPerks ProfileLevelPerksResp `json:"level_perks"`
 }
@@ -616,6 +641,10 @@ func (s *Server) HandleProfileGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 游戏详情额外受 GameVisibility 控制（对标 Steam：资料可见 ≠ 游戏详情可见）
+	// GameVisibility: 0=私密 1=仅好友 2=公开
+	canSeeGame := isSelf || u.GameVisibility == 2 || (u.GameVisibility == 1 && isFriend)
+
 	// 3. 基础资料（带 Steam 扩展字段）
 	basic := ProfileBasicResp{
 		Username:          u.Username,
@@ -648,14 +677,16 @@ func (s *Server) HandleProfileGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. 统计数据（聚合查询：游戏数/总时长/成就/徽章/好友数）
+	// 注意：游戏相关统计（游戏数/时长/成就）受 GameVisibility 控制；徽章和好友数不受
 	var libCount int64
 	var totalPlaySec int64
-	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
-	store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
-		Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
-
 	var achCount int64
-	store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
+	if canSeeGame {
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
+		store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
+			Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
+		store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
+	}
 
 	var badgeCount int64
 	store.DB.Model(&model.UserBadge{}).Where("username = ?", target).Count(&badgeCount)
@@ -693,38 +724,40 @@ func (s *Server) HandleProfileGet(w http.ResponseWriter, r *http.Request) {
 		}}, badges...)
 	}
 
-	// 6. 最近游戏（按 play_seconds 倒序取前 6，有 last_play_at 时展示）
-	var libs []model.GameLibrary
-	store.DB.Where("username = ? AND play_seconds > 0", target).
-		Order("play_seconds DESC").Limit(6).Find(&libs)
+	// 6. 最近游戏（按 play_seconds 倒序取前 6，有 last_play_at 时展示；受 GameVisibility 控制）
+	recent := make([]ProfileRecentGameResp, 0)
+	if canSeeGame {
+		var libs []model.GameLibrary
+		store.DB.Where("username = ? AND play_seconds > 0", target).
+			Order("play_seconds DESC").Limit(6).Find(&libs)
 
-	recent := make([]ProfileRecentGameResp, 0, len(libs))
-	if len(libs) > 0 {
-		// 批量查游戏元数据（避免 N+1 查询）
-		gids := make([]uint, 0, len(libs))
-		for _, l := range libs { gids = append(gids, l.GameID) }
-		var games []model.Game
-		store.DB.Where("id IN ?", gids).Find(&games)
-		gameMap := make(map[uint]*model.Game, len(games))
-		for i := range games { gameMap[games[i].ID] = &games[i] }
+		if len(libs) > 0 {
+			// 批量查游戏元数据（避免 N+1 查询）
+			gids := make([]uint, 0, len(libs))
+			for _, l := range libs { gids = append(gids, l.GameID) }
+			var games []model.Game
+			store.DB.Where("id IN ?", gids).Find(&games)
+			gameMap := make(map[uint]*model.Game, len(games))
+			for i := range games { gameMap[games[i].ID] = &games[i] }
 
-		for _, l := range libs {
-			g := gameMap[l.GameID]
-			name := ""
-			cover := ""
-			if g != nil { name = g.Name; cover = g.Cover }
-			lastPlay := ""
-			if !l.LastPlayAt.IsZero() { lastPlay = l.LastPlayAt.Format("2006-01-02 15:04") }
-			recent = append(recent, ProfileRecentGameResp{
-				GameID: l.GameID, Name: name, Cover: cover,
-				PlaySeconds: l.PlaySeconds, LastPlayAt: lastPlay,
-			})
+			for _, l := range libs {
+				g := gameMap[l.GameID]
+				name := ""
+				cover := ""
+				if g != nil { name = g.Name; cover = g.Cover }
+				lastPlay := ""
+				if !l.LastPlayAt.IsZero() { lastPlay = l.LastPlayAt.Format("2006-01-02 15:04") }
+				recent = append(recent, ProfileRecentGameResp{
+					GameID: l.GameID, Name: name, Cover: cover,
+					PlaySeconds: l.PlaySeconds, LastPlayAt: lastPlay,
+				})
+			}
 		}
 	}
 
-	// 7. 最爱游戏
+	// 7. 最爱游戏（同样受 GameVisibility 控制）
 	var favGame *ProfileFavoriteGameResp
-	if u.FavoriteGameID > 0 {
+	if canSeeGame && u.FavoriteGameID > 0 {
 		var g model.Game
 		if err := store.DB.Where("id = ?", u.FavoriteGameID).First(&g).Error; err == nil {
 			favGame = &ProfileFavoriteGameResp{ID: g.ID, Name: g.Name, Cover: g.Cover}
@@ -743,6 +776,7 @@ func (s *Server) HandleProfileGet(w http.ResponseWriter, r *http.Request) {
 		FavoriteGame: favGame,
 		IsFriend:     isFriend,
 		IsSelf:       isSelf,
+		GameVisible:  canSeeGame,
 		LevelPerks:   perks,
 	}
 	profileOK(w, full)
@@ -1035,7 +1069,7 @@ func (s *Server) HandleProfileAchievementsGet(w http.ResponseWriter, r *http.Req
 		profileFail(w, "用户不存在"); return
 	}
 
-	// 2. 隐私判断（资料私密且非本人/好友时拒绝）
+	// 2. 隐私过滤（GameVisibility 扁平公式：0=私密 1=仅好友 2=公开）
 	viewer, _ := gameAuthToken(r)
 	isSelf := viewer != "" && viewer == target
 	isFriend := false
@@ -1045,16 +1079,8 @@ func (s *Server) HandleProfileAchievementsGet(w http.ResponseWriter, r *http.Req
 			isFriend = true
 		}
 	}
-	if !isSelf && u.GameVisibility == 0 {
-		profileOK(w, map[string]interface{}{
-			"groups":      []interface{}{},
-			"unlocked":    0,
-			"total":       0,
-			"viewer_self": isSelf,
-		})
-		return
-	}
-	if !isSelf && u.GameVisibility == 1 && !isFriend {
+	canSeeGame := isSelf || u.GameVisibility == 2 || (u.GameVisibility == 1 && isFriend)
+	if !canSeeGame {
 		profileOK(w, map[string]interface{}{
 			"groups":      []interface{}{},
 			"unlocked":    0,
@@ -1168,27 +1194,26 @@ func (s *Server) HandleProfileReviewsGet(w http.ResponseWriter, r *http.Request)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit < 1 || limit > 50 { limit = 6 }
 
-	// 用户存在
+	// 1. 用户存在
 	var u model.User
 	if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
 		profileFail(w, "用户不存在"); return
 	}
 
-	// 隐私过滤
+	// 2. 隐私过滤（ProfileVisibility 扁平公式，与 HandleProfileGet 同口径）
 	viewer, _ := gameAuthToken(r)
 	isSelf := viewer != "" && viewer == target
-	if !isSelf {
-		isFriend := false
-		if viewer != "" {
-			var f model.Friend
-			if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
-				isFriend = true
-			}
+	isFriend := false
+	if !isSelf && viewer != "" {
+		var f model.Friend
+		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 		}
-		if u.ProfileVisibility == 0 || (u.ProfileVisibility == 1 && !isFriend) {
-			profileOK(w, map[string]interface{}{"list": []interface{}{}, "total": 0})
-			return
-		}
+	}
+	visible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
+	if !visible {
+		profileOK(w, map[string]interface{}{"list": []interface{}{}, "total": 0})
+		return
 	}
 
 	// 查用户评测
@@ -1308,20 +1333,19 @@ func (s *Server) HandleProfileScreenshotsGet(w http.ResponseWriter, r *http.Requ
 		profileFail(w, "用户不存在"); return
 	}
 
-	// 隐私过滤
+	// 隐私过滤（ProfileVisibility 扁平公式，与 HandleProfileGet 同口径）
 	viewer, _ := gameAuthToken(r)
 	isSelf := viewer != "" && viewer == target
-	if !isSelf {
-		isFriend := false
-		if viewer != "" {
-			var f model.Friend
-			if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
-				isFriend = true
-			}
+	isFriend := false
+	if !isSelf && viewer != "" {
+		var f model.Friend
+		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 		}
-		if u.ProfileVisibility == 0 || (u.ProfileVisibility == 1 && !isFriend) {
-			profileOK(w, map[string]interface{}{"list": []interface{}{}}); return
-		}
+	}
+	visible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
+	if !visible {
+		profileOK(w, map[string]interface{}{"list": []interface{}{}}); return
 	}
 
 	ssType := r.URL.Query().Get("type")
@@ -1503,26 +1527,24 @@ func sanitizeCustomHTML(html string) string {
 func (s *Server) HandleProfileShowcaseGet(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("username")
 	if target == "" { profileFail(w, "username 必填"); return }
-	viewer, _ := gameAuthToken(r)
 
-	// 隐私可见性判断（复用 HandleProfileGet 同口径）
+	// 隐私可见性判断（ProfileVisibility 扁平公式，与 HandleProfileGet 同口径）
 	var u model.User
 	if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
 		profileFail(w, "用户不存在"); return
 	}
+	viewer, _ := gameAuthToken(r)
 	isSelf := viewer != "" && viewer == target
-	if !isSelf {
-		// 非自己：查好友关系 + 隐私设置
-		isFriend := false
-		if viewer != "" {
-			var f model.Friend
-			if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
-				isFriend = true
-			}
+	isFriend := false
+	if !isSelf && viewer != "" {
+		var f model.Friend
+		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 		}
-		if u.ProfileVisibility == 0 || (u.ProfileVisibility == 1 && !isFriend) {
-			profileOK(w, []interface{}{}); return
-		}
+	}
+	visible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
+	if !visible {
+		profileOK(w, []interface{}{}); return
 	}
 
 	var rows []model.ProfileShowcase
@@ -1664,19 +1686,18 @@ func (s *Server) HandleProfileCommentsGet(w http.ResponseWriter, r *http.Request
 	// E2 补齐：ProfileVisibility 过滤（资料私密/仅好友时陌生人不应看到留言板）
 	viewer, _ := gameAuthToken(r)
 	isSelf := viewer != "" && viewer == target
-	if !isSelf {
-		isFriend := false
-		if viewer != "" {
-			var f model.Friend
-			if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
-				isFriend = true
-			}
+	isFriend := false
+	if !isSelf && viewer != "" {
+		var f model.Friend
+		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 		}
-		if u.ProfileVisibility == 0 || (u.ProfileVisibility == 1 && !isFriend) {
-			profileOK(w, map[string]interface{}{
-				"list": []interface{}{}, "total": 0, "page": page, "can_comment": false,
-			}); return
-		}
+	}
+	visible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
+	if !visible {
+		profileOK(w, map[string]interface{}{
+			"list": []interface{}{}, "total": 0, "page": page, "can_comment": false,
+		}); return
 	}
 
 	// 查顶层留言（parent_id=0, deleted=0）按时间倒序
@@ -1921,19 +1942,19 @@ func (s *Server) HandleProfileFriendsGet(w http.ResponseWriter, r *http.Request)
 	if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
 		profileFail(w, "用户不存在"); return
 	}
-	// 隐私过滤
-	if !isSelf {
-		isFriend := false
-		if viewer != "" {
-			var f model.Friend
-			if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
-				isFriend = true
-			}
+
+	// 隐私过滤（FriendVisibility 扁平公式：0=私密 1=仅好友 2=公开）
+	isFriend := false
+	if !isSelf && viewer != "" {
+		var f model.Friend
+		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 		}
-		if u.FriendVisibility == 0 || (u.FriendVisibility == 1 && !isFriend) {
-			profileOK(w, map[string]interface{}{"list": []interface{}{}, "friend_visibility": u.FriendVisibility})
-			return
-		}
+	}
+	visible := isSelf || u.FriendVisibility == 2 || (u.FriendVisibility == 1 && isFriend)
+	if !visible {
+		profileOK(w, map[string]interface{}{"list": []interface{}{}, "friend_visibility": u.FriendVisibility})
+		return
 	}
 
 	// 查 Friend 表（注意：Friend 表中 user_id=target 的朋友在 friend_id 字段；双向好友）
@@ -2037,8 +2058,9 @@ func (s *Server) HandleProfileBgDelete(w http.ResponseWriter, r *http.Request) {
 // P1-b: 轻量独立接口 —— 让前端可以按需 fetch，避免每次都拉大聚合
 
 // HandleProfileStatsGet GET /api/profile/stats?username=xxx
-// 独立统计接口（比 /api/profile 小很多，首屏先渲染统计面板）
-// 隐私过滤同 HandleProfileGet：私密→403；仅好友→好友放行
+// 独立统计接口（聚合接口 HandleProfileGet 的轻量拆分）
+// 隐私规则与聚合接口完全一致：基础可见性靠 ProfileVisibility，
+// 游戏相关统计（游戏数/总时长/成就）额外受 GameVisibility 控制
 func (s *Server) HandleProfileStatsGet(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("username")
 	if target == "" { profileFail(w, "username 必填"); return }
@@ -2050,7 +2072,8 @@ func (s *Server) HandleProfileStatsGet(w http.ResponseWriter, r *http.Request) {
 	if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
 		profileFail(w, "用户不存在"); return
 	}
-	// 隐私过滤
+
+	// 好友判断（双向存储）
 	isFriend := false
 	if !isSelf && viewer != "" {
 		var f model.Friend
@@ -2058,21 +2081,29 @@ func (s *Server) HandleProfileStatsGet(w http.ResponseWriter, r *http.Request) {
 			isFriend = true
 		}
 	}
+
+	// ProfileVisibility: 0=私密 1=仅好友 2=公开
 	visible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
 	if !visible {
 		profileFail(w, "该用户资料私密"); return
 	}
+	// GameVisibility: 0=私密 1=仅好友 2=公开（控制游戏相关统计）
+	canSeeGame := isSelf || u.GameVisibility == 2 || (u.GameVisibility == 1 && isFriend)
 
 	var libCount int64
 	var totalPlaySec int64
 	var achCount int64
+	if canSeeGame {
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
+		store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
+			Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
+		store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
+	}
+
 	var badgeCount int64
-	var friendCount int64
-	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
-	store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
-		Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
-	store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
 	store.DB.Model(&model.UserBadge{}).Where("username = ?", target).Count(&badgeCount)
+
+	var friendCount int64
 	store.DB.Model(&model.Friend{}).Where("user_id = ?", target).Count(&friendCount)
 
 	profileOK(w, ProfileStatsResp{
@@ -2134,29 +2165,36 @@ func (s *Server) HandleProfileBadgesGet(w http.ResponseWriter, r *http.Request) 
 }
 
 // HandleProfileExpLogGet GET /api/profile/exp-log?username=xxx
-// 返回用户经验值变动日志列表（按 create_time 倒序）；自己看全部，他人按隐私过滤
+// 返回用户经验值变动日志列表（按 create_time 倒序）；自己看全部，他人按 ProfileVisibility 隐私过滤
+// 注意：经验记录属于个人资料范畴，和资料页其他部分共用 ProfileVisibility 隐私控制（对标 Steam Activity）
+// GameVisibility 控制的是游戏详情（游戏库/时长/成就列表），不控制经验记录
 func (s *Server) HandleProfileExpLogGet(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("username")
 	if target == "" { profileFail(w, "username 必填"); return }
 
 	viewer, _ := gameAuthToken(r)
 	isSelf := viewer != "" && viewer == target
-	// 他人查看经验日志需要资料公开
-	if !isSelf {
-		var u model.User
-		if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
-			profileFail(w, "用户不存在"); return
+
+	// 1. 查目标用户（不存在直接返回）
+	var u model.User
+	if err := store.DB.Where("username = ?", target).First(&u).Error; err != nil {
+		profileFail(w, "用户不存在"); return
+	}
+
+	// 2. 好友判断（双向存储）
+	isFriend := false
+	if !isSelf && viewer != "" {
+		var f model.Friend
+		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 		}
-		isFriend := false
-		if viewer != "" {
-			var f model.Friend
-			if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
-				isFriend = true
-			}
-		}
-		if u.ProfileVisibility == 0 || (u.ProfileVisibility == 1 && !isFriend) {
-			profileOK(w, map[string]interface{}{"list": []interface{}{}}); return
-		}
+	}
+
+	// 3. 隐私过滤（与 HandleProfileGet 完全一致）
+	// ProfileVisibility: 0=私密 1=仅好友 2=公开
+	visible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
+	if !visible {
+		profileOK(w, map[string]interface{}{"list": []interface{}{}}); return
 	}
 
 	var list []model.ProfileExpLog

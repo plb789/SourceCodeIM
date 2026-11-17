@@ -115,6 +115,9 @@
             badges: [],        // 徽章横条 [{ type, code, icon, name }]
             recentGames: [],   // 最近游戏 [{ game_id, name, cover, play_seconds, last_play_at }]
             favoriteGame: null,// 最爱游戏 { id, name, cover }
+            is_self: false,    // 查询者是否为本人
+            is_friend: false,  // 查询者与目标是否好友
+            game_visible: true,// 查询者是否有权查看目标的游戏详情（隐私控制）
             // 阶段二百九十五 P1：补齐初始化字段（避免 undefined 导致 renderComments/renderShowcases 首帧异常）
             showcase: [],      // 展示柜配置 [{ slot, type, title, config, enabled }]
             comments: [],      // 留言列表 [{ id, from_user, from_nickname, from_avatar, content, create_time, replies }]
@@ -782,11 +785,12 @@
             });
         }
 
-        // 7. 统计面板
+        // 7. 统计面板（游戏相关统计受 game_visible 隐私控制）
         var st = p.stats || {};
-        $('gpStatGames').textContent = st.total_games || 0;
-        $('gpStatHours').textContent = fmtPlay((st.total_play_seconds || 0));
-        $('gpStatAch').textContent = st.total_achievements || 0;
+        var gv = p.game_visible !== false;
+        $('gpStatGames').textContent = gv ? (st.total_games || 0) : T('私密');
+        $('gpStatHours').textContent = gv ? fmtPlay((st.total_play_seconds || 0)) : T('私密');
+        $('gpStatAch').textContent = gv ? (st.total_achievements || 0) : T('私密');
         $('gpStatBadges').textContent = st.total_badges || 0;
         $('gpStatFriends').textContent = st.friends_count || 0;
 
@@ -2210,7 +2214,11 @@
         } else {
             var empty = el('div', 'gp-empty');
             empty.style.padding = '40px 0';
-            empty.textContent = T('暂无游戏记录');
+            if (state.profile.game_visible === false) {
+                empty.textContent = T('该用户的游戏详情已设为私密');
+            } else {
+                empty.textContent = T('暂无游戏记录');
+            }
             wrap.appendChild(list);
             wrap.appendChild(empty);
             return wrap;
@@ -2638,6 +2646,8 @@
             // 好友关系状态（服务端按 viewer 视角查库，前端不能自行伪造）
             p.is_friend = !!d.is_friend;
             p.is_self = !!d.is_self;
+            // 游戏详情可见性（GameVisibility 隐私控制结果，服务端派生）
+            p.game_visible = d.game_visible !== false; // undefined 时默认 true 兜底
             // P1-a/G3: level_perks —— 等级权益（展示柜槽位/称号/等级等），必须同步到 state
             // 否则所有依赖 maxSlots 的逻辑都会走 fallback 3 而不会用后端真实配置
             if (d.level_perks) p.level_perks = d.level_perks;
@@ -7486,6 +7496,14 @@
 
     // 媒体轮播：主舞台（图片/视频混排，视频内联播放）+ 缩略图横条（横向自绘悬浮滑块）；
     // 单项时隐藏箭头/指示/缩略图条；视频项缩略图带播放角标，切走时暂停并释放资源
+    // ===== P0 性能优化（已迭代两轮） =====
+    // 方案 A（已废弃）: preload='none' + 大播放按钮覆盖层 → 黑底只有三角按钮，体验差
+    // 方案 B（当前）: preload='metadata' → 浏览器加载元数据+自动渲染首帧封面，Chrome 原生控件栏自带播放按钮
+    // 1) 视频缩略图：初始只渲染占位色块（零网络请求），hover 150ms 或被选中时才惰性创建
+    //    <video preload='metadata' #t=0.1> seek 到 0.1s 取首帧，避免 N 个视频并发抢连接池；
+    // 2) 主舞台视频：preload='metadata'（只下元数据几 KB，不下载完整视频），Chrome 自动显示首帧封面
+    //    + 原生 controls 栏的播放按钮，用户点击播放时才开始流式加载视频数据；
+    //    首屏只创建 1 个 video（选中项），缩略图全延迟 → 总共 1 个 metadata 请求，无并发竞争。
     function buildMediaCarousel(items) {
         var box = el('div');
         var stage = el('div', 'gs-stage');
@@ -7507,23 +7525,61 @@
 
         var multi = items.length > 1;
         var cur = 0;
-        var thumbEls = [];
+        var thumbEls = [];   // 缩略图按钮元素数组
+        var thumbLazyTimers = {}; // index → setTimeout id：hover 延迟加载定时器
         var thumbs = null;
+
+        // ===== 惰性加载视频缩略图：占位 → hover 150ms 后才创建 <video> 取首帧 =====
+        // 选中项立即加载（确保 active 态有首帧预览），其他项靠 hover 触发
+        function loadThumbVideo(i) {
+            if (i < 0 || i >= thumbEls.length) return;
+            var t = thumbEls[i];
+            if (!t || t._videoLoaded) return;
+            var m = items[i];
+            if (m.type !== 'video') return;
+            // 清占位，创建 video
+            t.innerHTML = '';
+            var vd = document.createElement('video');
+            // #t=0.1 媒体片段：Chromium 在 preload="metadata" 下只取元数据不渲染画面（缩略图全黑），
+            // 带时间片段会 seek 到 0.1s 并渲染该帧，缩略图即首帧画面（Steam 同款）
+            vd.src = m.url + '#t=0.1';
+            vd.preload = 'metadata';
+            vd.muted = true;
+            vd.playsInline = true;
+            t.appendChild(vd);
+            var badge = el('span', 'gs-thumb-play');
+            badge.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
+            t.appendChild(badge);
+            t._videoLoaded = true;
+        }
+
         if (multi) {
             thumbs = el('div', 'gs-thumbs gs-scroll');
             items.forEach(function (m, i) {
                 var t = el('button', 'gs-thumb');
                 if (m.type === 'video') {
-                    var vd = document.createElement('video');
-                    // #t=0.1 媒体片段：Chromium 在 preload="metadata" 下只取元数据不渲染画面（缩略图全黑），
-                    // 带时间片段会 seek 到 0.1s 并渲染该帧，缩略图即首帧画面（Steam 同款）
-                    vd.src = m.url + '#t=0.1';
-                    vd.preload = 'metadata'; // 缩略图仅取首帧，不预加载完整视频
-                    vd.muted = true;
-                    t.appendChild(vd);
+                    // ===== P0 优化：视频缩略图初始只渲染占位色块，不创建 <video> =====
+                    var ph = el('div', 'gs-thumb-ph');
+                    ph.textContent = '▶';
+                    t.appendChild(ph);
                     var badge = el('span', 'gs-thumb-play');
                     badge.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
                     t.appendChild(badge);
+                    // hover 150ms 延迟加载（防快速扫过全部触发）
+                    t.addEventListener('mouseenter', (function (idx) {
+                        return function () {
+                            if (idx === cur) return; // 选中项在 show() 已加载
+                            clearTimeout(thumbLazyTimers[idx]);
+                            thumbLazyTimers[idx] = setTimeout(function () {
+                                loadThumbVideo(idx);
+                            }, 150);
+                        };
+                    })(i));
+                    t.addEventListener('mouseleave', (function (idx) {
+                        return function () {
+                            clearTimeout(thumbLazyTimers[idx]);
+                        };
+                    })(i));
                 } else {
                     var im = document.createElement('img');
                     im.src = m.url;
@@ -7543,22 +7599,34 @@
             idxEl.style.display = 'none';
         }
 
+        // ===== 释放旧 stage 视频（暂停 + 清 src + 卸载）=====
+        function releaseStageVideo() {
+            if (!stageVideo) return;
+            try { stageVideo.pause(); } catch (e) {}
+            stageVideo.removeAttribute('src');
+            try { stageVideo.load(); } catch (e) {}
+            stageVideo.remove();
+            stageVideo = null;
+        }
+
         function show(i) {
             cur = (i + items.length) % items.length;
             var m = items[cur];
-            if (stageVideo) { // 旧视频释放
-                stageVideo.pause();
-                stageVideo.removeAttribute('src');
-                stageVideo.load();
-                stageVideo.remove();
-                stageVideo = null;
-            }
+            releaseStageVideo();
+
+            // ===== P0 优化：选中的缩略图立即加载视频首帧 =====
+            loadThumbVideo(cur);
+
             if (m.type === 'video') {
                 stageImg.style.display = 'none';
                 stageVideo = document.createElement('video');
                 stageVideo.src = m.url;
                 stageVideo.controls = true;
-                stageVideo.autoplay = true;
+                // preload='metadata'：只下元数据（几 KB）+ 浏览器自动渲染首帧作为封面，
+                // 用户点击原生播放按钮才开始流式加载视频数据；既避免全黑底又不预下载完整视频
+                stageVideo.preload = 'metadata';
+                stageVideo.muted = false;
+                stageVideo.playsInline = true;
                 stageVideo.className = 'gs-stage-video';
                 stage.insertBefore(stageVideo, prev);
             } else {
@@ -7574,6 +7642,25 @@
             }
         }
         show(0);
+
+        // ===== 后台串行预加载所有非选中视频缩略图 =====
+        // 首屏渲染完后（600ms）开始，每隔 300ms 加载一个。
+        // detailSeq 守卫：openDetail 每次递增 detailSeq，innerHTML='' 清 DOM 不取消 setTimeout，
+        // 旧详情页的 setTimeout 触发时 seq !== detailSeq → 跳过，避免内存泄漏（不可见 video 元素）。
+        var mySeq = detailSeq;
+        if (multi) {
+            var seq = 0;
+            for (var s = 0; s < items.length; s++) {
+                if (s === cur || items[s].type !== 'video') continue;
+                (function (idx, order) {
+                    setTimeout(function () {
+                        if (mySeq !== detailSeq) return; // 详情已被替换，跳过（同时取消也没意义，loadThumbVideo 里 _videoLoaded 已防止重复）
+                        loadThumbVideo(idx);
+                    }, 600 + order * 300);
+                })(s, seq++);
+            }
+        }
+
         return box;
     }
 

@@ -263,6 +263,7 @@ func (s *Server) HandleCardDraw(w http.ResponseWriter, r *http.Request) {
 
 // HandleProfileCardsGet GET /api/profile/cards?username=xxx
 // 返回用户卡片背包：每张卡的定义 + 持有数量（含闪卡数），按游戏分组
+// 隐私规则：ProfileVisibility 扁平公式（0=私密 1=仅好友 2=公开），与其他资料接口同口径
 func (s *Server) HandleProfileCardsGet(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("username")
 	if target == "" {
@@ -274,21 +275,20 @@ func (s *Server) HandleProfileCardsGet(w http.ResponseWriter, r *http.Request) {
 		profileFail(w, "用户不存在")
 		return
 	}
-	// 隐私过滤
+	// 隐私过滤（ProfileVisibility 扁平公式，与 HandleProfileGet 同口径）
 	viewer, _ := gameAuthToken(r)
 	isSelf := viewer != "" && viewer == target
-	if !isSelf {
-		isFriend := false
-		if viewer != "" {
-			var f model.Friend
-			if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
-				isFriend = true
-			}
+	isFriend := false
+	if !isSelf && viewer != "" {
+		var f model.Friend
+		if err := store.DB.Where("user_id = ? AND friend_id = ?", viewer, target).First(&f).Error; err == nil {
+			isFriend = true
 		}
-		if u.ProfileVisibility == 0 || (u.ProfileVisibility == 1 && !isFriend) {
-			profileOK(w, map[string]interface{}{"groups": []interface{}{}})
-			return
-		}
+	}
+	visible := isSelf || u.ProfileVisibility == 2 || (u.ProfileVisibility == 1 && isFriend)
+	if !visible {
+		profileOK(w, map[string]interface{}{"groups": []interface{}{}})
+		return
 	}
 
 	var ucs []model.UserCard

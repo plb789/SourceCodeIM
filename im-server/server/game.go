@@ -841,10 +841,6 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
 	}
-	username, ok := gameUsername(w, r)
-	if !ok {
-		return
-	}
 	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	var g model.Game
 	if err := store.DB.First(&g, id).Error; err != nil {
@@ -860,13 +856,31 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
-	if g.Status != 0 || (g.AuditStatus != model.GameAuditOfficial && g.AuditStatus != model.GameAuditApproved) {
-		var cnt int64
-		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", username, g.ID).Count(&cnt)
-		if cnt == 0 {
+
+	// viewer 归属校验：所有涉及个人 GameLibrary 的操作都必须 token 归属一致，
+	// 严禁信任 query 里自报的 username（他人可冒名查询 install_path / play_seconds）
+	viewer, hasToken := gameAuthToken(r)
+	hasLib := false
+	if !hasToken || viewer == "" {
+		// 无 token → 未登录，下架/待审/驳回游戏一律不可见（防枚举）
+		if g.Status != 0 || (g.AuditStatus != model.GameAuditOfficial && g.AuditStatus != model.GameAuditApproved) {
 			adminFail(w, http.StatusNotFound, "游戏不存在")
 			return
 		}
+	} else {
+		// 有 token → 校验本人是否入库（下架/待审/驳回游戏需已入库）
+		if g.Status != 0 || (g.AuditStatus != model.GameAuditOfficial && g.AuditStatus != model.GameAuditApproved) {
+			var cnt int64
+			store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", viewer, g.ID).Count(&cnt)
+			if cnt == 0 {
+				adminFail(w, http.StatusNotFound, "游戏不存在")
+				return
+			}
+		}
+		// 本人是否入库（个人库状态 + launch_password 都依赖这个）
+		var cnt int64
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", viewer, g.ID).Count(&cnt)
+		hasLib = cnt > 0
 	}
 	var versions []model.GameVersion
 	store.DB.Where("game_id = ? AND register_state = 0", g.ID).Order("id DESC").Find(&versions)
@@ -879,23 +893,24 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	item := gameSummary(g)
-	// 好友正在玩（Steam 同款详情页"N 名好友正在玩"；仅本款一条归口查询）
-	if _, playOf := friendSocialOf(username, []uint{g.ID}); len(playOf) > 0 {
-		item["friends_playing"] = playOf[g.ID]
+	// 好友正在玩（Steam 同款详情页"N 名好友正在玩"；仅对有 token 的请求返回，未登录无好友态）
+	if hasToken {
+		if _, playOf := friendSocialOf(viewer, []uint{g.ID}); len(playOf) > 0 {
+			item["friends_playing"] = playOf[g.ID]
+		}
 	}
 	item["description"] = g.Description
 	item["versions"] = verList
 	// 积分充值可用性（仅布尔开关，非敏感）：客户端据此显隐"积分赞助"入口（服务端下单时仍全量校验）
 	item["recharge_enabled"] = g.RechargeEnabled
 	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏专属密钥确定性派生，仅本人可得；真实登录密码不下发）。
-	// token 门控（guardDrive 敏感字段同款语义）：detail 为公开浏览面，启动密码仅对 token 校验通过的
-	// 本人请求下发——防冒名 username 拉取他人游戏启动密码（网关写库游戏可凭密码登录他人游戏账号）
-	if tu, ok := gameAuthToken(r); ok && tu == username {
+	// token + 入库双重门控：已登录 + 已入库才下发（下架/隔离游戏已在上方过滤，token 归属已由 viewer 保证）
+	if hasToken && hasLib {
 		sec := s.gameLaunchSecretOf(&g)
-		item["launch_password"] = gameLaunchPassword(sec, username, g.ID)
+		item["launch_password"] = gameLaunchPassword(sec, viewer, g.ID)
 		// 成就会话签名密钥（方案 §14.2）：随 launch_password 同步下发本人（24h TTL 存 Redis，
 		// 存在即复用不轮换）；launch_secret 本体永不下发，客户端用它签成就上报
-		if k := achSessionSignKeyIssue(username, g.ID, sec); k != "" {
+		if k := achSessionSignKeyIssue(viewer, g.ID, sec); k != "" {
 			item["session_sign_key"] = k
 		}
 	}
@@ -917,14 +932,17 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	item["notices"] = noticeList
 	// 个人库状态（未入库不下发 in_library：前端以 undefined/null=未入库渲染 Steam 同款购买块，
 	// 入库后值为库状态 0-4，0=正常在库渲染安装/启动按钮组）；已安装且版本落后 → 映射待更新（4）
-	var lib model.GameLibrary
-	if err := store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&lib).Error; err == nil {
-		item["in_library"] = libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion)
-		item["lib"] = map[string]interface{}{
-			"state":             libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion),
-			"installed_version": lib.InstalledVersion,
-			"install_path":      lib.InstallPath,
-			"play_seconds":      lib.PlaySeconds,
+	// token + 入库双重门控，严禁信任 query 自报 username
+	if hasToken && hasLib {
+		var lib model.GameLibrary
+		if err := store.DB.Where("username = ? AND game_id = ?", viewer, g.ID).First(&lib).Error; err == nil {
+			item["in_library"] = libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion)
+			item["lib"] = map[string]interface{}{
+				"state":             libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion),
+				"installed_version": lib.InstalledVersion,
+				"install_path":      lib.InstallPath,
+				"play_seconds":      lib.PlaySeconds,
+			}
 		}
 	}
 	adminJSON(w, item)

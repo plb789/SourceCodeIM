@@ -1483,6 +1483,8 @@
         .gs-stage:hover .gs-stage-nav { opacity: 1; }
 
         .gs-stage-nav:hover { background: rgba(0, 0, 0, 0.55); }
+        /* 切换按钮 z-index 须高于 playBtn(5)，否则 playBtn 覆盖整个舞台后无法点击切换 */
+        .gs-stage-nav { z-index: 10; }
 
         .gs-stage-nav.prev { left: 10px; }
 
@@ -1703,6 +1705,39 @@
             align-items: center;
             justify-content: center;
         }
+
+        /* 视频缩略图占位图（延迟加载前显示） */
+        .gs-thumb-ph {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, var(--placeholder-bg), var(--hover));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-light);
+            font-size: 18px;
+        }
+
+        /* 主舞台视频中央大播放按钮（autoplay fallback） */
+        .gs-stage-play-btn {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 5;
+            transition: background 0.15s;
+        }
+        .gs-stage-play-btn:hover { background: rgba(0, 0, 0, 0.55); }
+        .gs-stage-play-btn svg {
+            width: 64px;
+            height: 64px;
+            filter: drop-shadow(0 2px 8px rgba(0,0,0,0.5));
+            transition: transform 0.15s;
+        }
+        .gs-stage-play-btn:hover svg { transform: scale(1.08); }
 
         /* 评测区 */
         .gs-review-head {
