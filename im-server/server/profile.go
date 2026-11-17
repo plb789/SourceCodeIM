@@ -2204,7 +2204,34 @@ func (s *Server) HandleProfileExpLogGet(w http.ResponseWriter, r *http.Request) 
 		profileOK(w, map[string]interface{}{"list": []interface{}{}}); return
 	}
 
+	// 4. 分页参数（page=1基, size默认30, 最大100；reason可选筛选）
+	page := 1
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 { page = n }
+	}
+	size := 30
+	if v := r.URL.Query().Get("size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 { size = n }
+	}
+	offset := (page - 1) * size
+	reasonFilter := r.URL.Query().Get("reason")
+
+	// 5. 构造查询（先算总数再分页）
+	q := store.DB.Model(&model.ProfileExpLog{}).Where("username = ?", target)
+	if reasonFilter != "" {
+		q = q.Where("reason = ?", reasonFilter)
+	}
+
+	var total int64
+	q.Count(&total)
+
 	var list []model.ProfileExpLog
-	store.DB.Where("username = ?", target).Order("create_time DESC").Limit(200).Find(&list)
-	profileOK(w, map[string]interface{}{"list": list})
+	q.Order("create_time DESC").Offset(offset).Limit(size).Find(&list)
+
+	profileOK(w, map[string]interface{}{
+		"list":  list,
+		"total": total,
+		"page":  page,
+		"size":  size,
+	})
 }

@@ -2308,70 +2308,351 @@
         });
     }
 
-    // ==================== 增强：经验值历史查看器 ====================
+    // ==================== 增强：经验值历史查看器（支持万级数据·分页·筛选·时间轴分组） ====================
     function openExpLogViewer(targetUser) {
+        // 来源类型翻译映射（key 必须和服务端 ProfileExpLog.Reason 完全一致）
+        var reasonMap = {
+            'unlock_achievement': T('解锁成就'),
+            'daily_achievement':  T('每日成就'),
+            'badge':              T('合成徽章'),
+            'screenshot_like':    T('截图点赞'),
+            'complete_game':      T('完成游戏'),
+            'review_publish':     T('发布评测'),
+            'upload_screenshot':  T('上传截图'),
+            'level_up':           T('等级提升'),
+            'admin_grant':        T('管理员授予'),
+            'other':              T('其他'),
+            'unlock achievement': T('解锁成就'),
+        };
+        // 每种来源配一个 emoji 图标（纯 CSS+文本，无图片依赖）
+        var reasonIcon = {
+            'unlock_achievement': '🏆',
+            'daily_achievement':  '📅',
+            'badge':              '🎖️',
+            'screenshot_like':    '❤️',
+            'complete_game':      '🎮',
+            'review_publish':     '✍️',
+            'upload_screenshot':  '🖼️',
+            'level_up':           '⬆️',
+            'admin_grant':        '🎁',
+            'other':              '✨',
+        };
+        var REASON_LIST = [
+            { key: '',                    label: T('全部'),  icon: '📋' },
+            { key: 'daily_achievement',   label: T('每日'),  icon: '📅' },
+            { key: 'unlock_achievement', label: T('成就'),  icon: '🏆' },
+            { key: 'badge',               label: T('徽章'),  icon: '🎖️' },
+            { key: 'complete_game',       label: T('通关'),  icon: '🎮' },
+            { key: 'review_publish',      label: T('评测'),  icon: '✍️' },
+            { key: 'upload_screenshot',   label: T('截图'),  icon: '🖼️' },
+            { key: 'screenshot_like',     label: T('点赞'),  icon: '❤️' },
+            { key: 'level_up',            label: T('升级'),  icon: '⬆️' },
+            { key: 'admin_grant',         label: T('授予'),  icon: '🎁' },
+            { key: 'other',               label: T('其他'),  icon: '✨' },
+        ];
+
+        var state2 = {
+            page: 1,
+            size: 30,
+            total: 0,
+            hasMore: true,
+            loading: false,
+            allItems: [],   // 已拉取的全部（供本地搜索过滤）
+            filtered: [],   // 搜索筛选后的展示数据
+            filterReason: '',
+            keyword: '',
+        };
+
         var ov = document.createElement('div');
         ov.className = 'gp-mask';
-        ov.innerHTML = '<div class="gp-modal gp-exp-log-modal">' +
-            '<div class="gp-modal-title">' + T('经验值记录') +
-              '<span class="gp-exp-summary" id="gpExpSummary"></span>' +
-            '</div>' +
-            '<div class="gp-modal-body gp-exp-log-body" id="gpExpLogList">' + T('加载中…') + '</div>' +
-            '<div class="gp-modal-foot">' +
-              '<button class="gp-btn" id="gpExpClose">' + T('关闭') + '</button>' +
-            '</div>' +
-          '</div>';
+        ov.innerHTML =
+            '<div class="gp-modal gp-exp-log-modal">' +
+              '<div class="gp-modal-title">' +
+                '<span>' + T('经验值记录') + '</span>' +
+                '<span class="gp-exp-title-sub" id="gpExpTitleSub"></span>' +
+                '<button class="gp-modal-x" id="gpExpCloseX" title="' + T('关闭') + '">×</button>' +
+              '</div>' +
+              '<div class="gp-exp-log-head">' +
+                '<div class="gp-exp-stats">' +
+                  '<div class="gp-exp-stat">' +
+                    '<div class="gp-exp-stat-val" id="gpStatLevel">Lv.0</div>' +
+                    '<div class="gp-exp-stat-lbl">' + T('当前等级') + '</div>' +
+                  '</div>' +
+                  '<div class="gp-exp-stat">' +
+                    '<div class="gp-exp-stat-val" id="gpStatExp">0</div>' +
+                    '<div class="gp-exp-stat-lbl">' + T('累计经验') + '</div>' +
+                  '</div>' +
+                  '<div class="gp-exp-stat">' +
+                    '<div class="gp-exp-stat-val" id="gpStatTotal">0</div>' +
+                    '<div class="gp-exp-stat-lbl">' + T('记录总数') + '</div>' +
+                  '</div>' +
+                  '<div class="gp-exp-stat">' +
+                    '<div class="gp-exp-stat-val" id="gpStatMonth">+0</div>' +
+                    '<div class="gp-exp-stat-lbl">' + T('本月新增') + '</div>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="gp-exp-filters">' +
+                  '<div class="gp-exp-filter-chips" id="gpExpFilterChips"></div>' +
+                  '<div class="gp-exp-search">' +
+                    '<span class="gp-exp-search-ico">🔍</span>' +
+                    '<input type="text" id="gpExpKw" placeholder="' + T('搜索成就名称/详情…') + '" />' +
+                    '<button class="gp-exp-search-clear" id="gpExpKwClear" style="display:none">×</button>' +
+                  '</div>' +
+                '</div>' +
+              '</div>' +
+              '<div class="gp-modal-body gp-exp-log-body gp-exp-timeline" id="gpExpTimeline">' +
+                '<div class="gp-exp-loading">' + T('加载中…') + '</div>' +
+              '</div>' +
+              '<div class="gp-exp-log-foot" id="gpExpFoot"></div>' +
+            '</div>';
         document.body.appendChild(ov);
-        var bodyScroll = ov.querySelector('.gp-exp-log-body') || ov.querySelector('.gp-modal-body');
-        if (bodyScroll) osbInit(bodyScroll);
-        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+
+        var scrollEl = ov.querySelector('#gpExpTimeline');
+        osbInit(scrollEl);
+
+        function gpClose() {
+            clearTimeout(kwTimer);
+            destroyOsb(scrollEl);
+            if (state2._infIO) { state2._infIO.disconnect(); state2._infIO = null; }
+            document.removeEventListener('keydown', _gpEsc);
+            if (ov.parentNode) document.body.removeChild(ov);
+        }
         var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
         document.addEventListener('keydown', _gpEsc);
-        ov.querySelector('#gpExpClose').addEventListener('click', gpClose);
+        ov.querySelector('#gpExpCloseX').addEventListener('click', gpClose);
         ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
-        // 从资料页已有的 basic 信息先显示概览
+
+        // 填充顶部等级概览（从资料页已加载的数据取，避免额外请求）
         var basic = (state.profile && state.profile.basic) || {};
-        var summary = T('等级') + ': Lv.' + (basic.level != null ? basic.level : 0) + ' · ' + T('经验') + ': ' + (basic.exp != null ? basic.exp : 0);
-        ov.querySelector('#gpExpSummary').textContent = summary;
-        // 拉日志
-        api('GET', '/api/profile/exp-log?username=' + encodeURIComponent(targetUser)).then(function (res) {
-            var list = (res && res.ok && res.data && res.data.list) || [];
-            var box = ov.querySelector('#gpExpLogList');
-            if (list.length === 0) { box.innerHTML = '<div class="gp-empty">' + T('暂无经验记录') + '</div>'; return; }
-            box.innerHTML = '';
-            // 经验日志来源类型翻译映射（key 必须和服务端 ProfileExpLog.Reason 完全一致）
-            var reasonMap = {
-                'unlock_achievement': T('解锁成就'),
-                'daily_achievement':  T('每日成就'),
-                'badge':              T('合成徽章'),
-                'screenshot_like':    T('截图点赞'),
-                'complete_game':      T('完成游戏'),
-                'review_publish':     T('发布评测'),
-                'upload_screenshot':  T('上传截图'),
-                'level_up':           T('等级提升'),
-                'admin_grant':        T('管理员授予'),
-                'other':              T('其他'),
-                // 兼容历史数据：早期版本可能写过空格分隔或不同 key 的值
-                'unlock achievement':  T('解锁成就'),
-            };
-            list.forEach(function (it) {
-                var row = el('div', 'gp-exp-row');
-                var left = el('div', 'gp-exp-left');
-                left.appendChild(el('div', 'gp-exp-reason', reasonMap[it.reason] || it.reason || T('未知')));
-                if (it.detail) left.appendChild(el('div', 'gp-exp-detail', it.detail));
-                var tm = it.create_time ? new Date(it.create_time) : null;
-                if (tm) {
-                    var ts = tm.toLocaleString();
-                    left.appendChild(el('div', 'gp-exp-time', ts));
-                }
-                var right = el('div', 'gp-exp-right');
-                var change = Number(it.change) || 0;
-                right.appendChild(el('span', 'gp-exp-change' + (change >= 0 ? ' positive' : ' negative'),
-                    (change >= 0 ? '+' : '') + change + T(' EXP')));
-                row.appendChild(left); row.appendChild(right);
-                box.appendChild(row);
+        ov.querySelector('#gpStatLevel').textContent = 'Lv.' + (basic.level || 1);
+        ov.querySelector('#gpStatExp').textContent = fmtCount(basic.exp || 0);
+
+        // 渲染筛选 chips
+        var chipBox = ov.querySelector('#gpExpFilterChips');
+        REASON_LIST.forEach(function (r) {
+            var chip = el('button', 'gp-exp-chip' + (r.key === state2.filterReason ? ' active' : ''), r.icon + ' ' + r.label);
+            chip.setAttribute('data-reason', r.key);
+            chip.addEventListener('click', function () {
+                if (state2.filterReason === r.key) return;
+                state2.filterReason = r.key;
+                // 只重算本地过滤（如果已全量加载）或重新拉分页第一页
+                state2.page = 1;
+                state2.hasMore = true;
+                state2.allItems = [];
+                refreshFilterChips();
+                reload();
             });
+            chipBox.appendChild(chip);
         });
+        function refreshFilterChips() {
+            var chips = chipBox.querySelectorAll('.gp-exp-chip');
+            chips.forEach(function (c) { c.classList.toggle('active', c.getAttribute('data-reason') === state2.filterReason); });
+        }
+
+        // 搜索框
+        var kwInput = ov.querySelector('#gpExpKw');
+        var kwClear = ov.querySelector('#gpExpKwClear');
+        var kwTimer = null;
+        kwInput.addEventListener('input', function () {
+            var v = (kwInput.value || '').trim();
+            kwClear.style.display = v ? '' : 'none';
+            clearTimeout(kwTimer);
+            kwTimer = setTimeout(function () {
+                state2.keyword = v.toLowerCase();
+                applyLocalFilter();
+            }, 250);
+        });
+        kwClear.addEventListener('click', function () { kwInput.value = ''; kwClear.style.display = 'none'; state2.keyword = ''; applyLocalFilter(); });
+
+        // 按日期分组
+        function groupByDate(items) {
+            var groups = [];
+            var today = new Date(); today.setHours(0, 0, 0, 0);
+            var yesterday = new Date(today.getTime() - 86400000);
+            items.forEach(function (it) {
+                var tm = it.create_time ? new Date(it.create_time) : null;
+                var label, key;
+                if (!tm) { label = T('未知时间'); key = '__unknown__'; }
+                else {
+                    var d = new Date(tm.getTime()); d.setHours(0, 0, 0, 0);
+                    if (d.getTime() === today.getTime()) { label = T('今天'); key = '_today'; }
+                    else if (d.getTime() === yesterday.getTime()) { label = T('昨天'); key = '_yesterday'; }
+                    else {
+                        label = tm.getFullYear() + '-' + p2(tm.getMonth() + 1) + '-' + p2(tm.getDate());
+                        key = label;
+                    }
+                }
+                var g = null;
+                for (var i = 0; i < groups.length; i++) { if (groups[i].key === key) { g = groups[i]; break; } }
+                if (!g) { g = { key: key, label: label, items: [], totalExp: 0 }; groups.push(g); }
+                g.items.push(it);
+                g.totalExp += Number(it.change) || 0;
+            });
+            return groups;
+        }
+
+        // 渲染单条记录
+        function makeLogRow(it) {
+            var change = Number(it.change) || 0;
+            var row = el('div', 'gp-exp-item');
+            var ic = reasonIcon[it.reason] || '✨';
+            var label = reasonMap[it.reason] || it.reason || T('未知');
+            var tm = it.create_time ? new Date(it.create_time) : null;
+            var timeStr = tm ? (p2(tm.getHours()) + ':' + p2(tm.getMinutes())) : '';
+            row.innerHTML =
+                '<div class="gp-exp-item-ic">' + ic + '</div>' +
+                '<div class="gp-exp-item-main">' +
+                  '<div class="gp-exp-item-head">' +
+                    '<span class="gp-exp-item-label">' + label + '</span>' +
+                    (it.detail ? '<span class="gp-exp-item-detail">' + it.detail + '</span>' : '') +
+                  '</div>' +
+                  (timeStr ? '<div class="gp-exp-item-time">' + timeStr + '</div>' : '') +
+                '</div>' +
+                '<div class="gp-exp-item-val ' + (change >= 0 ? 'pos' : 'neg') + '">' +
+                  (change >= 0 ? '+' : '') + change +
+                '</div>';
+            return row;
+        }
+
+        // 渲染到容器（可增量追加）
+        function renderGroups(items, append) {
+            var groups = groupByDate(items);
+            var frag = document.createDocumentFragment();
+            groups.forEach(function (g) {
+                // 分组头
+                var gHead = el('div', 'gp-exp-group-head');
+                gHead.appendChild(el('span', 'gp-exp-group-title', g.label));
+                var sign = g.totalExp >= 0 ? '+' : '';
+                gHead.appendChild(el('span', 'gp-exp-group-sub', T('共') + ' ' + g.items.length + ' ' + T('条') + ' · ' + sign + g.totalExp + ' EXP'));
+                frag.appendChild(gHead);
+                // 条目
+                g.items.forEach(function (it) { frag.appendChild(makeLogRow(it)); });
+            });
+            if (!append) { scrollEl.innerHTML = ''; }
+            scrollEl.appendChild(frag);
+            osbTick(scrollEl);
+        }
+
+        // 本地搜索/筛选（对已拉全量数据生效）
+        function applyLocalFilter() {
+            var items = state2.allItems.slice();
+            if (state2.filterReason) items = items.filter(function (x) { return x.reason === state2.filterReason; });
+            if (state2.keyword) {
+                items = items.filter(function (x) {
+                    var hay = ((reasonMap[x.reason] || x.reason || '') + ' ' + (x.detail || '')).toLowerCase();
+                    return hay.indexOf(state2.keyword) >= 0;
+                });
+            }
+            state2.filtered = items;
+            if (items.length === 0) {
+                scrollEl.innerHTML = '<div class="gp-exp-empty">' +
+                    '<div class="gp-exp-empty-ic">🔎</div>' +
+                    '<div>' + (state2.keyword || state2.filterReason ? T('没有匹配的记录') : T('暂无经验记录')) + '</div>' +
+                  '</div>';
+            } else {
+                renderGroups(items, false);
+            }
+            updateFoot();
+        }
+
+        function updateFoot() {
+            var foot = ov.querySelector('#gpExpFoot');
+            if (state2.total > 0) {
+                foot.textContent = T('共') + ' ' + state2.total + ' ' + T('条记录');
+            } else {
+                foot.textContent = '';
+            }
+        }
+
+        function setupInfScroll() {
+            if (state2._infIO) { state2._infIO.disconnect(); state2._infIO = null; }
+            var sentinel = document.createElement('div');
+            sentinel.className = 'gp-exp-inf-sentinel';
+            sentinel.textContent = T('加载更多…');
+            scrollEl.appendChild(sentinel);
+            state2._infIO = new IntersectionObserver(function (ents) {
+                for (var i = 0; i < ents.length; i++) {
+                    if (ents[i].isIntersecting && state2.hasMore && !state2.loading) { loadMore(); break; }
+                }
+            }, { root: scrollEl, rootMargin: '300px 0px' });
+            state2._infIO.observe(sentinel);
+        }
+
+        function loadMore() {
+            if (state2.loading || !state2.hasMore) return;
+            state2.loading = true;
+            var sentinel = scrollEl.querySelector('.gp-exp-inf-sentinel');
+            if (sentinel) sentinel.textContent = T('加载中…');
+            var url = '/api/profile/exp-log?username=' + encodeURIComponent(targetUser)
+                + '&page=' + state2.page + '&size=' + state2.size;
+            if (state2.filterReason) url += '&reason=' + encodeURIComponent(state2.filterReason);
+            api('GET', url).then(function (res) {
+                state2.loading = false;
+                var data = (res && res.ok && res.data) || {};
+                var list = data.list || [];
+                state2.total = Number(data.total) || 0;
+                state2.hasMore = list.length >= state2.size;
+                state2.page++;
+                // 追加到全量（用于本地搜索/筛选）
+                Array.prototype.push.apply(state2.allItems, list);
+                // 全量重渲染（避免增量追加导致重复日期分组头）
+                if (state2.keyword) {
+                    applyLocalFilter();
+                } else if (state2.allItems.length === 0) {
+                    scrollEl.innerHTML = '<div class="gp-exp-empty">' +
+                        '<div class="gp-exp-empty-ic">📭</div>' +
+                        '<div>' + T('暂无经验记录') + '</div>' +
+                      '</div>';
+                } else {
+                    renderGroups(state2.allItems, false);
+                }
+                // 无更多数据时，底部加结束提示
+                if (!state2.hasMore && state2.allItems.length > 0) {
+                    var endTip = el('div', 'gp-exp-endtip', T('— 已加载全部 —'));
+                    scrollEl.appendChild(endTip);
+                }
+                // 重建 sentinel（如果还有更多）
+                if (sentinel) sentinel.remove();
+                if (state2.hasMore) {
+                    setupInfScroll();
+                }
+                // 顶部统计（本月新增）
+                updateStats();
+                updateFoot();
+            }).catch(function () {
+                state2.loading = false;
+                if (sentinel) sentinel.textContent = T('加载失败，点击重试');
+            });
+        }
+
+        function reload() {
+            scrollEl.innerHTML = '<div class="gp-exp-loading">' + T('加载中…') + '</div>';
+            if (state2._infIO) { state2._infIO.disconnect(); state2._infIO = null; }
+            state2.page = 1;
+            state2.hasMore = true;
+            state2.allItems = [];
+            loadMore();
+        }
+
+        function updateStats() {
+            // 记录总数直接用服务端 total
+            ov.querySelector('#gpStatTotal').textContent = fmtCount(state2.total);
+            // 本月新增：在 allItems 里算当前月份的
+            var now = new Date();
+            var y = now.getFullYear(), m = now.getMonth();
+            var monthExp = 0;
+            state2.allItems.forEach(function (x) {
+                if (!x.create_time) return;
+                var d = new Date(x.create_time);
+                if (d.getFullYear() === y && d.getMonth() === m) monthExp += Number(x.change) || 0;
+            });
+            // 如果 hasMore=true，说明还有数据没拉，本月数据可能不全，加个 ~ 提示
+            var el = ov.querySelector('#gpStatMonth');
+            el.textContent = (monthExp >= 0 ? '+' : '') + fmtCount(monthExp);
+        }
+
+        // 启动
+        loadMore();
     }
 
     // ==================== 增强：资料页发表评测（先选游戏 → 复用游戏详情页评测弹窗） ====================
