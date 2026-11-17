@@ -1960,17 +1960,39 @@ function ensureGameStoreWindow() {
 }
 
 // 打开游戏中心：渲染层任意窗口 send 即开（含 isLoading 等待 did-finish-load，同 image:open 写法）
-ipcMain.on('game:openWindow', function () {
+// 可选 payload：{ profile: 'username' } — 唤醒后由游戏中心窗自动 openProfile(username)
+ipcMain.on('game:openWindow', function (e, payload) {
+    payload = payload || {};
     var win = ensureGameStoreWindow();
-    var show = function () {
+    var deliver = function () {
+        if (win.isDestroyed()) return;
+        if (payload.profile) {
+            // 投递给游戏中心窗：打开指定用户的 Steam 风格资料页
+            win.webContents.send('game:open-profile', { profile: payload.profile });
+        }
+        if (win.isMinimized()) win.restore();
         win.show();
         win.focus();
     };
     if (win.webContents.isLoading()) {
-        win.webContents.once('did-finish-load', show);
+        win.webContents.once('did-finish-load', deliver);
     } else {
-        show();
+        deliver();
     }
+});
+
+// 游戏中心窗 → 主聊天窗口：切会话 / 发起好友请求等
+// payload: { action: 'openConversation' | 'addFriend', payload: { target: 'username' } }
+ipcMain.on('game:chat-action', function (e, data) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    data = data || {};
+    // 前置主窗口并投递
+    try {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+    } catch (err) {}
+    mainWindow.webContents.send('game:chat-action', data);
 });
 
 // 游戏中心窗最大化/还原切换（无边框窗自绘标题栏按钮，sender 窗口归口）→ 返回切换后是否最大化

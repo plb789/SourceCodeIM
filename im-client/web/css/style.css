@@ -3704,19 +3704,22 @@ html.m .mobile-plus-panel:not(.hidden) {
 .gp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ===== P3: 留言板 + 表情面板 + @提及 ===== */
-/* 输入区容器 */
+/* 输入区容器：Steam/微信同款单行横排布局 */
 .gp-cmt-input-row {
     position: relative;
     margin-top: 12px;
-    padding: 10px 12px;
+    padding: 8px 10px;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
 }
 .gp-cmt-input {
-    width: 100%;
-    box-sizing: border-box;
-    min-height: 48px;
+    flex: 1;
+    min-width: 0;
+    min-height: 36px;
     max-height: 140px;
     resize: vertical;
     background: transparent;
@@ -3725,17 +3728,20 @@ html.m .mobile-plus-panel:not(.hidden) {
     color: inherit;
     font-size: 13px;
     line-height: 1.5;
-    padding: 4px 0;
+    padding: 6px 0;
     font-family: inherit;
 }
 .gp-cmt-input::placeholder { color: #666; }
+/* 容器跟随 textarea focus 状态高亮边框（原内联 CSS .gp-cmt-input:focus border-color:var(--primary) 已迁移） */
+.gp-cmt-input-row:focus-within {
+    border-color: var(--primary);
+}
+/* 右侧工具栏：😄 @ + 发送按钮紧连 */
 .gp-cmt-tools {
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-top: 4px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    padding-top: 6px;
+    flex-shrink: 0;
 }
 .gp-cmt-tool-btn {
     background: none;
@@ -3743,12 +3749,12 @@ html.m .mobile-plus-panel:not(.hidden) {
     color: #888;
     cursor: pointer;
     font-size: 16px;
-    padding: 2px 6px;
+    padding: 4px 6px;
     border-radius: 4px;
     transition: color 0.15s, background 0.15s;
 }
 .gp-cmt-tool-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
-.gp-cmt-send-wrap { margin-left: auto; }
+.gp-cmt-send-wrap { /* 不再需要 margin-left:auto，紧挨着工具按钮组 */ }
 
 /* Emoji 面板（绝对定位在输入区上方） */
 .gp-emoji-panel {
@@ -4572,7 +4578,7 @@ html.m .mobile-plus-panel:not(.hidden) {
 
 .friend-card {
     position: relative;
-    width: 360px;
+    width: 400px;
     background: var(--panel-bg);
     border-radius: 8px;
     padding: 24px 24px 20px;
@@ -4683,41 +4689,46 @@ html.m .mobile-plus-panel:not(.hidden) {
 
 .friend-card-btns {
     display: flex;
-    justify-content: center;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 10px;
     margin-top: 20px;
 }
 
-/* 资料卡按钮：发消息主色实底，设置备注描边（与 req-btn 同风格主题色归口） */
-.friend-card-btn {
-    padding: 8px 28px;
+/* 主操作按钮（发消息/添加到通讯录）——独占整行，视觉突出 */
+.friend-card-btn.primary {
+    flex: 1 1 100%;
+    padding: 10px 0;
+    font-size: 15px;
+    letter-spacing: 2px;
+    background: var(--primary);
+    border: 1px solid var(--primary);
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.friend-card-btn.primary:hover {
+    opacity: 0.85;
+}
+
+/* 次操作按钮（设置备注/查看完整资料）——平分第二行；只剩一个时自动独占 */
+.friend-card-btn:not(.primary) {
+    flex: 1 1 0%;
+    min-width: 0;
+    padding: 8px 0;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--panel-bg);
     color: var(--text);
     font-size: 14px;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 
-.friend-card-btn.primary {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: #fff;
-}
-
-.friend-card-btn.primary:hover {
-    opacity: 0.85;
-    color: #fff;
-}
-
-.friend-card-btn:hover {
+.friend-card-btn:not(.primary):hover {
     border-color: var(--primary);
     color: var(--primary);
-}
-
-.friend-card-btn.primary:hover {
-    color: #fff;
 }
 
 /* ===== 阶段三十五：截图编辑器（全屏遮罩 + 工具栏，面板色跟随主题变量） ===== */

@@ -3475,6 +3475,20 @@
         }
         .gp-main { flex: 1; min-width: 0; }
 
+        /* 留言墙容器：padding 和 .gp-body 一致 */
+        .gp-comments {
+            padding: 0 28px 40px;
+        }
+        /* 留言墙所有直接子元素：整体右移 276px（gp-side 260px + gap 16px），
+           与 .gp-main 左边缘完美对齐，Steam 同款双栏底部延续风格 */
+        .gp-comments > * {
+            margin-left: 276px;
+        }
+        /* 空状态提示（暂无留言）也跟着右移 */
+        .gp-comments > .gp-empty {
+            margin-left: 276px;
+        }
+
         /* 通用卡片 */
         .gp-card {
             background: var(--panel-bg);
@@ -4118,21 +4132,8 @@
         .gp-cmt-reply .gp-cmt-nick { font-size: 12px; }
         .gp-cmt-reply .gp-cmt-body { padding: 2px 0; }
 
-        .gp-cmt-input-row {
-            margin-top: 14px;
-            display: flex; gap: 10px; align-items: center;
-        }
-        .gp-cmt-input {
-            flex: 1;
-            padding: 9px 12px;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            background: var(--panel-bg);
-            color: var(--text);
-            font-size: 13px;
-            outline: none;
-        }
-        .gp-cmt-input:focus { border-color: var(--primary); }
+        /* 注：.gp-cmt-input-row / .gp-cmt-input / .gp-cmt-input:focus 已移至 style.css（单行横排布局） */
+
         .gp-cmt-disabled {
             margin-top: 12px;
             padding: 10px 14px;

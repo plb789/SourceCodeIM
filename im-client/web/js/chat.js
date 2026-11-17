@@ -117,6 +117,8 @@
     var friendCardRemarkBtn = document.getElementById('friend-card-remark');
     // 阶段二百七十六：资料卡"添加到通讯录"按钮（非好友显示，走既有好友申请链路——名片推荐好友裂变入口）
     var friendCardAddBtn = document.getElementById('friend-card-add');
+    // 阶段二百九十五：跳转到游戏中心 Steam 风格完整资料页（成就/徽章/展示柜等）
+    var friendCardSteamBtn = document.getElementById('friend-card-steam');
 
     var userListEl = document.getElementById('user-list');
     var chatTitle = document.getElementById('chat-title');
@@ -3206,6 +3208,19 @@
         if (!target) return;
         IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: target, content: I18N.t('请求添加你为好友') });
         closeFriendCard();
+    });
+
+    // 阶段二百九十五：资料卡「查看完整资料」——唤醒游戏中心窗 + 投递 openProfile(target)
+    // Electron 走桥接 window.desktop.gameOpenWindow({profile: target})；浏览器回退 URL searchParams
+    friendCardSteamBtn.addEventListener('click', function () {
+        var target = friendCardTarget;
+        if (!target) return;
+        closeFriendCard();
+        if (window.desktop && window.desktop.gameOpenWindow) {
+            window.desktop.gameOpenWindow({ profile: target });
+        } else {
+            window.open('game-store.html?openProfile=' + encodeURIComponent(target), '_blank');
+        }
     });
 
     // ===== 添加好友 =====
@@ -9045,6 +9060,25 @@
             if (typeof p.nickname === 'string') {
                 myProfile.nickname = p.nickname;
                 syncMyDisplayName();
+            }
+        });
+    }
+    // ===== 游戏中心 → 主聊天窗口：切会话 / 发起好友请求 =====
+    // 来源：游戏中心资料页「发送消息/添加好友」按钮；主进程 game:chat-action 通道转发
+    if (window.desktop && window.desktop.onGameChatAction) {
+        window.desktop.onGameChatAction(function (data) {
+            if (!data || !IMSocket || !IMSocket.isConnected()) return;
+            var action = data.action;
+            var pl = data.payload || {};
+            var target = pl.target;
+            if (!target) return;
+            if (action === 'openConversation') {
+                if (typeof openConversation === 'function') {
+                    openConversation(target);
+                }
+            } else if (action === 'addFriend') {
+                IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: target, content: I18N.t('请求添加你为好友') });
+                showToast(I18N.t('好友申请已发送'));
             }
         });
     }

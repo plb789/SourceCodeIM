@@ -1076,8 +1076,9 @@ contextBridge.exposeInMainWorld('desktop', {
     },
     // ===== 阶段二百八十一：游戏中心（Steam 同款游戏浏览/下载）桥接 API =====
     // 打开/复用游戏中心独立窗口（主进程单例，close 隐藏复用，下载进行中隐藏不中断任务）
-    gameOpenWindow: function () {
-        ipcRenderer.send('game:openWindow');
+    // 可选 payload：{ profile: 'username' } — 打开后直接跳到对应用户的 Steam 风格个人资料页
+    gameOpenWindow: function (payload) {
+        ipcRenderer.send('game:openWindow', payload || {});
     },
     // 下载控制：payload={action:'start'|'pause'|'resume'|'cancel'|'status', taskId, gameId, installDir,
     // username, serverBase, files:[{id,rel_path,size,sha256,url}]} → Promise<{ok, tasks?/error?}>
@@ -1088,6 +1089,25 @@ contextBridge.exposeInMainWorld('desktop', {
     // 负载：{taskId, gameId, received, total, speed, upSpeed, state:'downloading'|'paused'|'done'|'error'|'verifying'|'cancel', fileRelPath, error}
     onGameDownload: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('game-download:progress', function (event, data) {
+            cb(data);
+        });
+    },
+    // 跨窗口投递：打开指定用户的 Steam 风格个人资料页（来源为主窗口好友资料卡等；
+    // main.js game:openWindow 带 profile 参数时自动走此通道）
+    onGameOpenProfile: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game:open-profile', function (event, data) {
+            cb(data);
+        });
+    },
+    // 反向通道：游戏中心通知主聊天窗口切会话/发起好友请求
+    // action: 'openConversation' → payload { target: 'username' }
+    // action: 'addFriend'       → payload { target: 'username' }
+    gameChatAction: function (action, payload) {
+        ipcRenderer.send('game:chat-action', { action: action, payload: payload || {} });
+    },
+    // 主窗口监听：来自游戏中心的 chat-action 指令（切会话/加好友）
+    onGameChatAction: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game:chat-action', function (event, data) {
             cb(data);
         });
     },

@@ -680,11 +680,41 @@
             bgBtn.addEventListener('click', function () { openBackgroundEditor(); });
             btns.appendChild(bgBtn);
         } else {
-            var addBtn = el('button', 'gp-btn primary', T('添加好友'));
-            addBtn.addEventListener('click', function () { toast(T('好友功能走主界面，请到好友列表添加')); });
-            btns.appendChild(addBtn);
+            // 他人资料页按钮区（按好友关系三态渲染）：
+            //   is_friend=true  → 已是好友：只显示「发送消息」+「经验记录」，隐藏添加好友
+            //   is_friend=false → 非好友：显示「添加好友」+「发送消息」+「经验记录」
+            //   is_friend 未定义（API 还没返回）→ 保守显示添加好友（不会让非好友漏掉入口）
+            var isElectron = !!(DESKTOP && DESKTOP.gameChatAction);
+            var isFriend = !!p.is_friend;
+            if (!isFriend) {
+                // 非好友才显示「添加好友」
+                var addBtn = el('button', 'gp-btn primary', T('添加好友'));
+                addBtn.addEventListener('click', function () {
+                    if (isElectron) {
+                        DESKTOP.gameChatAction('addFriend', { target: p.username });
+                        toast(T('已发起好友申请'));
+                    } else {
+                        toast(T('请在聊天窗口中添加好友'));
+                    }
+                });
+                btns.appendChild(addBtn);
+            } else {
+                // 已是好友：灰色 disabled 标记（Steam 同款），或者直接隐藏
+                var friendTag = el('button', 'gp-btn', T('已是好友'));
+                friendTag.disabled = true;
+                friendTag.style.opacity = '0.5';
+                friendTag.style.cursor = 'default';
+                btns.appendChild(friendTag);
+            }
             var msgBtn = el('button', 'gp-btn', T('发送消息'));
-            msgBtn.addEventListener('click', function () { toast(T('消息功能走主界面，请到聊天列表发起')); });
+            msgBtn.addEventListener('click', function () {
+                if (isElectron) {
+                    DESKTOP.gameChatAction('openConversation', { target: p.username });
+                    toast(T('已切换到聊天窗口'));
+                } else {
+                    toast(T('请在聊天窗口中发送消息'));
+                }
+            });
             btns.appendChild(msgBtn);
         }
         // 经验记录：所有资料页都可查看（公开数据）
@@ -1030,7 +1060,7 @@
     function renderCmtRoot(root) {
         var box = el('div', 'gp-cmt-root');
         var head = el('div', 'gp-cmt-head');
-        // 头像
+        // 头像（可点击打开该用户 Steam 风格资料页；跳过自己）
         var av = el('div', 'gp-cmt-av');
         if (root.from_avatar) {
             var ai = document.createElement('img');
@@ -1039,9 +1069,23 @@
         } else {
             av.textContent = initialOf(root.from_nickname || root.from_user);
         }
+        if (root.from_user && root.from_user !== username) {
+            av.style.cursor = 'pointer';
+            av.title = T('查看该用户资料');
+            av.addEventListener('click', function (e) {
+                e.stopPropagation();
+                openProfile(root.from_user);
+            });
+        }
         head.appendChild(av);
         var meta = el('div', 'gp-cmt-meta');
-        meta.appendChild(el('span', 'gp-cmt-nick', root.from_nickname || root.from_user));
+        var nickSpan = el('span', 'gp-cmt-nick', root.from_nickname || root.from_user);
+        // 昵称也可点击（同头像跳转）
+        if (root.from_user && root.from_user !== username) {
+            nickSpan.style.cursor = 'pointer';
+            nickSpan.addEventListener('click', function () { openProfile(root.from_user); });
+        }
+        meta.appendChild(nickSpan);
         meta.appendChild(el('span', 'gp-cmt-time', fmtCmtTime(root.create_time)));
         head.appendChild(meta);
         // 删除按钮（自己的留言 或 资料主人能删）
@@ -1056,7 +1100,10 @@
             head.appendChild(delBtn);
         }
         box.appendChild(head);
-        box.appendChild(el('div', 'gp-cmt-body gp-comment-text', renderCommentContent(root.content)));
+        // renderCommentContent 返回 DOM 元素（不是字符串），必须 appendChild 不能塞 textContent
+        var body = el('div', 'gp-cmt-body gp-comment-text');
+        body.appendChild(renderCommentContent(root.content));
+        box.appendChild(body);
         // 回复区
         if (root.replies && root.replies.length) {
             var replies = el('div', 'gp-cmt-replies');
@@ -1070,6 +1117,22 @@
     function renderCmtReply(rp, parent) {
         var box = el('div', 'gp-cmt-reply');
         var head = el('div', 'gp-cmt-head');
+        // 回复者头像（补齐：原实现只有昵称；与根留言同口径可点击）
+        var av = el('div', 'gp-cmt-av');
+        av.style.width = '24px'; av.style.height = '24px'; av.style.fontSize = '11px';
+        if (rp.from_avatar) {
+            var ri = document.createElement('img');
+            ri.src = assetUrl(rp.from_avatar);
+            av.appendChild(ri);
+        } else {
+            av.textContent = initialOf(rp.from_nickname || rp.from_user);
+        }
+        if (rp.from_user && rp.from_user !== username) {
+            av.style.cursor = 'pointer';
+            av.title = T('查看该用户资料');
+            av.addEventListener('click', function () { openProfile(rp.from_user); });
+        }
+        head.appendChild(av);
         var meta = el('div', 'gp-cmt-meta');
         var nickTxt = rp.from_nickname || rp.from_user;
         if (rp.reply_to) nickTxt += ' → ' + (rp.profile_nickname || rp.reply_to);
@@ -1087,7 +1150,10 @@
             head.appendChild(delBtn);
         }
         box.appendChild(head);
-        box.appendChild(el('div', 'gp-cmt-body gp-comment-text', renderCommentContent(rp.content)));
+        // 同根留言：renderCommentContent 返回 DOM 元素，必须 appendChild
+        var replyBody = el('div', 'gp-cmt-body gp-comment-text');
+        replyBody.appendChild(renderCommentContent(rp.content));
+        box.appendChild(replyBody);
         return box;
     }
     function fmtCmtTime(ts) {
@@ -1988,10 +2054,20 @@
             var box = ov.querySelector('#gpExpLogList');
             if (list.length === 0) { box.innerHTML = '<div class="gp-empty">' + T('暂无经验记录') + '</div>'; return; }
             box.innerHTML = '';
+            // 经验日志来源类型翻译映射（key 必须和服务端 ProfileExpLog.Reason 完全一致）
             var reasonMap = {
-                achievement: T('解锁成就'), badge: T('获得徽章'),
-                card_draw: T('抽卡'), badge_craft: T('合成徽章'),
-                review: T('发布评测'), game_play: T('游玩游戏'), other: T('其他')
+                'unlock_achievement': T('解锁成就'),
+                'daily_achievement':  T('每日成就'),
+                'badge':              T('合成徽章'),
+                'screenshot_like':    T('截图点赞'),
+                'complete_game':      T('完成游戏'),
+                'review_publish':     T('发布评测'),
+                'upload_screenshot':  T('上传截图'),
+                'level_up':           T('等级提升'),
+                'admin_grant':        T('管理员授予'),
+                'other':              T('其他'),
+                // 兼容历史数据：早期版本可能写过空格分隔或不同 key 的值
+                'unlock achievement':  T('解锁成就'),
             };
             list.forEach(function (it) {
                 var row = el('div', 'gp-exp-row');
@@ -2292,6 +2368,10 @@
                 }
                 cell.appendChild(fav);
                 cell.appendChild(el('div', '', (f.nickname || f.username).slice(0, 4)));
+                // 点击好友头像 → 打开该用户的 Steam 风格资料页（跳过自己）
+                if (f.username && f.username !== username) {
+                    cell.addEventListener('click', function () { openProfile(f.username); });
+                }
                 box.appendChild(cell);
             });
             return box.childNodes.length ? box : null;
@@ -2299,24 +2379,24 @@
         if (type === 'achievements') {
             var achData = state.profile.achievements;
             if (!achData || !achData.groups || achData.groups.length === 0) return null;
-            // 取前 6 个成就展示（跨游戏取 unlocked 的优先）
+            // Steam 风格：展示柜只展示已解锁的成就（和 badges 行为一致）
+            // 成就弹窗才展示全部（有筛选器）
             var flatItems = [];
             achData.groups.forEach(function (g) {
                 g.items.forEach(function (it) {
+                    if (!it.unlocked) return; // ← 跳过未解锁的
                     it._gameName = g.game_name || '';
                     it._gameID = g.game_id;
                     flatItems.push(it);
                 });
             });
-            flatItems.sort(function (a, b) {
-                if (a.unlocked !== b.unlocked) return a.unlocked ? -1 : 1;
-                return b.rarity - a.rarity;
-            });
+            if (flatItems.length === 0) return null; // 一个都没解锁 → 整个展示柜区块不渲染（和 badges 对齐）
+            flatItems.sort(function (a, b) { return b.rarity - a.rarity; }); // 按稀有度降序（最牛的排前面）
             var grid = el('div', 'gp-ach-grid');
             flatItems.slice(0, 6).forEach(function (it) {
                 grid.appendChild(makeAchievementCell(it));
             });
-            // 点击整个 grid → 打开成就详情弹窗
+            // 点击整个 grid → 打开成就详情弹窗（全部成就 + 筛选器）
             grid.style.cursor = 'pointer';
             grid.addEventListener('click', function () { openAchievementsModal(); });
             // 统计行：解锁 X/Y
@@ -2520,6 +2600,9 @@
             if (d.badges) p.badges = d.badges;
             if (d.recentGames) p.recentGames = d.recentGames;
             if (d.favoriteGame) p.favoriteGame = d.favoriteGame;
+            // 好友关系状态（服务端按 viewer 视角查库，前端不能自行伪造）
+            p.is_friend = !!d.is_friend;
+            p.is_self = !!d.is_self;
             // P1-a/G3: level_perks —— 等级权益（展示柜槽位/称号/等级等），必须同步到 state
             // 否则所有依赖 maxSlots 的逻辑都会走 fallback 3 而不会用后端真实配置
             if (d.level_perks) p.level_perks = d.level_perks;
@@ -7892,8 +7975,9 @@
     // 右内容栏（推荐/不推荐横条+游玩时长 → 正文 → 有帮助；自己的评测不显示有帮助）
     function buildReviewCard(it) {
         var card = el('div', 'gs-rev-card');
-        // 左栏：头像 + 用户名（+ 我的评测徽标）
+        // 左栏：头像 + 用户名（+ 我的评测徽标）— 全部可点击跳到该用户的 Steam 风格资料页
         var user = el('div', 'gs-rev-user');
+        var isOther = it.username && it.username !== username;
         var av = el('div', 'gs-rev-avatar');
         if (it.avatar) {
             var im = document.createElement('img');
@@ -7903,9 +7987,20 @@
         } else {
             av.textContent = initialOf(it.username);
         }
+        if (isOther) {
+            av.style.cursor = 'pointer';
+            av.title = T('查看该用户资料');
+            av.addEventListener('click', function () { openProfile(it.username); });
+        }
         user.appendChild(av);
         var uinfo = el('div', 'gs-rev-uinfo');
-        uinfo.appendChild(el('div', 'gs-rev-uname', it.username || T('用户')));
+        var uname = el('div', 'gs-rev-uname', it.username || T('用户'));
+        if (isOther) {
+            uname.style.cursor = 'pointer';
+            uname.title = T('查看该用户资料');
+            uname.addEventListener('click', function () { openProfile(it.username); });
+        }
+        uinfo.appendChild(uname);
         if (username && it.username === username) uinfo.appendChild(el('div', 'gs-rev-mine-tag', T('我的评测')));
         user.appendChild(uinfo);
         card.appendChild(user);
@@ -8009,10 +8104,24 @@
         function buildReplyRow(rp) {
             var row = el('div', 'gs-rev-reply');
             var txt = el('span', 'gs-rev-reply-txt');
-            txt.appendChild(el('span', 'gs-rev-reply-name', rp.username || T('用户')));
+            // 回复者名字（可点击跳到资料页，跳过自己）
+            var nameEl = el('span', 'gs-rev-reply-name', rp.username || T('用户'));
+            if (rp.username && rp.username !== username) {
+                nameEl.style.cursor = 'pointer';
+                nameEl.title = T('查看该用户资料');
+                nameEl.addEventListener('click', function () { openProfile(rp.username); });
+            }
+            txt.appendChild(nameEl);
             if (rp.reply_to && rp.reply_to_user) {
                 txt.appendChild(el('span', 'gs-rev-reply-mid', T('回复')));
-                txt.appendChild(el('span', 'gs-rev-reply-name', rp.reply_to_user));
+                // 回复目标名字（同样可点击）
+                var targetEl = el('span', 'gs-rev-reply-name', rp.reply_to_user);
+                if (rp.reply_to_user && rp.reply_to_user !== username) {
+                    targetEl.style.cursor = 'pointer';
+                    targetEl.title = T('查看该用户资料');
+                    targetEl.addEventListener('click', function () { openProfile(rp.reply_to_user); });
+                }
+                txt.appendChild(targetEl);
             }
             txt.appendChild(document.createTextNode('：' + (rp.content || '')));
             row.appendChild(txt);
@@ -9021,4 +9130,39 @@
         pullRunning(); // 恢复主进程侧"正在运行的游戏"（页面刷新/新开窗口场景）
         pullLocalRunning(); // 恢复主进程侧本地游戏运行态（页面刷新场景）
     }
+
+    // ===== 跨窗口：打开指定用户 Steam 风格资料页 =====
+    // 来源：主窗口好友资料卡「查看完整资料」按钮 / 游戏内 Overlay / 未来任何需要跳到他人资料页的地方
+    // 双通道：Electron 走 IPC（main.js → game:open-profile），浏览器走 URL ?openProfile=xxx
+    // 注意：payload 可能在本页面刚打开（还没完成 init + store 拉取）就由主进程投递过来，
+    //       因此用 ready flag + setTimeout 兜底，确保基础数据就绪后再 openProfile
+    var pendingOpenProfile = null;
+    var onGameStoreReady = function () {
+        if (pendingOpenProfile) {
+            var target = pendingOpenProfile;
+            pendingOpenProfile = null;
+            // openProfile 内部会调 showView('profile') + loadProfile(target)，
+            // 此时 username / api / state 都已就绪
+            try { openProfile(target); } catch (e) { /* 未就绪则稍后再试 */ pendingOpenProfile = target; }
+        }
+    };
+    var gameStoreReady = false;
+    setTimeout(function () { gameStoreReady = true; onGameStoreReady(); }, 300);
+
+    if (DESKTOP && DESKTOP.onGameOpenProfile) {
+        DESKTOP.onGameOpenProfile(function (data) {
+            if (!data || !data.profile) return;
+            if (gameStoreReady) { openProfile(data.profile); }
+            else { pendingOpenProfile = data.profile; }
+        });
+    }
+    // 浏览器兜底：window.open('game-store.html?openProfile=xxx') 或内嵌 postMessage
+    try {
+        var urlParams = new URLSearchParams(window.location.search);
+        var urlProfile = urlParams.get('openProfile') || urlParams.get('profile');
+        if (urlProfile) {
+            if (gameStoreReady) openProfile(urlProfile);
+            else pendingOpenProfile = urlProfile;
+        }
+    } catch (e) { /* 老浏览器或非标准 URL：静默 */ }
 })();
