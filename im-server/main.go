@@ -111,6 +111,13 @@ func main() {
 		store.DriveTicketInit(cfg.Drive.EdgeAuth.Enabled, cfg.Drive.EdgeAuth.TicketTTL)
 	}
 
+	// 3. 健康检查端点（客户端自动探测识别 IM 服务用——HEAD/GET 均可，响应唯一特征 "im":true）
+	http.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true,"im":true}`))
+	})
+
 	// 4. WebSocket 监听入口
 	srv := server.NewServer(cfg)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {

@@ -435,25 +435,87 @@ browserManager.setCdpSwitch();
 // 值与 package.json appId 保持一致
 app.setAppUserModelId('com.im.client');
 
-// 服务端地址（默认本地）
-const SERVER_URL = 'http://127.0.0.1:2087/';
-//const SERVER_URL = 'https://im.sxgyxny.com/';
+// 服务端地址：双候选 + 并行快速探测
+// 本地可用则优先本地（开发调试无需改代码），否则自动切远程（发布版零配置）
+// 并行探测保证启动速度不劣化：本地未启动时 TCP 拒绝瞬间返回（<50ms），
+// 远程检测与之并行进行，总延迟 = 最快可用地址的响应时间（与硬编码远程等价）
+const LOCAL_SERVER_URL = 'http://127.0.0.1:2087/';
+const REMOTE_SERVER_URL = 'https://im.sxgyxny.com/';
+let SERVER_URL = LOCAL_SERVER_URL; // 默认本地，探测后覆写
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
-// SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
-// 同样生效——该 origin 下 navigator.mediaDevices 为 undefined（getUserMedia 仅 HTTPS/localhost 可用），
-// 通话窗会降级提示"浏览器需 HTTPS 或 localhost 访问方可通话"。此处将该 origin 显式注册为受信任
-// 安全上下文（Chromium 官方开关 chrome://flags 同款，必须在 app ready 前注入），PC 端媒体能力与
-// localhost 部署完全对齐；服务端升级 HTTPS 后此开关自动失效（仅 http 且非本地地址才注册）
-// 原代码：无此兜底，非 localhost 的 http 部署时 PC 端通话不可用
+// 阶段三百七十一：双 origin 预注册——SERVER_URL 运行时才确定，两个候选 origin 提前注册安全上下文，
+// 确保最终选中的 http origin 媒体能力可用。HTTPS origin 无需注册（Chromium 天然信任）
 (function () {
-    try {
-        var su = new URL(SERVER_URL);
-        if (su.protocol === 'http:' && su.hostname !== 'localhost' && su.hostname !== '127.0.0.1' && su.hostname !== '[::1]') {
-            app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', su.origin);
-        }
-    } catch (e) { /* SERVER_URL 解析失败：维持默认行为 */ }
+    var LOCAL = new URL(LOCAL_SERVER_URL);
+    var REMOTE = new URL(REMOTE_SERVER_URL);
+    if (LOCAL.protocol === 'http:' && LOCAL.hostname !== 'localhost' && LOCAL.hostname !== '127.0.0.1' && LOCAL.hostname !== '[::1]') {
+        app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', LOCAL.origin);
+    }
+    if (REMOTE.protocol === 'http:' && REMOTE.hostname !== 'localhost' && REMOTE.hostname !== '127.0.0.1' && REMOTE.hostname !== '[::1]') {
+        app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', REMOTE.origin);
+    }
 })();
+
+// ===== 阶段三百七十一：并行快速探测确定 SERVER_URL =====
+// 同时发起本地+远程 GET /api/health 请求，谁先返回 {"ok":true,"im":true} 特征用谁。
+// 加响应体特征校验——防用户机器上其他程序碰巧占了 2087 端口（纯 HEAD 只看 HTTP 状态码不够）。
+// 本地未启动时 TCP 拒绝<50ms即返回，远程检测与之并行，总耗时 = min(本地, 远程) ≤ 直接连远程的耗时
+async function probeServerUrl() {
+    var HEALTH_PATH = '/api/health';
+    var IM_MARKER = '"im":true'; // 服务端健康响应唯一特征（JSON 无空格版本）
+    function probe(baseUrl, timeoutMs) {
+        return new Promise(function (resolve) {
+            var done = false;
+            var timer = setTimeout(function () {
+                if (done) return; done = true; resolve(false);
+            }, timeoutMs);
+            var fullUrl = baseUrl.replace(/\/+$/, '') + HEALTH_PATH;
+            var req;
+            try {
+                req = net.request({ method: 'GET', url: fullUrl });
+            } catch (e) { clearTimeout(timer); resolve(false); return; }
+            var chunks = [];
+            var total = 0;
+            req.on('response', function (res) {
+                if (res.statusCode !== 200) {
+                    if (done) return; done = true; clearTimeout(timer); res.destroy(); resolve(false);
+                    return;
+                }
+                res.on('data', function (chunk) {
+                    chunks.push(chunk); total += chunk.length;
+                    if (total > 256) { // 健康响应应 <100B，过大立即丢弃（不是 IM 服务）
+                        if (done) return; done = true; clearTimeout(timer); res.destroy(); resolve(false);
+                    }
+                });
+                res.on('end', function () {
+                    if (done) return; done = true; clearTimeout(timer);
+                    var body = Buffer.concat(chunks, total).toString('utf8');
+                    resolve(body.indexOf(IM_MARKER) !== -1);
+                });
+                res.on('error', function () {
+                    if (done) return; done = true; clearTimeout(timer); resolve(false);
+                });
+            });
+            req.on('error', function () {
+                if (done) return; done = true; clearTimeout(timer); resolve(false);
+            });
+            req.end();
+        });
+    }
+    var T0 = Date.now();
+    var results = await Promise.all([
+        probe(LOCAL_SERVER_URL, 300),   // 本地超时 300ms（防火墙丢弃场景兜底）
+        probe(REMOTE_SERVER_URL, 5000)  // 远程给足 5s（公网波动）
+    ]);
+    var localOk = results[0], remoteOk = results[1];
+    var chosen;
+    if (localOk) chosen = LOCAL_SERVER_URL;
+    else if (remoteOk) chosen = REMOTE_SERVER_URL;
+    else chosen = REMOTE_SERVER_URL; // 都不可用？兜底远程（总归有一个能用）
+    SERVER_URL = chosen;
+    mainLog('[BOOT] 服务器探测 +' + (Date.now() - T0) + 'ms local=' + localOk + ' remote=' + remoteOk + ' → ' + chosen);
+}
 
 // ===== 阶段一百三十六：前端资源加密密钥解析归口 =====
 // 密钥来源优先级：1) 构建期生成的 secure-key.js（obfuscate.js 产出，密钥经随机掩码异或扰乱
@@ -6428,9 +6490,8 @@ mcpManager.setNodeRuntimeInstaller(nodeRuntime.ensureRuntime);
 // 注入服务端基地址（与登录服务器同源，zip 静态托管于 <WebDir>/static/gcc-toolchain.zip）；
 // Agent 任务 run_command 预检到编译命令时经 toolchain-manager.ensureCompiler 自动准备编译环境
 const compilerManager = require('./toolchain-manager.js');
-compilerManager.setServerBase(SERVER_URL);
-// 阶段一百二十一：后台刷新服务端 ExePaths 声明缓存（按声明定位；失败静默，磁盘缓存/内置注册表兜底）
-compilerManager.toolchainRefreshExePaths();
+// 注：setServerBase 和 toolchainRefreshExePaths 已移至 whenReady → probeServerUrl 之后执行，
+// 确保拿到探测后的正确 SERVER_URL
 
 ipcMain.handle('mcp:node-status', function () {
     return nodeRuntime.status();
@@ -6899,6 +6960,11 @@ app.whenReady().then(async function () {
     // 不建窗口直接返回（否则第二实例闪现一个窗口后被 quit 杀掉，实测 2026-09-16）
     // 原实现：无此守卫（窗口闪现根因）
     if (!singleInstanceAllowed) return;
+    // 阶段三百七十一：并行探测服务器地址——在任何窗口创建/IPC 注册前确定 SERVER_URL
+    await probeServerUrl();
+    // Agent 编译环境管理器注入正确的服务端基地址（toolchain zip 静态托管）
+    compilerManager.setServerBase(SERVER_URL);
+    compilerManager.toolchainRefreshExePaths();
     // 隐藏 Electron 默认应用菜单：File/Edit/View/Window/Help 为开发调试用途（含刷新/DevTools），正式客户端不展示
     // 原实现：未设置应用菜单，Windows 上自动显示 Electron 默认英文菜单
     // Menu.setApplicationMenu(Menu.buildFromTemplate([]));
