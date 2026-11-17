@@ -393,8 +393,8 @@ func achDailyUnlockCore(username string, dach model.GameDailyAchievement, dateKe
 		if err := tx.Model(&user).Updates(updates).Error; err != nil {
 			return err
 		}
-		// 经验值日志（每日成就专属 reason 口径）
-		detail := fmt.Sprintf("每日成就: game#%d code=%s date=%s", dach.GameID, dach.Code, dateKey)
+		// 经验值日志（每日成就专属 reason 口径；detail 与其他 3 个入口统一用友好中文，避免技术化调试信息）
+		detail := "完成每日任务「" + dach.Name + "」"
 		if err := tx.Create(&model.ProfileExpLog{
 			Username: username, Change: expGain, Reason: "daily_achievement", Detail: detail,
 		}).Error; err != nil {

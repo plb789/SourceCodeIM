@@ -114,6 +114,16 @@ func InitMySQL(cfg *config.Config) error {
 		return fmt.Errorf("自动建表失败: %w", err)
 	}
 
+	// 存量数据修复（幂等，每次启动都会跑但只有旧格式数据时才更新）
+	// 把 ProfileExpLog.reason='daily_achievement' 的技术化 detail（"每日成就: game#X code=Y date=Z"）
+	// 自动更新为友好中文（"完成每日任务「<成就名>」"），跨版本部署时历史数据也能自动修正
+	db.Exec(`UPDATE im_profile_exp_log l
+		INNER JOIN im_game_daily_achievement d
+		ON d.game_id = CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(l.detail, '#', -1), ' ', 1) AS UNSIGNED)
+		AND d.code   = SUBSTRING_INDEX(SUBSTRING_INDEX(l.detail, 'code=', -1), ' ', 1)
+		SET l.detail = CONCAT('完成每日任务「', d.name, '」')
+		WHERE l.reason = 'daily_achievement' AND l.detail LIKE '每日成就:%'`)
+
 	// A1 seed：等级配置表首次建表后自动 INSERT/UPDATE 文档附录 A 预设数据
 	// 必须用 Save 或 OnConflict UPDATE（不是 DoNothing）—— 保证 ShowcaseSlots/Title 等字段是最新值
 	// 否则旧表如果已经有 Lv1-Lv5 行，DoNothing 会跳过更新，seed 里 ShowcaseSlots=4 不会生效
