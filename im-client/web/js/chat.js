@@ -3146,10 +3146,13 @@
         friendCardSignature.textContent = '';
         friendCardRemarkBtn.classList.add('hidden');
         friendCardAddBtn.classList.add('hidden'); // 阶段二百七十六：占位态先隐藏，PROFILE_RESP 回来后按好友关系显隐
-        // 阶段三百：游戏中心关闭则隐藏"查看完整资料"按钮（hover-card 同款开关语义）
-        var _f = window.__imUiFeatures;
-        var _gcOn = !(_f && _f.game_center === false);
-        friendCardSteamBtn.style.display = _gcOn ? '' : 'none';
+        // 阶段三百：游戏中心关闭则隐藏"查看完整资料"按钮（hover-card 同款开关语义，window + localStorage 双重兜底）
+        var _cf = window.__imUiFeatures;
+        if (!_cf || typeof _cf !== 'object') {
+            try { _cf = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { _cf = null; }
+        }
+        var _cgOn = !(_cf && _cf.game_center === false); // 显式 false 才关，缺数据=默认开
+        friendCardSteamBtn.style.display = _cgOn ? '' : 'none';
         friendCardMask.classList.remove('hidden');
         IMSocket.send({ msg_type: MSG.PROFILE_QUERY, to_user: username });
     }
@@ -3186,8 +3189,11 @@
         // 发消息按钮非好友隐藏（会话不存在，避免点开空会话困惑）；好友保持原"发消息+设置备注"
         friendCardAddBtn.classList.toggle('hidden', !!info.is_friend);
         friendCardChatBtn.classList.toggle('hidden', !info.is_friend);
-        // 阶段三百：PROFILE_RESP 回来后再校验一次游戏中心开关（应对管理员在后台刚切换开关的即时场景）
+        // 阶段三百：PROFILE_RESP 回来后再校验一次游戏中心开关（window + localStorage 双重兜底，应对管理员即时切换）
         var _ff = window.__imUiFeatures;
+        if (!_ff || typeof _ff !== 'object') {
+            try { _ff = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { _ff = null; }
+        }
         friendCardSteamBtn.style.display = (_ff && _ff.game_center === false) ? 'none' : '';
     }
 
@@ -3229,6 +3235,16 @@
     // 阶段二百九十五：资料卡「查看完整资料」——唤醒游戏中心窗 + 投递 openProfile(target)
     // Electron 走桥接 window.desktop.gameOpenWindow({profile: target})；浏览器回退 URL searchParams
     friendCardSteamBtn.addEventListener('click', function () {
+        // 阶段三百：防御性开关拦截（按钮因任何原因未隐藏时兜底）
+        var _df = window.__imUiFeatures;
+        if (!_df || typeof _df !== 'object') {
+            try { _df = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { _df = null; }
+        }
+        if (_df && _df.game_center === false) {
+            // 复用全局提示（和游戏中心面板的 FeatureGate 403 提示保持一致）
+            if (window.imShowPrompt) window.imShowPrompt('游戏中心已被管理员禁用');
+            return;
+        }
         var target = friendCardTarget;
         if (!target) return;
         closeFriendCard();
@@ -10059,6 +10075,15 @@
     var gameCenterBtn = document.getElementById('game-center-btn');
     if (gameCenterBtn) {
         gameCenterBtn.addEventListener('click', function () {
+            // 阶段三百：防御性开关拦截（按钮因任何原因未隐藏时兜底）
+            var _gf = window.__imUiFeatures;
+            if (!_gf || typeof _gf !== 'object') {
+                try { _gf = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { _gf = null; }
+            }
+            if (_gf && _gf.game_center === false) {
+                if (window.imShowPrompt) window.imShowPrompt('游戏中心已被管理员禁用');
+                return;
+            }
             if (window.desktop && window.desktop.gameOpenWindow) window.desktop.gameOpenWindow();
             else window.open('game-store.html', '_blank');
         });

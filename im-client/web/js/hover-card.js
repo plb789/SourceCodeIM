@@ -178,6 +178,11 @@
         });
         cardEl.querySelector('.hc-btn-game').addEventListener('click', function (e) {
             e.stopPropagation();
+            // 阶段三百：防御性开关拦截（按钮因任何原因未隐藏时兜底）
+            if (!isGameCenterEnabled()) {
+                if (typeof window.imShowPrompt === 'function') window.imShowPrompt('游戏中心已被管理员禁用');
+                return;
+            }
             var target = curUsername;
             if (!target) return;
             hideImmediate();

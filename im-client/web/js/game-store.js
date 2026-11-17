@@ -28,6 +28,41 @@
     var DESKTOP = window.desktop || null;                    // Electron 桥（浏览器环境为 null → 只读模式）
     var IN_ELECTRON = !!(DESKTOP && DESKTOP.gameOpenWindow); // gameOpenWindow 存在即代表在 Electron 中
 
+    // ===== 阶段三百：后台功能开关检查（游戏中心入口统一归口 features.go） =====
+    // 语义归口：显式 false 才禁用，缺数据=默认开。
+    // 数据源：localStorage 缓存（chat.js initUiFeatures 写入）；FETCH /api/features 兜底。
+    // 关闭时：主界面所有入口都已隐藏（applyUiFeatures），此处兜底拦截绕过主界面直接打开 game-store.html 的场景。
+    // 实现：设置 window.__GS_BLOCKED 标记 + 清空 body + 显示禁用遮罩；后续 initXXX() IIFE 靠 $() 返回 null 自然短路。
+    (function checkGameCenterGate() {
+        var f = null;
+        try { f = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { f = null; }
+        var blocked = f && f.game_center === false;
+        if (blocked) {
+            window.__GS_BLOCKED = true;
+            showDisabledOverlay();
+            return;
+        }
+        // 缓存没读到或开关没关，再 fetch 一次确认（async，不阻塞首屏渲染）
+        fetch('/api/features', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+            var fresh = d && d.data ? d.data : d;
+            if (fresh && fresh.game_center === false && !window.__GS_BLOCKED) {
+                window.__GS_BLOCKED = true;
+                showDisabledOverlay();
+            }
+        }).catch(function () { /* fetch 失败沿用缓存结果，不阻塞 */ });
+    })();
+
+    function showDisabledOverlay() {
+        document.body.innerHTML = '';
+        var ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;inset:0;background:var(--bg,#1a1a1a);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text,#ccc);font-family:system-ui,-apple-system,sans-serif;z-index:9999;';
+        ov.innerHTML =
+            '<div style="width:64px;height:64px;border-radius:50%;background:#444;display:flex;align-items:center;justify-content:center;font-size:32px;">🎮</div>' +
+            '<div style="font-size:18px;font-weight:600;">游戏中心已被管理员禁用</div>' +
+            '<div style="font-size:13px;opacity:0.6;text-align:center;max-width:320px;">如需使用请联系管理员在后台重新开启</div>';
+        document.body.appendChild(ov);
+    }
+
     // im_auth 与 chat.js 同款编码：btoa(encodeURIComponent(JSON.stringify({u,p})))，此处反向解码
     function getAuth() {
         try { return JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || null; }
