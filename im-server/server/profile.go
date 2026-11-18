@@ -190,7 +190,7 @@ func achVerifySignature(username string, gameID uint, clientTs int64, nonce stri
 func achIsGameInLibrary(username string, gameID uint) bool {
 	var cnt int64
 	store.DB.Model(&model.GameLibrary{}).
-		Where("username = ? AND game_id = ?", username, gameID).
+		Where("username = ? AND game_id = ? AND removed_at IS NULL", username, gameID).
 		Count(&cnt)
 	return cnt > 0
 }
@@ -400,7 +400,7 @@ func (s *Server) buildProfileInfo(viewer, target string, includeGameExtra bool) 
 			var totalPlaySec int64
 			var achCount int64
 			if canSeeGame {
-				store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
+				store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0 AND removed_at IS NULL", target).Count(&libCount)
 				store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
 					Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
 				store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
@@ -684,7 +684,7 @@ func (s *Server) HandleProfileGet(w http.ResponseWriter, r *http.Request) {
 	var totalPlaySec int64
 	var achCount int64
 	if canSeeGame {
-		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0 AND removed_at IS NULL", target).Count(&libCount)
 		store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
 			Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
 		store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)
@@ -2263,7 +2263,7 @@ func (s *Server) HandleProfileStatsGet(w http.ResponseWriter, r *http.Request) {
 	var totalPlaySec int64
 	var achCount int64
 	if canSeeGame {
-		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0", target).Count(&libCount)
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND state >= 0 AND removed_at IS NULL", target).Count(&libCount)
 		store.DB.Model(&model.GameLibrary{}).Where("username = ?", target).
 			Select("COALESCE(SUM(play_seconds),0)").Scan(&totalPlaySec)
 		store.DB.Model(&model.UserAchievement{}).Where("username = ?", target).Count(&achCount)

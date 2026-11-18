@@ -8583,7 +8583,11 @@
                 if (state.games[gid]) state.games[gid].in_library = 0;
                 if (!state.lib[gid]) state.lib[gid] = { lib: { game_id: gid, state: 0 }, game: state.games[gid] || g };
                 else state.lib[gid].lib.state = 0;
-                toast(price > 0 ? T('已获取「') + name + T('」，扣除 ') + fmtPoints(price) + T(' 积分') : T('已加入游戏库'));
+                var toastMsg;
+                if (d.reactivated) toastMsg = T('已免费重新加入游戏库');
+                else if (price > 0) toastMsg = T('已获取「') + name + T('」，扣除 ') + fmtPoints(price) + T(' 积分');
+                else toastMsg = T('已加入游戏库');
+                toast(toastMsg);
                 refreshViews();
                 if (state.detailId === gid) { updateInstallBox(); refreshReviewBtn(); }
             });
@@ -8597,11 +8601,11 @@
         showConfirm(T('用积分获取'), T('将扣除 ') + fmtPoints(price) + T(' 积分获取「') + name + '」' + balTxt + '。', T('确认获取'), doJoin);
     }
 
-    // 移出库：自绘确认 → 取消进行中下载 → DELETE（实付积分全额退还，服务端归口）；已安装文件保留在磁盘
+    // 移出库：自绘确认 → 取消进行中下载 → DELETE（服务端按入库时间判断是否退积分，Steam 同款超期不退）；已安装文件保留在磁盘
     function removeFromLib(gid) {
         var g = state.games[gid] || {};
         var name = g.name || (state.lib[gid] && state.lib[gid].game && state.lib[gid].game.name) || (T('游戏 #') + gid);
-        showConfirm(T('移出游戏库'), T('确定将「') + name + T('」移出游戏库？进行中的下载将被取消，已安装文件不会被删除，获取时支付的积分将全额退还。'), T('移出'), function () {
+        showConfirm(T('移出游戏库'), T('确定将「') + name + T('」移出游戏库？进行中的下载将被取消，已安装文件不会被删除。获取时支付的积分，在入库退款期限内将全额退还，超期则不予退还。'), T('移出'), function () {
             // 同游戏任务全量清扫：主进程按 gameId 取消双管理器全部同游戏任务（all=true，含页面
             // 未知的残留任务——其帧被页面去重守卫挡在页面外，逐个 taskId cancel 够不着）；本地
             // 卡片/映射一并移除，防 pullStatus 复活旧任务成卡
@@ -8618,7 +8622,15 @@
                 if (res.data && res.data.balance !== undefined && res.data.balance !== null) { state.balance = res.data.balance; syncPointsOut(res.data.balance); }
                 delete state.lib[gid];
                 if (state.games[gid]) { state.games[gid].in_library = undefined; }
-                toast(T('已移出游戏库，积分已退还'));
+                // 根据服务端返回的 refunded / refund_expired 区分 toast 文案
+                if (res.data && res.data.refund_expired) {
+                    var d = res.data.refund_days || 7;
+                    toast(T('已移出游戏库，入库超过') + d + T('天，积分不予退还'));
+                } else if (res.data && res.data.refunded) {
+                    toast(T('已移出游戏库，积分已退还'));
+                } else {
+                    toast(T('已移出游戏库'));
+                }
                 refreshViews();
                 if (state.detailId === gid) openDetail(gid); // 详情正开着：重载详情数据
             });

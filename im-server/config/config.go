@@ -303,6 +303,10 @@ type GameConfig struct {
 	// false = 客户端上报未携带有效会话签名时降级放行（登录 token + 在库校验 + 防重放 + 限流四道防线兜底）；
 	// true  = 无有效会话签名一律拒绝（待链路 B 稳定、全部上报方携带会话密钥后再收紧）
 	AchievementSignRequired bool `yaml:"achievement_sign_required"`
+	// RefundDays 退款期限天数（Steam 同款"购买超过 N 天不退款"政策）：
+	// 移除游戏库时，若入库时间（im_game_library.create_time）距今已超过 RefundDays 天，则不退还积分；
+	// 0 或负数=不限制时间（默认行为，全退）。默认值见 Default()
+	RefundDays int `yaml:"refund_days"`
 }
 
 // GameGatewayItem 网关地址簿条目（多网关部署：每条目=一台部署了 im-gateway 的远程服务器）
@@ -909,6 +913,8 @@ func Default() *Config {
 			// 云存档默认启用：config.yaml 缺 save 节（旧配置升级）时仍可用；
 			// 显式 enabled: false 才会关闭（yaml.v3 仅覆盖文件中出现的键）
 			Save: GameSaveConfig{Enabled: true},
+			// Steam 同款退款期限：默认入库 7 天内移除可退积分，超期不退（0=全退无限制）
+			RefundDays: 7,
 		},
 
 		// IP 属地默认开启（IPv4+IPv6 双栈；数据文件缺失时对应栈加载失败自动降级，不阻塞启动、不影响其他功能）

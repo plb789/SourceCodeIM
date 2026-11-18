@@ -144,7 +144,7 @@ func (s *Server) GwDbwriteEnqueueForUser(username string) {
 		return
 	}
 	var ids []uint
-	if err := store.DB.Model(&model.GameLibrary{}).Where("username = ?", username).Pluck("game_id", &ids).Error; err != nil {
+	if err := store.DB.Model(&model.GameLibrary{}).Where("username = ? AND removed_at IS NULL", username).Pluck("game_id", &ids).Error; err != nil {
 		logger.Error("网关写库入队（%s）库查询失败：%v", username, err)
 		return
 	}

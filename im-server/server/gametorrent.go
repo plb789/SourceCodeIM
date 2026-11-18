@@ -514,7 +514,7 @@ func (s *Server) HandleGameTorrent(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	var cnt int64
-	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", username, id).Count(&cnt)
+	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND removed_at IS NULL", username, id).Count(&cnt)
 	if cnt == 0 {
 		adminFail(w, http.StatusForbidden, "请先将游戏加入库")
 		return
@@ -588,7 +588,7 @@ func (s *Server) HandleGameP2SP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var cnt int64
-	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", username, gid).Count(&cnt)
+	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND removed_at IS NULL", username, gid).Count(&cnt)
 	if cnt == 0 {
 		adminFail(w, http.StatusForbidden, "请先将游戏加入库")
 		return

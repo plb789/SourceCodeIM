@@ -1365,6 +1365,10 @@ type GameFile struct {
 func (GameFile) TableName() string { return "im_game_file" }
 
 // GameLibrary 用户游戏库表 im_game_library（uniqueIndex(username,game_id) 防重复入库）
+// Steam 同款所有权模型：一旦入库（付费或免费），记录永久保留；
+//   RemovedAt != NULL 表示当前不在库（已移出/卸载），但所有权仍在
+//   Refunded = true  表示已退款（失去所有权，再次加入需重新付费）
+// 这样付费用户移出库后可免费重新加入（Steam 同款），退款用户则需再次扣费
 type GameLibrary struct {
 	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
 	Username string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_user_game" json:"username"`
@@ -1376,14 +1380,18 @@ type GameLibrary struct {
 	InstallPath      string `gorm:"column:install_path;type:varchar(512);default:''" json:"install_path"`
 	// PayPrice 入库实付积分快照（0=免费入库；移出库退款按实付全额退还，防管理员中途调价导致退款歧义）
 	PayPrice float64 `gorm:"column:pay_price;type:double;default:0" json:"pay_price"`
+	// PayRefunded 是否已退款（true=已退积分，失去所有权，再次加入需重新付费）
+	PayRefunded bool `gorm:"column:pay_refunded;type:tinyint(1);default:false" json:"pay_refunded"`
 	// PlaySeconds 累计游玩秒数（客户端 start/end 上报归口累加）
 	PlaySeconds int64 `gorm:"column:play_seconds;default:0" json:"play_seconds"`
 	// PlayCount 累计游玩会话次数（成就引擎次数型判定数据源；每次新会话 start 时 +1，
 	// 运行期间周期心跳复用 start 动作不计数。AutoMigrate 自动加列，存量库条目默认 0）
-	PlayCount   int64     `gorm:"column:play_count;default:0" json:"play_count"`
-	LastPlayAt  time.Time `gorm:"column:last_play_at;type:datetime;default:CURRENT_TIMESTAMP" json:"last_play_at"`
-	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
-	UpdateTime  time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+	PlayCount  int64     `gorm:"column:play_count;default:0" json:"play_count"`
+	LastPlayAt time.Time `gorm:"column:last_play_at;type:datetime;default:CURRENT_TIMESTAMP" json:"last_play_at"`
+	// RemovedAt 移出时间（NULL=当前在库；非 NULL=已移出但所有权保留）
+	RemovedAt  *time.Time `gorm:"column:removed_at;type:datetime;default:NULL" json:"removed_at"`
+	CreateTime time.Time  `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time  `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 表名沿用 im_ 前缀约定

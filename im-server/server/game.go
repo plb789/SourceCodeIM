@@ -802,7 +802,7 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 	libState := map[uint]int8{}
 	if viewer != "" {
 		var libs []model.GameLibrary
-		store.DB.Where("username = ?", viewer).Find(&libs)
+		store.DB.Where("username = ? AND removed_at IS NULL", viewer).Find(&libs)
 		gameLatest := map[uint]string{}
 		for _, g := range games {
 			gameLatest[g.ID] = g.LatestVersion
@@ -875,7 +875,7 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 		// 有 token → 校验本人是否入库（下架/待审/驳回游戏需已入库）
 		if g.Status != 0 || (g.AuditStatus != model.GameAuditOfficial && g.AuditStatus != model.GameAuditApproved) {
 			var cnt int64
-			store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", viewer, g.ID).Count(&cnt)
+			store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND removed_at IS NULL", viewer, g.ID).Count(&cnt)
 			if cnt == 0 {
 				adminFail(w, http.StatusNotFound, "游戏不存在")
 				return
@@ -883,7 +883,7 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		// 本人是否入库（个人库状态 + launch_password 都依赖这个）
 		var cnt int64
-		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ?", viewer, g.ID).Count(&cnt)
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND removed_at IS NULL", viewer, g.ID).Count(&cnt)
 		hasLib = cnt > 0
 	}
 	var versions []model.GameVersion
@@ -939,7 +939,7 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	// token + 入库双重门控，严禁信任 query 自报 username
 	if hasToken && hasLib {
 		var lib model.GameLibrary
-		if err := store.DB.Where("username = ? AND game_id = ?", viewer, g.ID).First(&lib).Error; err == nil {
+		if err := store.DB.Where("username = ? AND game_id = ? AND removed_at IS NULL", viewer, g.ID).First(&lib).Error; err == nil {
 			item["in_library"] = libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion)
 			item["lib"] = map[string]interface{}{
 				"state":             libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion),
@@ -962,7 +962,7 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var libs []model.GameLibrary
-	if err := store.DB.Where("username = ?", username).Order("update_time DESC, id DESC").Find(&libs).Error; err != nil {
+	if err := store.DB.Where("username = ? AND removed_at IS NULL", username).Order("update_time DESC, id DESC").Find(&libs).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "查询游戏库失败")
 		return
 	}
@@ -1045,7 +1045,7 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 func (s *Server) libStateSigOf(username string) (string, error) {
 	var libs []model.GameLibrary
 	if err := store.DB.Select("game_id", "state", "installed_version", "install_path").
-		Where("username = ?", username).Order("game_id ASC").Find(&libs).Error; err != nil {
+		Where("username = ? AND removed_at IS NULL", username).Order("game_id ASC").Find(&libs).Error; err != nil {
 		return "", err
 	}
 	ids := make([]uint, 0, len(libs))
@@ -1091,8 +1091,9 @@ func (s *Server) HandleGameLibrarySig(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleGameLibraryJoin 加入游戏库（P2 商店化 Steam 同款购买流）：
-// 免费（price=0）直接入库；收费（price>0）严格扣除积分入库（共用 AI 积分钱包，
-// 余额不足整体失败不钳零，区别于 AI 问答的钳零语义）；已入库幂等返回不重复扣分。
+//   - 全新用户：免费（price=0）直接入库；收费严格扣积分（余额不足整体失败）；已入库幂等返回不重复扣分
+//   - 曾拥有过但已移出（removed_at IS NOT NULL）且未退款（pay_refunded=false）：免费重新激活（所有权保留）
+//   - 曾拥有过但已退款（pay_refunded=true）：视同新用户，需重新付费
 // 实付金额快照落库（pay_price），移出库按实付全额退还（game_refund 流水）
 func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
@@ -1112,9 +1113,26 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusForbidden, "游戏已下架")
 		return
 	}
+	// 不带 removed_at 条件：要查到历史软删除记录（所有权保留）
 	var lib model.GameLibrary
-	if err := store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&lib).Error; err != nil {
-		// 收费游戏先严格扣分再入库（扣分失败整体失败，库条目不落库）
+	hadHistory := false
+	reactivated := false
+	qerr := store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&lib).Error
+	if qerr == nil {
+		hadHistory = true
+		// 找到了历史记录：判断当前状态
+		if lib.RemovedAt == nil {
+			// 已在库，幂等返回（不重复扣分）
+		} else if lib.PayRefunded {
+			// 已退款：失去所有权，视同新用户重新付费
+			hadHistory = false // 走下方"新购买"分支
+		} else {
+			// 软删除但未退款 → 免费重新激活（Steam 同款）
+			reactivated = true
+		}
+	}
+	if !hadHistory {
+		// 全新用户 或 已退款用户 → 重新付费/新入库
 		pay := aiPointsRound3(g.Price)
 		if pay > 0 {
 			// 先查余额给出可读错误（区分用户不存在与余额不足）
@@ -1155,8 +1173,22 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 			adminFail(w, http.StatusInternalServerError, "加入游戏库失败")
 			return
 		}
-		// 下载计数（仅首次入库计一次，重复加入幂等不重复计）
+		// 下载计数（仅首次入库计一次，重新激活不计数）
 		store.DB.Model(&model.Game{}).Where("id = ?", g.ID).UpdateColumn("down_count", g.DownCount+1)
+	} else if reactivated {
+		// 重新激活：清空 removed_at + 重置安装状态（保留 pay_price / 累计游玩时长 / 成就关联）
+		logger.Info("免费重新激活：用户 %s 游戏#%d（曾入库 %v，移出 %v）", username, g.ID, lib.CreateTime, lib.RemovedAt)
+		now := time.Now()
+		empty := ""
+		store.DB.Model(&lib).Updates(map[string]interface{}{
+			"removed_at":        nil,
+			"state":             0,
+			"installed_version": &empty,
+			"install_path":      &empty,
+			"update_time":       now,
+		})
+		lib.RemovedAt = nil
+		lib.State = 0
 	}
 	balance, _ := userPoints(username)
 	// from=客户端已安装版本号：服务端据此计算 delta_size_bytes（增量更新实际需下载字节）
@@ -1165,7 +1197,16 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "该游戏暂无可下载版本")
 		return
 	}
-	adminJSON(w, map[string]interface{}{"lib_id": lib.ID, "state": lib.State, "manifest": manifest, "balance": aiPointsRound3(balance)})
+	resp := map[string]interface{}{
+		"lib_id":   lib.ID,
+		"state":    lib.State,
+		"manifest": manifest,
+		"balance":  aiPointsRound3(balance),
+	}
+	if reactivated {
+		resp["reactivated"] = true
+	}
+	adminJSON(w, resp)
 }
 
 // HandleGameLibraryState 库状态上报：客户端下载器暂停/续传/完成/发现待更新时归口落库
@@ -1192,6 +1233,7 @@ func (s *Server) HandleGameLibraryState(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var lib model.GameLibrary
+	// 不带 removed_at 条件：要查到软删除记录
 	q := store.DB.Where("username = ? AND game_id = ?", username, id)
 	if err := q.First(&lib).Error; err != nil {
 		// 阶段二百九十九：隐式入库——客户端下载时只调 PUT state，不先调 POST join。
@@ -1216,6 +1258,27 @@ func (s *Server) HandleGameLibraryState(w http.ResponseWriter, r *http.Request) 
 			adminFail(w, http.StatusInternalServerError, "库查询失败")
 			return
 		}
+	} else if lib.RemovedAt != nil {
+		// 找到了软删除记录：判断是否可隐式恢复
+		if lib.PayRefunded {
+			// 已退款：失去所有权，需先调 POST join 重新购买
+			adminFail(w, http.StatusForbidden, "该游戏已从你的库中移除并退款，需重新加入游戏库")
+			return
+		}
+		// 软删除但未退款：隐式恢复（免费重新激活，清空 removed_at + 重置安装状态）
+		upd := map[string]interface{}{"removed_at": nil, "state": req.State}
+		if req.InstalledVersion != "" {
+			upd["installed_version"] = req.InstalledVersion
+		}
+		if req.InstallPath != "" {
+			upd["install_path"] = req.InstallPath
+		}
+		if err := store.DB.Model(&lib).Updates(upd).Error; err != nil {
+			adminFail(w, http.StatusInternalServerError, "状态保存失败")
+			return
+		}
+		adminJSON(w, map[string]interface{}{"ok": true, "reactivated": true})
+		return
 	}
 	updates := map[string]interface{}{"state": req.State}
 	if req.InstalledVersion != "" {
@@ -1231,9 +1294,12 @@ func (s *Server) HandleGameLibraryState(w http.ResponseWriter, r *http.Request) 
 	adminJSON(w, map[string]interface{}{"ok": true})
 }
 
-// HandleGameLibraryLeave 移出游戏库（本地安装目录清理由客户端负责，服务端仅清归属条目）：
-// 收费游戏按入库实付快照（pay_price）全额退还积分（game_refund 流水），防误操作损失；
-// 已安装态不可移出（上游校验保留），退款仅在条目删除成功后执行
+// HandleGameLibraryLeave 移出游戏库（本地安装目录清理由客户端负责，服务端改软删除保留所有权）：
+// 核心设计：GameLibrary 记录永久保留，removed_at=NULL 表示在库，非 NULL 表示已移出。
+//   - 收费游戏在退款期限内移出 → 退积分 + pay_refunded=true（失去所有权，下次加入需重新付费）
+//   - 收费游戏超期移出        → 不退积分 + pay_refunded=false（所有权保留，下次加入免费激活）
+//   - 免费游戏移出            → 不退积分 + pay_refunded=false（同上）
+// 返回 refunded 告知前端是否实际退还；reactivated 告知未来重新加入免费激活
 func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
@@ -1244,27 +1310,67 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 	}
 	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	var lib model.GameLibrary
-	if err := store.DB.Where("username = ? AND game_id = ?", username, id).First(&lib).Error; err != nil {
-		adminFail(w, http.StatusNotFound, "该游戏不在你的库中")
-		return
-	}
-	if err := store.DB.Delete(&lib).Error; err != nil {
-		adminFail(w, http.StatusInternalServerError, "移出失败")
+	// 必须是当前在库的才能移出（removed_at IS NULL）
+	if err := store.DB.Where("username = ? AND game_id = ? AND removed_at IS NULL", username, id).First(&lib).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			adminFail(w, http.StatusNotFound, "该游戏不在你的库中")
+		} else {
+			adminFail(w, http.StatusInternalServerError, "查询失败")
+		}
 		return
 	}
 	pay := aiPointsRound3(lib.PayPrice)
+	refundDays := s.cfg.Game.RefundDays
+	// 是否可以退积分：pay_price > 0 且（退款期限未开启 或 入库时间在期限内）
+	canRefund := pay > 0
+	if canRefund && refundDays > 0 {
+		deadline := lib.CreateTime.AddDate(0, 0, refundDays)
+		canRefund = time.Now().Before(deadline)
+	}
+	// 先执行软删除并标记退款状态（所有权模型）
+	now := time.Now()
+	updates := map[string]interface{}{
+		"removed_at": now,
+		"state":      0, // 移出后重置安装状态（下次激活从 0 开始）
+	}
+	// 需要退款且确实执行退款成功 → 标记 pay_refunded=true（失去所有权）
+	// 超期不退或免费 → pay_refunded 保持 false（所有权保留）
+	shouldMarkRefunded := false
 	if pay > 0 {
-		res := store.DB.Model(&model.User{}).Where("username = ?", username).
-			Update("points", gorm.Expr("ROUND(points + ?, 3)", pay))
-		if res.Error == nil {
-			after, _ := userPoints(username)
-			recordPointsLog(username, pay, after, "game_refund", "system", "移出游戏库退还: 游戏#"+strconv.FormatUint(id, 10))
+		if !canRefund {
+			// 超期不退
+			logger.Info("移出库超期不退：用户 %s 游戏#%d 入库 %v 超 %d 天期限，应退 %.3f 未退",
+				username, id, lib.CreateTime, refundDays, pay)
 		} else {
-			logger.Error("移出库退款失败（用户 %s，应退 %.3f）：%v", username, pay, res.Error)
+			// 尝试退款
+			res := store.DB.Model(&model.User{}).Where("username = ?", username).
+				Update("points", gorm.Expr("ROUND(points + ?, 3)", pay))
+			if res.Error == nil {
+				after, _ := userPoints(username)
+				recordPointsLog(username, pay, after, "game_refund", "system", "移出游戏库退还: 游戏#"+strconv.FormatUint(id, 10))
+				shouldMarkRefunded = true // 退款成功 → 失去所有权
+			} else {
+				// 积分退款失败但库条目软删除已执行（所有权保留，下次可免费加回）
+				logger.Error("移出库退款失败（用户 %s，应退 %.3f）：%v", username, pay, res.Error)
+			}
 		}
 	}
+	if shouldMarkRefunded {
+		updates["pay_refunded"] = true
+	}
+	if err := store.DB.Model(&lib).Updates(updates).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "移出失败")
+		return
+	}
+	refunded := shouldMarkRefunded
+	refundExpired := pay > 0 && !canRefund
 	balance, _ := userPoints(username)
-	adminJSON(w, map[string]interface{}{"ok": true, "balance": aiPointsRound3(balance)})
+	resp := map[string]interface{}{"ok": true, "balance": aiPointsRound3(balance), "refunded": refunded}
+	if refundExpired {
+		resp["refund_expired"] = true
+		resp["refund_days"] = refundDays
+	}
+	adminJSON(w, resp)
 }
 
 // gameManifest 版本清单构建（version 空=最新版）：文件 ID/相对路径/大小/SHA256/下载地址归口下发
