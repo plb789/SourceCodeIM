@@ -4265,26 +4265,7 @@
             background: linear-gradient(transparent, rgba(0,0,0,0.7));
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        /* 截图上传弹窗 */
-        .gp-ss-upload-modal { max-width: 420px; }
-        .gp-ss-preview {
-            min-height: 120px;
-            margin-bottom: 12px;
-            border: 2px dashed var(--border);
-            border-radius: 8px;
-            display: flex; align-items: center; justify-content: center;
-            overflow: hidden;
-        }
-        .gp-ss-preview img { max-width: 100%; max-height: 200px; border-radius: 6px; }
-        #gpSsTitle, #gpSsType {
-            width: 100%; box-sizing: border-box;
-            padding: 8px 10px;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            background: var(--panel-bg);
-            color: var(--text);
-            font-size: 13px;
-        }
+        /* 截图上传弹窗样式已迁移至 style.css */
 
         /* ===== P3：卡片背包展示柜 ===== */
         .gp-cards-wrap { display: flex; flex-direction: column; gap: 10px; }
@@ -4393,31 +4374,6 @@
         }
         .gp-bg-btns { display: flex; gap: 8px; flex-wrap: wrap; }
         .gp-bg-size-hint { font-size: 11px; color: var(--text-secondary); margin-top: 10px; }
-
-        /* ===== 资料页发表评测（游戏选择器） ===== */
-        .gp-game-pick-modal { max-width: 480px; }
-        .gp-game-pick-list { max-height: 420px; overflow-y: auto; }
-        .gp-game-pick-row {
-            display: flex; align-items: center; gap: 12px;
-            padding: 10px 12px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.15s;
-            margin-bottom: 4px;
-        }
-        .gp-game-pick-row:hover { background: var(--divider); }
-        .gp-game-pick-ic {
-            width: 40px; height: 40px;
-            border-radius: 6px;
-            background: linear-gradient(135deg, var(--gs-btn), var(--gs-btn-deep));
-            color: #fff; font-weight: 700; font-size: 16px;
-            display: flex; align-items: center; justify-content: center;
-            overflow: hidden; flex-shrink: 0;
-        }
-        .gp-game-pick-ic img { width: 100%; height: 100%; object-fit: cover; }
-        .gp-game-pick-namebox { flex: 1; min-width: 0; }
-        .gp-game-pick-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .gp-game-pick-sub { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         /* 最近游戏列表（Steam 同款横向大卡） */
         .gp-recent {

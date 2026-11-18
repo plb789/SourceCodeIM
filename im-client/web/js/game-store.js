@@ -1990,67 +1990,260 @@
         var ov = document.createElement('div');
         ov.className = 'gp-mask';
         ov.innerHTML = '<div class="gp-modal gp-ss-upload-modal">' +
-            '<div class="gp-modal-title">' + T('上传截图/艺术作品') + '</div>' +
-            '<div class="gp-modal-body">' +
-              '<div class="gp-ss-preview" id="gpSsPreview"></div>' +
-              '<input type="file" id="gpSsFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none">' +
-              '<button class="gp-btn primary" id="gpSsPick">' + T('选择图片') + '</button>' +
-              '<input type="text" id="gpSsTitle" placeholder="' + T('标题（可选）') + '" style="margin-top:10px">' +
-              '<select id="gpSsType" style="margin-top:10px">' +
-                '<option value="screenshot">' + T('游戏截图') + '</option>' +
-                '<option value="artwork">' + T('艺术作品') + '</option>' +
-              '</select>' +
+            '<div class="gp-modal-title">' +
+              '<span>' + T('上传截图/艺术作品') + '</span>' +
+              '<button class="gp-modal-x" id="gpSsCloseX" title="' + T('关闭') + '">×</button>' +
+            '</div>' +
+            '<div class="gp-modal-body gp-ss-body">' +
+              '<div class="gp-ss-config">' +
+                '<div class="gp-ss-config-row">' +
+                  '<label class="gp-ss-label">' + T('类型') + '</label>' +
+                  '<select id="gpSsType">' +
+                    '<option value="screenshot">' + T('游戏截图') + '</option>' +
+                    '<option value="artwork">' + T('艺术作品') + '</option>' +
+                  '</select>' +
+                '</div>' +
+                '<div class="gp-ss-config-row">' +
+                  '<label class="gp-ss-label">' + T('标题') + '</label>' +
+                  '<input type="text" id="gpSsTitle" placeholder="' + T('（可选，批量上传时仅第一张使用）') + '">' +
+                '</div>' +
+              '</div>' +
+              '<div class="gp-ss-area">' +
+                '<div class="gp-ss-drop" id="gpSsDrop">' +
+                  '<input type="file" id="gpSsFile" multiple accept="image/png,image/jpeg,image/gif,image/webp">' +
+                  '<div class="gp-ss-drop-ico">📷</div>' +
+                  '<div class="gp-ss-drop-text">' + T('点击选择 / 拖拽图片到这里') + '</div>' +
+                  '<div class="gp-ss-drop-hint">' + T('支持 PNG/JPG/GIF/WebP，单张最大 10MB，最多 20 张') + '</div>' +
+                '</div>' +
+                '<div class="gp-ss-grid" id="gpSsGrid"></div>' +
+              '</div>' +
+              '<div class="gp-ss-progress" id="gpSsProgress" style="display:none">' +
+                '<div class="gp-ss-progress-bar"><div class="gp-ss-progress-fill" id="gpSsProgFill"></div></div>' +
+                '<div class="gp-ss-progress-text" id="gpSsProgText"></div>' +
+              '</div>' +
             '</div>' +
             '<div class="gp-modal-foot">' +
               '<button class="gp-btn" id="gpSsCancel">' + T('取消') + '</button>' +
-              '<button class="gp-btn primary" id="gpSsUpload">' + T('上传') + '</button>' +
+              '<button class="gp-btn primary" id="gpSsUpload">' + T('开始上传') + '</button>' +
             '</div>' +
           '</div>';
         document.body.appendChild(ov);
         var bodyScroll = ov.querySelector('.gp-modal-body');
         if (bodyScroll) osbInit(bodyScroll);
-        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+
+        var files = [];       // { file, url, name, size, localId }
+        var uploading = false;
+
+        function gpClose() {
+            if (uploading) { if (!confirm(T('上传中，确定关闭？'))) return; }
+            files.forEach(function (f) { URL.revokeObjectURL(f.url); });
+            destroyOsb(bodyScroll);
+            document.removeEventListener('keydown', _gpEsc);
+            if (ov.parentNode) document.body.removeChild(ov);
+        }
         var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
         document.addEventListener('keydown', _gpEsc);
-        var selFile = null;
-        ov.querySelector('#gpSsPick').addEventListener('click', function () { ov.querySelector('#gpSsFile').click(); });
-        ov.querySelector('#gpSsFile').addEventListener('change', function (e) {
-            selFile = e.target.files[0];
-            var pv = ov.querySelector('#gpSsPreview');
-            pv.innerHTML = '';
-            if (selFile) {
-                var img = document.createElement('img');
-                img.src = URL.createObjectURL(selFile);
-                pv.appendChild(img);
-            }
-        });
+        ov.querySelector('#gpSsCloseX').addEventListener('click', gpClose);
         ov.querySelector('#gpSsCancel').addEventListener('click', gpClose);
         ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
-        ov.querySelector('#gpSsUpload').addEventListener('click', function () {
-            if (!selFile) { toast(T('请选择图片')); return; }
-            var fd = new FormData();
-            fd.append('file', selFile);
-            fd.append('type', ov.querySelector('#gpSsType').value);
-            fd.append('title', ov.querySelector('#gpSsTitle').value.trim());
-            var xhr = new XMLHttpRequest();
-            xhr.open('POST', '/api/profile/screenshot');
-            var dt = localStorage.getItem('drive_token');
-            if (dt) xhr.setRequestHeader('X-Drive-Token', dt);
-            xhr.onload = function () {
-                try {
-                    var res = JSON.parse(xhr.responseText);
-                    if (res.ok) {
-                        toast(T('上传成功'));
-                        gpClose();
-                        // 刷新截图数据
-                        api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(username) + '&type=all').then(function (s2) {
-                            if (s2 && s2.ok && s2.data) { state.profile.screenshots = s2.data; renderShowcases(); }
-                        });
-                    } else { toast(res.err || T('上传失败')); }
-                } catch (e) { toast(T('上传失败')); }
-            };
-            xhr.send(fd);
+
+        // === 选择文件 ===
+        function handleFileList(fileList) {
+            var arr = Array.prototype.slice.call(fileList);
+            arr = arr.slice(0, Math.max(0, 20 - files.length)); // 限总共 20 张
+            arr.forEach(function (file) {
+                if (file.size > 10 * 1024 * 1024) { toast(T('跳过超过 10MB 的文件：') + file.name); return; }
+                if (!/image\/(png|jpeg|gif|webp)/.test(file.type)) { toast(T('跳过非图片文件：') + file.name); return; }
+                var localId = 'f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+                files.push({ file: file, url: URL.createObjectURL(file), name: file.name, size: file.size, localId: localId });
+            });
+            renderGrid();
+        }
+
+        ov.querySelector('#gpSsFile').addEventListener('change', function (e) {
+            handleFileList(e.target.files);
+            e.target.value = ''; // 重置，允许重复选同一文件
         });
+
+        // 拖拽
+        var drop = ov.querySelector('#gpSsDrop');
+        ['dragenter', 'dragover'].forEach(function (evt) {
+            drop.addEventListener(evt, function (e) { e.preventDefault(); drop.classList.add('drag-over'); });
+        });
+        ['dragleave', 'drop'].forEach(function (evt) {
+            drop.addEventListener(evt, function (e) { e.preventDefault(); drop.classList.remove('drag-over'); });
+        });
+        drop.addEventListener('drop', function (e) {
+            if (e.dataTransfer && e.dataTransfer.files) handleFileList(e.dataTransfer.files);
+        });
+
+        // === 渲染预览网格 ===
+        function renderGrid() {
+            var grid = ov.querySelector('#gpSsGrid');
+            grid.innerHTML = '';
+            if (files.length === 0) return;
+            files.forEach(function (f, idx) {
+                var cell = el('div', 'gp-ss-gcell');
+                cell.dataset.idx = idx;
+                var img = document.createElement('img');
+                img.src = f.url;
+                cell.appendChild(img);
+                // 文件名
+                var cap = el('div', 'gp-ss-gcap');
+                cap.textContent = (idx + 1) + '. ' + f.name;
+                cell.appendChild(cap);
+                // 移除按钮
+                var rm = el('button', 'gp-ss-grm', '×');
+                rm.title = T('移除');
+                rm.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    URL.revokeObjectURL(f.url);
+                    files.splice(idx, 1);
+                    renderGrid();
+                });
+                cell.appendChild(rm);
+                // 上传中状态
+                var status = el('div', 'gp-ss-gstatus');
+                status.dataset.idx = idx;
+                cell.appendChild(status);
+                grid.appendChild(cell);
+            });
+            // 更新上传按钮状态
+            ov.querySelector('#gpSsUpload').textContent = T('开始上传') + (files.length > 0 ? ' (' + files.length + ')' : '');
+        }
+
+        // === 限并发 3 并行上传 ===
+        ov.querySelector('#gpSsUpload').addEventListener('click', function () {
+            if (files.length === 0) { toast(T('请先选择图片')); return; }
+            if (uploading) return;
+            uploading = true;
+            ov.querySelector('#gpSsUpload').disabled = true;
+            ov.querySelector('#gpSsCancel').disabled = true;
+            var prog = ov.querySelector('#gpSsProgress');
+            var fill = ov.querySelector('#gpSsProgFill');
+            var text = ov.querySelector('#gpSsProgText');
+            prog.style.display = 'flex';
+            fill.style.width = '0%';
+
+            var token = localStorage.getItem('drive_token');
+            var ssType = ov.querySelector('#gpSsType').value;
+            var titleInput = ov.querySelector('#gpSsTitle').value.trim();
+            var MAX_PARALLEL = 3;
+
+            // 每个活跃项的状态：{ file, idx, loaded, total, status }
+            var inFlight = [];       // 最多 MAX_PARALLEL 个
+            var remaining = files.slice();
+            var success = 0, fail = 0;
+            var done = 0;            // 已完成总数
+            var total = files.length;
+
+            // 计算总进度（已完成 + 活跃中平均进度）/ 总数
+            function updateProgressUI() {
+                var activeTotal = 0, activeLoaded = 0;
+                inFlight.forEach(function (it) {
+                    if (it.total > 0) { activeTotal += it.total; activeLoaded += it.loaded; }
+                });
+                var numer = done * 100 + (activeTotal > 0 ? (activeLoaded / activeTotal) * 100 : 0);
+                var pct = numer / total;
+                fill.style.width = pct.toFixed(1) + '%';
+                var activeNames = inFlight.map(function (it) { return it.file.name; }).join(' · ');
+                text.textContent = T('上传中') + ' ' + done + '/' + total +
+                    (inFlight.length > 0 ? ' — ' + activeNames : '');
+            }
+
+            // 启动一个上传
+            function launchNext() {
+                if (remaining.length === 0) return;
+                if (inFlight.length >= MAX_PARALLEL) return;
+                var f = remaining.shift();
+                var idx = files.indexOf(f);
+                var slot = { file: f, idx: idx, loaded: 0, total: 0, status: 'uploading', xhr: null };
+                inFlight.push(slot);
+                gridUpdateStatus(idx, T('上传中…'));
+
+                var fd = new FormData();
+                fd.append('file', f.file);
+                fd.append('type', ssType);
+                if (idx === 0 && titleInput) fd.append('title', titleInput);
+
+                var xhr = new XMLHttpRequest();
+                slot.xhr = xhr;
+                xhr.open('POST', '/api/profile/screenshot');
+                if (token) xhr.setRequestHeader('X-Drive-Token', token);
+                xhr.upload.onprogress = function (pe) {
+                    if (pe.lengthComputable) {
+                        slot.loaded = pe.loaded;
+                        slot.total = pe.total;
+                        updateProgressUI();
+                    }
+                };
+                xhr.onload = function () {
+                    try {
+                        var res = JSON.parse(xhr.responseText);
+                        if (res.ok) {
+                            success++;
+                            gridUpdateStatus(idx, T('✓ 成功'));
+                            slot.status = 'ok';
+                        } else {
+                            fail++;
+                            gridUpdateStatus(idx, T('✗ ') + (res.err || T('失败')));
+                            slot.status = 'err';
+                        }
+                    } catch (e) {
+                        fail++;
+                        gridUpdateStatus(idx, T('✗ 解析错误'));
+                        slot.status = 'err';
+                    }
+                };
+                xhr.onerror = function () {
+                    fail++;
+                    gridUpdateStatus(idx, T('✗ 网络错误'));
+                    slot.status = 'err';
+                };
+                xhr.onloadend = function () {
+                    // 从活跃列表移除
+                    var pos = inFlight.indexOf(slot);
+                    if (pos >= 0) inFlight.splice(pos, 1);
+                    done++;
+                    updateProgressUI();
+                    // 全部完成？
+                    if (done >= total) {
+                        finish();
+                    } else {
+                        // 补位（可能连续多个 slot 同时完成，连续补）
+                        while (inFlight.length < MAX_PARALLEL && remaining.length > 0) launchNext();
+                    }
+                };
+                xhr.send(fd);
+            }
+
+            function finish() {
+                uploading = false;
+                ov.querySelector('#gpSsUpload').disabled = false;
+                ov.querySelector('#gpSsCancel').disabled = false;
+                fill.style.width = '100%';
+                text.textContent = T('完成') + '：' + success + ' ' + T('成功') + (fail > 0 ? '，' + fail + ' ' + T('失败') : '');
+                setTimeout(function () {
+                    api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(username) + '&type=all').then(function (s2) {
+                        if (s2 && s2.ok && s2.data) { state.profile.screenshots = s2.data; renderShowcases(); }
+                    });
+                    toast(T('上传完成'));
+                    gpClose();
+                }, 600);
+            }
+
+            // 首次启动：填满 MAX_PARALLEL 个
+            while (inFlight.length < MAX_PARALLEL && remaining.length > 0) launchNext();
+        });
+
+        function gridUpdateStatus(idx, msg) {
+            var st = ov.querySelector('[data-idx="' + idx + '"].gp-ss-gstatus');
+            if (st) {
+                st.textContent = msg;
+                if (msg.indexOf('✓') >= 0) st.classList.add('ok');
+                else if (msg.indexOf('✗') >= 0) st.classList.add('err');
+            }
+        }
     }
 
     // ==================== P3：卡片工坊（抽卡 + 合成徽章 + 积分商店） ====================
@@ -2711,54 +2904,215 @@
         var ov = document.createElement('div');
         ov.className = 'gp-mask';
         ov.innerHTML = '<div class="gp-modal gp-game-pick-modal">' +
-            '<div class="gp-modal-title">' + T('选择要评测的游戏') + '</div>' +
-            '<div class="gp-modal-body">' +
-              '<input type="text" id="gpRevSearch" placeholder="' + T('搜索游戏名称…') + '" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-bg);color:var(--text);margin-bottom:12px">' +
-              '<div class="gp-game-pick-list" id="gpGamePickList">' + T('加载中…') + '</div>' +
+            '<div class="gp-modal-title">' +
+              '<span>' + T('选择要评测的游戏') + '</span>' +
+              '<button class="gp-modal-x" id="gpRevCloseX" title="' + T('关闭') + '">×</button>' +
+            '</div>' +
+            '<div class="gp-modal-body gp-gp-body">' +
+              '<div class="gp-gp-bar">' +
+                '<div class="gp-gp-search">' +
+                  '<input type="text" id="gpRevSearch" placeholder="' + T('输入名称搜索…') + '">' +
+                  '<span class="gp-gp-search-clear" id="gpRevClear" style="display:none">×</span>' +
+                '</div>' +
+                '<div class="gp-gp-stat" id="gpRevStat"></div>' +
+              '</div>' +
+              '<div class="gp-gp-chips" id="gpRevChips"></div>' +
+              '<div class="gp-gp-grid" id="gpGamePickList">' + T('加载中…') + '</div>' +
+              '<div class="gp-gp-end" id="gpRevEnd"></div>' +
             '</div>' +
             '<div class="gp-modal-foot">' +
-              '<button class="gp-btn" id="gpRevPickCancel">' + T('取消') + '</button>' +
+              '<button class="gp-btn" id="gpRevPickCancel">' + T('关闭') + '</button>' +
             '</div>' +
           '</div>';
         document.body.appendChild(ov);
-        var bodyScroll = ov.querySelector('.gp-game-pick-list') || ov.querySelector('.gp-modal-body');
-        if (bodyScroll) osbInit(bodyScroll);
-        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        var gridBox = ov.querySelector('#gpGamePickList');
+        osbInit(gridBox);
+
+        var state3 = { page: 1, size: 24, hasMore: true, kw: '', tag: '', loading: false, _infIO: null, allTags: {} };
+        var kwTimer = null;
+
+        function gpClose() {
+            clearTimeout(kwTimer);
+            destroyOsb(gridBox);
+            if (state3._infIO) { state3._infIO.disconnect(); state3._infIO = null; }
+            document.removeEventListener('keydown', _gpEsc);
+            if (ov.parentNode) document.body.removeChild(ov);
+        }
         var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
         document.addEventListener('keydown', _gpEsc);
+        ov.querySelector('#gpRevCloseX').addEventListener('click', gpClose);
         ov.querySelector('#gpRevPickCancel').addEventListener('click', gpClose);
         ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
-        api('GET', '/api/game/list?page=1&size=100').then(function (res) {
-            var games = (res && res.ok && res.data && res.data.list) || [];
-            var filtered = games.slice();
-            var listBox = ov.querySelector('#gpGamePickList');
-            function renderGameList() {
-                listBox.innerHTML = '';
-                if (filtered.length === 0) { listBox.innerHTML = '<div class="gp-empty">' + T('无游戏') + '</div>'; return; }
-                filtered.forEach(function (g) {
-                    var row = el('div', 'gp-game-pick-row');
-                    var ic = el('div', 'gp-game-pick-ic');
-                    if (g.cover) { var img = document.createElement('img'); img.src = assetUrl(g.cover); img.onerror = function () { ic.textContent = g.name.charAt(0); }; ic.appendChild(img); }
-                    else { ic.textContent = g.name.charAt(0); }
-                    row.appendChild(ic);
-                    var nameBox = el('div', 'gp-game-pick-namebox');
-                    nameBox.appendChild(el('div', 'gp-game-pick-name', g.name));
-                    if (g.genre) nameBox.appendChild(el('div', 'gp-game-pick-sub', g.genre));
-                    row.appendChild(nameBox);
-                    row.addEventListener('click', function () {
-                        gpClose();
-                        openReviewModal(g.id);
-                    });
-                    listBox.appendChild(row);
-                });
-            }
-            renderGameList();
-            ov.querySelector('#gpRevSearch').addEventListener('input', function (e) {
-                var kw = (e.target.value || '').trim().toLowerCase();
-                filtered = kw ? games.filter(function (g) { return (g.name || '').toLowerCase().indexOf(kw) >= 0; }) : games.slice();
-                renderGameList();
-            });
+        ov.querySelector('#gpRevClear').addEventListener('click', function () {
+            ov.querySelector('#gpRevSearch').value = '';
+            ov.querySelector('#gpRevClear').style.display = 'none';
+            state3.kw = '';
+            state3.page = 1; state3.hasMore = true;
+            reload();
         });
+
+        // 构建 URL（keyword + tag 双筛选）
+        function buildUrl() {
+            var url = '/api/game/list?page=' + state3.page + '&size=' + state3.size;
+            if (state3.kw) url += '&keyword=' + encodeURIComponent(state3.kw);
+            if (state3.tag) url += '&tag=' + encodeURIComponent(state3.tag);
+            return url;
+        }
+
+        function reload() {
+            gridBox.innerHTML = '<div class="gp-empty">' + T('加载中…') + '</div>';
+            ov.querySelector('#gpRevEnd').textContent = '';
+            ov.querySelector('#gpRevStat').textContent =
+                (state3.kw ? (T('搜索') + ' "' + state3.kw + '" · ') : '') +
+                (state3.tag ? ('#' + state3.tag + ' · ') : '') +
+                T('加载中…');
+            loadMore(true);
+        }
+
+        function updateStat(total) {
+            var parts = [];
+            if (state3.kw) parts.push(T('搜索') + ' "' + state3.kw + '"');
+            if (state3.tag) parts.push('#' + state3.tag);
+            parts.push(total + ' ' + T('款游戏'));
+            ov.querySelector('#gpRevStat').textContent = parts.join(' · ');
+        }
+
+        function loadMore(reset) {
+            if (state3.loading || (!reset && !state3.hasMore)) return;
+            state3.loading = true;
+            api('GET', buildUrl()).then(function (res) {
+                state3.loading = false;
+                if (!res || !res.ok) {
+                    gridBox.innerHTML = '<div class="gp-empty">' + T('加载失败') + '</div>';
+                    ov.querySelector('#gpRevStat').textContent = '';
+                    return;
+                }
+                var games = (res.data && res.data.list) || [];
+                var total = (res.data && res.data.total) || 0;
+                // 首次 / 重置渲染
+                if (state3.page === 1 || reset) {
+                    gridBox.innerHTML = '';
+                    updateStat(total);
+                    // 收集 tags（只统计前 2 页，够了）
+                    games.forEach(function (g) {
+                        (g.tags || []).forEach(function (t) { state3.allTags[t] = (state3.allTags[t] || 0) + 1; });
+                    });
+                    renderChips();
+                    if (games.length === 0) {
+                        gridBox.innerHTML = '<div class="gp-empty">' + T('无匹配游戏') + '</div>';
+                        ov.querySelector('#gpRevEnd').textContent = '';
+                        state3.hasMore = false;
+                        return;
+                    }
+                }
+                appendCards(games);
+                state3.page++;
+                state3.hasMore = games.length === state3.size;
+                ov.querySelector('#gpRevEnd').textContent =
+                    (!state3.hasMore && total > state3.size) ? T('— 已经到底了 —') : '';
+                rebuildIO();
+            });
+        }
+
+        function appendCards(games) {
+            games.forEach(function (g) {
+                var card = el('div', 'gp-game-card');
+                // 封面
+                var cover = el('div', 'gp-gc-cover');
+                if (g.cover) {
+                    var img = document.createElement('img');
+                    img.src = assetUrl(g.cover);
+                    img.loading = 'lazy';
+                    img.onerror = function () { cover.textContent = (g.name || '?').charAt(0); cover.classList.add('gp-gc-ph'); };
+                    cover.appendChild(img);
+                } else {
+                    cover.textContent = (g.name || '?').charAt(0);
+                    cover.classList.add('gp-gc-ph');
+                }
+                card.appendChild(cover);
+                // 信息
+                var info = el('div', 'gp-gc-info');
+                var name = el('div', 'gp-gc-name', g.name || '');
+                info.appendChild(name);
+                // tags（最多显示 2 个）
+                var tags = (g.tags || []).slice(0, 2);
+                if (tags.length > 0) {
+                    var tagBox = el('div', 'gp-gc-tags');
+                    tags.forEach(function (t) { tagBox.appendChild(el('span', 'gp-gc-tag', t)); });
+                    info.appendChild(tagBox);
+                }
+                card.appendChild(info);
+                card.addEventListener('click', function () {
+                    gpClose();
+                    openReviewModal(g.id);
+                });
+                gridBox.appendChild(card);
+            });
+        }
+
+        function renderChips() {
+            var chipBox = ov.querySelector('#gpRevChips');
+            // 按频次排序取前 10
+            var topTags = Object.keys(state3.allTags)
+                .sort(function (a, b) { return state3.allTags[b] - state3.allTags[a]; })
+                .slice(0, 10);
+            // 始终渲染"全部"chip
+            var all = el('button', 'gp-chip' + (!state3.tag ? ' active' : ''), T('全部'));
+            all.addEventListener('click', function () { selectTag(''); });
+            chipBox.innerHTML = '';
+            chipBox.appendChild(all);
+            topTags.forEach(function (t) {
+                var chip = el('button', 'gp-chip' + (state3.tag === t ? ' active' : ''), t);
+                chip.addEventListener('click', function () { selectTag(t); });
+                chipBox.appendChild(chip);
+            });
+            // 如果选中的 tag 不在 top10 里，补上
+            if (state3.tag && state3.allTags[state3.tag] && topTags.indexOf(state3.tag) < 0) {
+                chipBox.insertBefore(
+                    el('button', 'gp-chip active', state3.tag),
+                    chipBox.children[1] || null
+                );
+            }
+        }
+
+        function selectTag(tag) {
+            state3.tag = tag;
+            state3.page = 1;
+            state3.hasMore = true;
+            loadMore(true);
+        }
+
+        function rebuildIO() {
+            if (state3._infIO) { state3._infIO.disconnect(); state3._infIO = null; }
+            if (!state3.hasMore) return;
+            var sentinel = document.createElement('div');
+            sentinel.className = 'gp-gp-sentinel';
+            gridBox.appendChild(sentinel);
+            state3._infIO = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (entry.isIntersecting) {
+                        state3._infIO.disconnect(); state3._infIO = null;
+                        loadMore(false);
+                    }
+                });
+            }, { root: gridBox, rootMargin: '300px', threshold: 0 });
+            state3._infIO.observe(sentinel);
+        }
+
+        // 搜索 debounce
+        ov.querySelector('#gpRevSearch').addEventListener('input', function (e) {
+            var kw = (e.target.value || '').trim();
+            ov.querySelector('#gpRevClear').style.display = kw ? 'inline' : 'none';
+            clearTimeout(kwTimer);
+            kwTimer = setTimeout(function () {
+                state3.kw = kw;
+                state3.page = 1; state3.hasMore = true;
+                reload();
+            }, 300);
+        });
+
+        // 初始加载
+        reload();
     }
 
     // ---------- 展示柜渲染引擎 ----------
@@ -3155,46 +3509,34 @@
                 });
                 return btn;
             }
-            // Steam 风格艺术作品布局：第 1 张大图突出 + 后续小图横排
+            // Steam 风格：大图突出 + 右侧两小图（响应式 grid，不截断）
             var awWrap = el('div', 'gp-art-wrap');
             var awGrid = el('div', 'gp-art-grid');
-            awGrid.style.display = 'grid';
-            awGrid.style.gap = '8px';
-            awGrid.style.gridTemplateColumns = '2fr 1fr 1fr'; // 大图 + 2 小图
             awList.slice(0, 3).forEach(function (ss, i) {
                 var cell = el('div', i === 0 ? 'gp-art-hero' : 'gp-art-cell');
                 cell.style.cursor = 'pointer';
-                cell.style.position = 'relative'; // 删除按钮绝对定位需要
                 var img = document.createElement('img');
                 img.src = assetUrl(ss.url);
                 img.loading = 'lazy';
-                img.style.width = '100%'; img.style.height = i === 0 ? '200px' : '96px';
-                img.style.objectFit = 'cover'; img.style.borderRadius = '6px';
-                img.style.display = 'block';
                 cell.appendChild(img);
                 if (ss.title) {
                     var cap = el('div', 'gp-ss-cap', ss.title);
-                    cap.style.fontSize = i === 0 ? '13px' : '11px';
                     cell.appendChild(cap);
                 }
-                // P2-b: 作者本人可见的删除按钮
                 if (awIsSelf && awIsSelf === ss.username) cell.appendChild(makeAwDelBtn(ss));
                 addLikeBar(cell, ss, ss.id);
                 cell.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
                 awGrid.appendChild(cell);
             });
             awWrap.appendChild(awGrid);
-            // 超过 3 张 → 小缩略图行
+            // 超过 3 张 → 底部小缩略图行
             if (awList.length > 3) {
                 var awMore = el('div', 'gp-art-more');
-                awMore.style.display = 'flex'; awMore.style.gap = '6px'; awMore.style.marginTop = '6px';
                 awList.slice(3, Math.min(awList.length, 7)).forEach(function (ss) {
-                    var tWrap = el('div'); // 包一层便于绝对定位删除按钮
-                    tWrap.style.position = 'relative'; tWrap.style.cursor = 'pointer';
+                    var tWrap = el('div', 'gp-art-more-cell');
+                    tWrap.style.cursor = 'pointer';
                     var t = document.createElement('img');
                     t.src = assetUrl(ss.url); t.loading = 'lazy';
-                    t.style.width = '48px'; t.style.height = '48px';
-                    t.style.objectFit = 'cover'; t.style.borderRadius = '4px';
                     tWrap.appendChild(t);
                     if (awIsSelf && awIsSelf === ss.username) tWrap.appendChild(makeAwDelBtn(ss));
                     tWrap.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
