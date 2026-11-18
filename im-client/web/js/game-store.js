@@ -2505,7 +2505,6 @@
         var curUrl = (state.profile.basic && state.profile.basic.profile_bg) || '';
         var curSkin = (state.profile.basic && state.profile.basic.profile_banner_skin) || '';
         var ownedItems = (state.profile.shop_items || []);
-        var curIsSelf = state.profile && state.profile.username;
 
         // 预设横幅皮肤表（纯 CSS 渐变，零后端资源）
         var BANNER_SKINS = [
@@ -3361,7 +3360,7 @@
     // bar 容器整体阻止冒泡，保证点心形/点数字都不会触发 cell 的 openImageViewer
     function addLikeBar(cell, ss, ssId) {
         if (!ssId || !cell) return;
-        var isSelf = state.profile && state.profile.username === ss.username;
+        var isSelf = username && username === ss.username;
         // 优先读后端列表返回的 liked 字段，兼容旧数据 fallback 到 _liked
         var liked = (ss.liked === true) || (ss._liked === true);
         var likeCnt = ss.like_count || 0;
@@ -3623,7 +3622,7 @@
             if (!ssData || !ssData.list || ssData.list.length === 0) return null;
             var ssList = ssData.list.filter(function (ss) { return ss.type !== 'artwork'; });
             if (ssList.length === 0) return null;
-            var ssIsSelf = state.profile && state.profile.username;
+            var ssIsSelf = username && state.profile && state.profile.username === username;
             var ssGrid = el('div', 'gp-ss-grid');
             ssList.slice(0, 8).forEach(function (ss) {
                 var cell = el('div', 'gp-ss-cell');
@@ -3637,7 +3636,7 @@
                     cell.appendChild(cap);
                 }
                 // P2-b: 作者本人可见的删除按钮（左上角 ×，阻止冒泡不触发大图）
-                if (ssIsSelf && ssIsSelf === ss.username) {
+                if (ssIsSelf) {
                     var delBtn = el('button', 'gp-del-btn', '×');
                     delBtn.title = T('删除截图');
                     delBtn.addEventListener('click', function (e) {
@@ -3669,7 +3668,7 @@
             // 只展示 type=artwork 的艺术作品（区别于游戏截图网格）
             var awList = awData.list.filter(function (ss) { return ss.type === 'artwork'; });
             if (awList.length === 0) return null;
-            var awIsSelf = state.profile && state.profile.username;
+            var awIsSelf = username && state.profile && state.profile.username === username;
             // 公用删除按钮工厂（复用截图网格的删除逻辑）
             function makeAwDelBtn(ss) {
                 var btn = el('button', 'gp-del-btn', '×');
@@ -3703,7 +3702,7 @@
                     var cap = el('div', 'gp-ss-cap', ss.title);
                     cell.appendChild(cap);
                 }
-                if (awIsSelf && awIsSelf === ss.username) cell.appendChild(makeAwDelBtn(ss));
+                if (awIsSelf) cell.appendChild(makeAwDelBtn(ss));
                 addLikeBar(cell, ss, ss.id);
                 cell.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
                 awGrid.appendChild(cell);
@@ -3718,7 +3717,7 @@
                     var t = document.createElement('img');
                     t.src = assetUrl(ss.url); t.loading = 'lazy';
                     tWrap.appendChild(t);
-                    if (awIsSelf && awIsSelf === ss.username) tWrap.appendChild(makeAwDelBtn(ss));
+                    if (awIsSelf) tWrap.appendChild(makeAwDelBtn(ss));
                     tWrap.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
                     awMore.appendChild(tWrap);
                 });
@@ -6497,9 +6496,7 @@
         }).catch(function () { /* 查询失败静默 */ });
     }
 
-    function isRunning(gid) { return !!state.running[gid]; }
     function runningCount(gid) { return state.runningInsts[gid] ? Object.keys(state.runningInsts[gid]).length : 0; }
-    function isLaunching(gid) { return !!state.launching[gid]; }
 
     // 恢复主进程侧本地游戏运行态（页面刷新/新开窗口场景；gn_room=联机房间启动的本机游戏不归属库条目）
     function pullLocalRunning() {
@@ -8510,7 +8507,6 @@
                     // 注意：外层 launchGame 的 opts 参数被 .then 回调的 regOpts 遮蔽 → 用 closures 捕获 _callerOpts
                     var callerOpts = opts || {};
                     var tpl = (regOpts && regOpts.args) ? regOpts.args : meta.args; // 用户自定义覆盖 > 管理端默认
-                    var mergedOpts = Object.assign({}, regOpts || {}, callerOpts); // callerOpts 覆盖同名字段
                     var payload = {
                         gameId: gid, username: username, installDir: libDir,
                         launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid, callerOpts),
