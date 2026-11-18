@@ -710,6 +710,12 @@ game:
   achievement_sign_required: false
   # Steam 同款退款期限：入库超过 N 天移除不退还积分；0 或负数=不限制（全退）。默认 7
   refund_days: 7
+  # 商家游戏销售分成开关（付费游戏入库按 commission_rate 给商家加分账收益）
+  merchant_revenue_enabled: true
+  # 商家提现最小积分额
+  min_withdraw_points: 1000
+  # 赞助充值分账补偿定时任务开关：true=60s 周期扫 success 但未分账的订单补调 sponsorRechargeSettle；false=关闭
+  sponsor_recharge_compensate_enabled: true
 
 # ============================================================
 # 阶段二百七十四：网页卡片（微信同款链接分享卡片，server/webcard.go 归口）

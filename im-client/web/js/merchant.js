@@ -176,7 +176,7 @@
         osbInit($('m-scroll'));
     }
     function switchView(v) {
-        var names = ['games', 'stats', 'official', 'gateway'];
+        var names = ['games', 'stats', 'official', 'gateway', 'revenue', 'withdraw'];
         names.forEach(function (n) {
             $('m-view-' + n).classList.toggle('hidden', n !== v);
         });
@@ -191,6 +191,8 @@
             stopGamesRefresh();
             if (v === 'stats') loadStats();
             else if (v === 'official') loadMoffList();
+            else if (v === 'revenue') loadRevenue();
+            else if (v === 'withdraw') loadWithdraw();
         }
     }
     $('m-nav').addEventListener('click', function (e) {
@@ -2797,5 +2799,120 @@
         refreshPreview();
         scanSecurity();
     })();
+
+    // ==================== 游戏收益 & 提现管理（2026-11-19 新增） ====================
+    var rvPage = 1, rvSize = 30, rvType = '';
+    var wdPage = 1, wdSize = 20, wdStatus = -1;
+
+    function loadRevenue() {
+        // summary
+        api('GET', '/api/merchant/revenue/summary').then(function (res) {
+            var d = unwrap(res);
+            $('m-rv-balance').textContent = fmtPts(d.balance);
+            $('m-rv-pending').textContent = fmtPts(d.pending);
+            $('m-rv-total').textContent = fmtPts(d.total_earned);
+            $('m-rv-net').textContent = fmtPts(d.net_earned);
+            $('m-rv-today').textContent = fmtPts(d.today_earn);
+        }).catch(function () { /* toast */ });
+        rvPage = 1;
+        loadRevenueOrders();
+    }
+    function loadRevenueOrders() {
+        var box = $('m-rv-orders');
+        box.innerHTML = '<div class="m-empty">加载中…</div>';
+        var url = '/api/merchant/revenue/orders?page=' + rvPage + '&size=' + rvSize;
+        if (rvType) url += '&type=' + rvType;
+        api('GET', url).then(function (res) {
+            var d = unwrap(res);
+            var list = d.items || [];
+            if (!list.length) { box.innerHTML = '<div class="m-empty">暂无分账明细</div>'; }
+            else {
+                var html = '<table class="m-table"><tr><th>时间</th><th>类型</th><th>游戏</th><th>玩家</th>' +
+                    '<th>用户实付</th><th>商家收益</th><th>状态</th></tr>';
+                list.forEach(function (o) {
+                    var cls = o.merchant_earn < 0 ? 'neg' : 'pos';
+                    html += '<tr><td>' + esc(o.create_time) + '</td>' +
+                        '<td><span class="m-badge r-' + o.type + '">' + esc(o.type_text) + '</span></td>' +
+                        '<td>' + esc(o.game_name || ('#' + o.game_id)) + '</td>' +
+                        '<td>' + esc(o.username) + '</td>' +
+                        '<td>' + fmtPts(o.user_pay) + '</td>' +
+                        '<td class="' + cls + '">' + fmtPts(o.merchant_earn) + '</td>' +
+                        '<td>' + esc(o.status_text) + '</td></tr>';
+                });
+                box.innerHTML = html + '</table>';
+            }
+            var totalPage = Math.max(1, Math.ceil((d.total || 0) / rvSize));
+            $('m-rv-page').textContent = '第 ' + rvPage + ' / ' + totalPage + ' 页（共 ' + (d.total || 0) + ' 条）';
+            $('m-rv-prev').disabled = rvPage <= 1;
+            $('m-rv-next').disabled = rvPage >= totalPage;
+        }).catch(function () { box.innerHTML = '<div class="m-empty">加载失败</div>'; });
+    }
+    var _rvTypeSel = $('m-rv-type-filter');
+    if (_rvTypeSel) _rvTypeSel.addEventListener('change', function () { rvType = this.value; rvPage = 1; loadRevenueOrders(); });
+    var _rvPrev = $('m-rv-prev'), _rvNext = $('m-rv-next');
+    if (_rvPrev) _rvPrev.addEventListener('click', function () { rvPage--; loadRevenueOrders(); });
+    if (_rvNext) _rvNext.addEventListener('click', function () { rvPage++; loadRevenueOrders(); });
+
+    function loadWithdraw() {
+        api('GET', '/api/merchant/revenue/summary').then(function (res) {
+            var d = unwrap(res);
+            $('m-wd-balance').textContent = fmtPts(d.balance);
+            $('m-wd-min').textContent = fmtPts(d.min_withdraw);
+            $('m-wd-total').textContent = fmtPts(d.total_withdraw);
+        }).catch(function () { /* toast */ });
+        wdPage = 1;
+        loadWithdrawOrders();
+    }
+    function loadWithdrawOrders() {
+        var box = $('m-wd-orders');
+        box.innerHTML = '<div class="m-empty">加载中…</div>';
+        var url = '/api/merchant/withdraw/orders?page=' + wdPage + '&size=' + wdSize;
+        if (wdStatus >= 0) url += '&status=' + wdStatus;
+        api('GET', url).then(function (res) {
+            var d = unwrap(res);
+            var list = d.items || [];
+            var ST = { 0: ['pending', '待审批'], 1: ['ok', '已批准'], 2: ['rej', '已拒绝'] };
+            if (!list.length) { box.innerHTML = '<div class="m-empty">暂无提现申请</div>'; }
+            else {
+                var html = '<table class="m-table"><tr><th>申请时间</th><th>积分</th><th>状态</th>' +
+                    '<th>备注</th><th>审批人</th><th>拒绝理由</th></tr>';
+                list.forEach(function (o) {
+                    var sd = ST[o.status] || ST[0];
+                    html += '<tr><td>' + esc(o.create_time) + '</td>' +
+                        '<td class="pos">' + fmtPts(o.points) + '</td>' +
+                        '<td><span class="m-badge ' + sd[0] + '">' + sd[1] + '</span></td>' +
+                        '<td>' + esc(o.remark || '—') + '</td>' +
+                        '<td>' + esc(o.operator || '—') + '</td>' +
+                        '<td class="neg">' + esc(o.reject_reason || '—') + '</td></tr>';
+                });
+                box.innerHTML = html + '</table>';
+            }
+            var totalPage = Math.max(1, Math.ceil((d.total || 0) / wdSize));
+            $('m-wd-page').textContent = '第 ' + wdPage + ' / ' + totalPage + ' 页（共 ' + (d.total || 0) + ' 条）';
+            $('m-wd-prev').disabled = wdPage <= 1;
+            $('m-wd-next').disabled = wdPage >= totalPage;
+        }).catch(function () { box.innerHTML = '<div class="m-empty">加载失败</div>'; });
+    }
+    var _wdStatusSel = $('m-wd-status-filter');
+    if (_wdStatusSel) _wdStatusSel.addEventListener('change', function () { wdStatus = parseInt(this.value, 10); wdPage = 1; loadWithdrawOrders(); });
+    var _wdPrev = $('m-wd-prev'), _wdNext = $('m-wd-next');
+    if (_wdPrev) _wdPrev.addEventListener('click', function () { wdPage--; loadWithdrawOrders(); });
+    if (_wdNext) _wdNext.addEventListener('click', function () { wdPage++; loadWithdrawOrders(); });
+
+    // 提现申请提交
+    var _wdApply = $('m-wd-apply');
+    if (_wdApply) _wdApply.addEventListener('click', function () {
+        var pts = parseFloat($('m-wd-pts').value);
+        if (!pts || pts <= 0) { toast('请输入有效的提现积分'); return; }
+        var remark = ($('m-wd-remark').value || '').trim();
+        _wdApply.disabled = true;
+        api('POST', '/api/merchant/withdraw/apply', { points: pts, remark: remark }).then(function (res) {
+            var d = unwrap(res);
+            toast('申请已提交，余额剩 ' + fmtPts(d.balance), 'ok');
+            $('m-wd-pts').value = '';
+            $('m-wd-remark').value = '';
+            loadWithdraw();
+        }).catch(function () { /* toast */ }).then(function () { _wdApply.disabled = false; });
+    });
 
 })();

@@ -307,6 +307,19 @@ type GameConfig struct {
 	// 移除游戏库时，若入库时间（im_game_library.create_time）距今已超过 RefundDays 天，则不退还积分；
 	// 0 或负数=不限制时间（默认行为，全退）。默认值见 Default()
 	RefundDays int `yaml:"refund_days"`
+
+	// ===== 商家销售分成与提现（2026-11-18 新增） =====
+	// MerchantRevenueEnabled 商家游戏销售分成开关（全局）：
+	// true  = 付费游戏入库后按 commission_rate 给商家加分账收益
+	// false = 入库积分直接归零（原行为，不加分账）；锁定期定时任务也跳过
+	MerchantRevenueEnabled bool `yaml:"merchant_revenue_enabled"`
+	// MinWithdrawPoints 提现最小积分额（商家提现申请门槛，管理员可改）
+	MinWithdrawPoints float64 `yaml:"min_withdraw_points"`
+	// SponsorRechargeCompensateEnabled 赞助充值分账补偿定时开关：
+	// true  = 60s 周期扫"success 但未产生 type=5 分账流水"的订单，补调 sponsorRechargeSettle
+	// false = 关闭补偿（正常情况关了也没事， sponsorRechargeSettle 本身已 3 次重试；
+	//         开着是为了进程 OOM kill 等极端情况下 goroutine 还没跑到就丢账的兜底）
+	SponsorRechargeCompensateEnabled bool `yaml:"sponsor_recharge_compensate_enabled"`
 }
 
 // GameGatewayItem 网关地址簿条目（多网关部署：每条目=一台部署了 im-gateway 的远程服务器）
@@ -915,6 +928,10 @@ func Default() *Config {
 			Save: GameSaveConfig{Enabled: true},
 			// Steam 同款退款期限：默认入库 7 天内移除可退积分，超期不退（0=全退无限制）
 			RefundDays: 7,
+			// 商家游戏销售分成：默认开启；免费游戏/官方游戏不分账
+			MerchantRevenueEnabled:            true,
+			MinWithdrawPoints:                 1000,
+			SponsorRechargeCompensateEnabled:  true, // 赞助充值分账补偿：默认开（兜底）
 		},
 
 		// IP 属地默认开启（IPv4+IPv6 双栈；数据文件缺失时对应栈加载失败自动降级，不阻塞启动、不影响其他功能）

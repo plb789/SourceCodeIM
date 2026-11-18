@@ -1154,10 +1154,61 @@ type Merchant struct {
 	Remark             string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
 	CreateTime         time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime         time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+
+	// ===== 商家销售分成与提现（2026-11-18 新增，AutoMigrate 自动加列） =====
+	// BalancePoints 可提现余额（已过锁定期的收益）
+	BalancePoints float64 `gorm:"column:balance_points;type:double;default:0" json:"balance_points"`
+	// PendingPoints 待结算（锁定期内的收益，退款窗口内）
+	PendingPoints float64 `gorm:"column:pending_points;type:double;default:0" json:"pending_points"`
+	// TotalEarned 累计总收益（含已提现 + 当前余额 + 已退款扣回）
+	TotalEarned float64 `gorm:"column:total_earned;type:double;default:0" json:"total_earned"`
+	// TotalRefunded 累计被退款扣回（历史统计）
+	TotalRefunded float64 `gorm:"column:total_refunded;type:double;default:0" json:"total_refunded"`
+	// TotalWithdrawn 累计已提现（历史统计）
+	TotalWithdrawn float64 `gorm:"column:total_withdrawn;type:double;default:0" json:"total_withdrawn"`
 }
 
 // TableName 表名沿用 im_ 前缀约定
 func (Merchant) TableName() string { return "im_merchant" }
+
+// ===== 商家销售分成与提现（2026-11-18 新增） =====
+
+// MerchantIncomeLog 商家收益流水表 im_merchant_income_log：
+// type 1=入库分账 / 2=入库退款扣回 / 3=提现扣减 / 4=手动调整 / 5=赞助充值分账 / 6=赞助退款扣回
+// status 1=pending 锁定中 / 2=settled 已解锁（可提现）/ 3=refunded 已扣回
+type MerchantIncomeLog struct {
+	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	Merchant     string    `gorm:"column:merchant;type:varchar(32);not null;index:idx_merchant" json:"merchant"`
+	GameID       uint      `gorm:"column:game_id;not null;index:idx_game" json:"game_id"`
+	Username     string    `gorm:"column:username;type:varchar(32);not null;index:idx_user" json:"username"`
+	PurchaseID   uint      `gorm:"column:purchase_id;index:idx_purchase" json:"purchase_id"`       // GameLibrary.ID
+	UserPay      float64   `gorm:"column:user_pay;type:double;not null" json:"user_pay"`          // 用户实付积分
+	Commission   float64   `gorm:"column:commission;type:double;not null" json:"commission"`      // 分成比例快照（0~1）
+	MerchantEarn float64   `gorm:"column:merchant_earn;type:double;not null" json:"merchant_earn"` // 商家本次应得分账
+	Type         int8      `gorm:"column:type;type:tinyint;not null;index:idx_type_time" json:"type"`
+	Status       int8      `gorm:"column:status;type:tinyint;not null;index:idx_status_time" json:"status"`
+	SettleTime   *time.Time `gorm:"column:settle_time;index:idx_settle" json:"settle_time"` // 预计解锁时间
+	CreateTime   time.Time `gorm:"column:create_time;autoCreateTime;index:idx_type_time" json:"create_time"`
+}
+
+func (MerchantIncomeLog) TableName() string { return "im_merchant_income_log" }
+
+// MerchantWithdrawOrder 商家提现申请单 im_merchant_withdraw_order：
+// status 0=pending 待批 / 1=approved 已批准 / 2=rejected 已拒绝
+// 申请时即扣商家 balance_points；审批拒绝时回滚
+type MerchantWithdrawOrder struct {
+	ID           uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	Merchant     string     `gorm:"column:merchant;type:varchar(32);not null;index:idx_merchant" json:"merchant"`
+	Points       float64    `gorm:"column:points;type:double;not null" json:"points"`
+	Status       int8       `gorm:"column:status;type:tinyint;not null;default:0;index:idx_status" json:"status"`
+	RejectReason string     `gorm:"column:reject_reason;type:varchar(255);default:''" json:"reject_reason"`
+	Operator     string     `gorm:"column:operator;type:varchar(32);default:''" json:"operator"`  // 审批管理员账号
+	Remark       string     `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`    // 商家备注
+	AuditTime    *time.Time `gorm:"column:audit_time" json:"audit_time"`
+	CreateTime   time.Time  `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+func (MerchantWithdrawOrder) TableName() string { return "im_merchant_withdraw_order" }
 
 // GatewayBook 网关地址簿（端口透传·远程加密网关的 im-gateway 条目，后台热更）：
 // 每条目 = 一台部署了 im-gateway 的远程服务器；游戏 gw 转发规则经 @name 引用。

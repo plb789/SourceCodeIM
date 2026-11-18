@@ -49,6 +49,8 @@
             <nav class="m-nav" id="m-nav">
                 <button class="m-nav-item active" data-view="games"><span class="m-nav-ico">🎮</span>我的游戏</button>
                 <button class="m-nav-item" data-view="stats"><span class="m-nav-ico">📊</span>赞助统计</button>
+                <button class="m-nav-item" data-view="revenue"><span class="m-nav-ico">💰</span>游戏收益</button>
+                <button class="m-nav-item" data-view="withdraw"><span class="m-nav-ico">💸</span>提现管理</button>
                 <button class="m-nav-item" data-view="official"><span class="m-nav-ico">📢</span>服务号</button>
                 <button class="m-nav-item" data-view="gateway"><span class="m-nav-ico">🖥️</span>网关部署</button>
             </nav>
@@ -94,6 +96,69 @@
                     <button id="m-ord-prev" class="admin-btn small">上一页</button>
                     <span id="m-ord-page" class="m-page-txt">第 1 页</span>
                     <button id="m-ord-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            <!-- ===== 游戏收益 ===== -->
+            <section class="m-view hidden" id="m-view-revenue">
+                <header class="m-head"><h2>游戏收益</h2><span class="m-head-tip">玩家付费游戏的分成收益；入库即加分账，锁定期过后自动解锁</span></header>
+                <div class="m-stat-cards">
+                    <div class="m-stat-card hl"><div class="m-stat-num" id="m-rv-balance">—</div><div class="m-stat-label">可提现余额（积分）</div></div>
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-rv-pending">—</div><div class="m-stat-label">待结算（锁定期中）</div></div>
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-rv-total">—</div><div class="m-stat-label">累计毛收入</div></div>
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-rv-net">—</div><div class="m-stat-label">净收益（毛收入−退款）</div></div>
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-rv-today">—</div><div class="m-stat-label">今日新增</div></div>
+                </div>
+                <div class="m-sub-row">
+                    <h3 class="m-sub-title">分账明细</h3>
+                    <select id="m-rv-type-filter" class="admin-input vec-select" style="width:160px;">
+                        <option value="">全部类型</option>
+                        <option value="1">入库分账</option>
+                        <option value="2">入库退款扣回</option>
+                        <option value="5">赞助充值分账</option>
+                        <option value="6">赞助退款扣回</option>
+                        <option value="3">提现扣减</option>
+                        <option value="4">手动调整</option>
+                    </select>
+                </div>
+                <div id="m-rv-orders" class="m-table-wrap"><div class="m-empty">加载中…</div></div>
+                <div class="m-pager">
+                    <button id="m-rv-prev" class="admin-btn small">上一页</button>
+                    <span id="m-rv-page" class="m-page-txt">第 1 页</span>
+                    <button id="m-rv-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            <!-- ===== 提现管理 ===== -->
+            <section class="m-view hidden" id="m-view-withdraw">
+                <header class="m-head"><h2>提现管理</h2><span class="m-head-tip">申请即扣余额；管理员审批通过后完成，拒绝则回滚余额</span></header>
+                <div class="m-stat-cards">
+                    <div class="m-stat-card hl"><div class="m-stat-num" id="m-wd-balance">—</div><div class="m-stat-label">可提现余额</div></div>
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-wd-min">—</div><div class="m-stat-label">最小提现额</div></div>
+                    <div class="m-stat-card"><div class="m-stat-num" id="m-wd-total">—</div><div class="m-stat-label">累计已提现</div></div>
+                </div>
+                <h3 class="m-sub-title">提交申请</h3>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 16px;background:rgba(255,255,255,0.03);border-radius:8px;">
+                    <label style="color:#aaa;font-size:13px;">提现积分</label>
+                    <input type="number" id="m-wd-pts" min="0" step="0.001" class="admin-input" style="width:160px;" placeholder="≥ 最小额" />
+                    <label style="color:#aaa;font-size:13px;">备注（可选）</label>
+                    <input type="text" id="m-wd-remark" maxlength="255" class="admin-input" style="width:220px;" placeholder="给管理员看的备注" />
+                    <button id="m-wd-apply" class="admin-btn primary">提交申请</button>
+                </div>
+                <div class="m-sub-row">
+                    <h3 class="m-sub-title">我的提现申请</h3>
+                    <select id="m-wd-status-filter" class="admin-input vec-select" style="width:160px;">
+                        <option value="-1">全部状态</option>
+                        <option value="0">待审批</option>
+                        <option value="1">已批准</option>
+                        <option value="2">已拒绝</option>
+                    </select>
+                </div>
+                <div id="m-wd-orders" class="m-table-wrap"><div class="m-empty">加载中…</div></div>
+                <div class="m-pager">
+                    <button id="m-wd-prev" class="admin-btn small">上一页</button>
+                    <span id="m-wd-page" class="m-page-txt">第 1 页</span>
+                    <button id="m-wd-next" class="admin-btn small">下一页</button>
                 </div>
             </section>
 

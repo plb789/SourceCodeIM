@@ -68,6 +68,7 @@
                 <button class="admin-nav-item sub" data-view="quarantine">隔离库管理</button>
                 <button class="admin-nav-item sub" data-view="whitelist">扫描白名单</button>
                 <button class="admin-nav-item sub" data-view="merchants">商户管理</button>
+                <button class="admin-nav-item" data-view="merchantrevenue">商户收益审批</button>
                 <button class="admin-nav-item" data-view="official">
                     <svg viewBox="0 0 24 24" width="15" height="15" style="flex:none"><path fill="currentColor" d="M18 11v-2c0-3.07-1.64-5.64-4.5-6.32V2c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 3.36 6 5.92 6 9v2H4v2h2v4c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-4h.91l4.09 3.6V17c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-1.76l4-3.6v-.64l-2-.56zm-5 7.83l-2.11-1.83H8V9h5V4.07c1.42.72 2.5 2.53 2.5 4.93v2.27l2 .56V11h2v-2h-2z"/></svg>
                     服务号管理
@@ -2049,6 +2050,76 @@
                             <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
                         </tbody>
                     </table>
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <!-- 商户收益审批（2026-11-19 Phase 3-4 新增）                       -->
+            <!-- ============================================================ -->
+            <section id="admin-view-merchantrevenue" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>商户收益审批</h2>
+                    <span class="admin-view-tip">提现申请审批 + 手动调账 + 收益明细导出</span>
+                </header>
+
+                <!-- ===== 顶部操作栏 ===== -->
+                <div class="gm-layout-card">
+                    <div class="gm-layout-head"><span class="gm-pub-title">运营工具</span></div>
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:12px;">
+                        <button id="mr-export" class="admin-btn small">📥 导出收益流水 CSV</button>
+                        <span class="admin-view-tip" style="margin:0;">支持按商户/类型/日期范围过滤导出</span>
+                    </div>
+                </div>
+
+                <!-- ===== 手动调账 ===== -->
+                <div class="gm-layout-card">
+                    <div class="gm-layout-head"><span class="gm-pub-title">手动调账</span><span class="admin-view-tip">调整指定商户可提现余额（加/减），必填理由</span></div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px;">
+                        <input id="mr-adj-merchant" class="admin-input" style="max-width:180px;" placeholder="商户账号" maxlength="32">
+                        <input id="mr-adj-pts" type="number" step="0.001" class="admin-input" style="max-width:140px;" placeholder="积分（正=增加 负=扣减）">
+                        <input id="mr-adj-reason" class="admin-input" style="max-width:280px;" placeholder="调账理由（必填，纳入对账）" maxlength="255">
+                        <button id="mr-adj-btn" class="admin-btn small primary">执行调账</button>
+                    </div>
+                </div>
+
+                <!-- ===== 提现申请列表 ===== -->
+                <div class="gm-layout-card">
+                    <div class="gm-layout-head" style="justify-content:space-between;align-items:center;">
+                        <span class="gm-pub-title">提现申请</span>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <select id="mr-wd-status" class="admin-input" style="max-width:140px;">
+                                <option value="-1">全部状态</option>
+                                <option value="0" selected>待审批优先</option>
+                                <option value="1">已批准</option>
+                                <option value="2">已拒绝</option>
+                            </select>
+                            <input id="mr-wd-kw" class="admin-input" style="max-width:180px;" placeholder="搜索商户/备注">
+                            <button id="mr-wd-search" class="admin-btn small">搜索</button>
+                        </div>
+                    </div>
+                    <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left;">申请时间</th>
+                                <th style="text-align:left;">订单#</th>
+                                <th style="text-align:left;">商户</th>
+                                <th style="text-align:right;">积分</th>
+                                <th style="text-align:left;">备注</th>
+                                <th style="text-align:left;">状态</th>
+                                <th style="text-align:left;">审批人</th>
+                                <th style="text-align:left;">拒绝理由</th>
+                                <th style="text-align:center;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mr-wd-tbody"><tr><td colspan="9" style="text-align:center;color:#888;">加载中…</td></tr></tbody>
+                    </table>
+                    </div>
+                    <div style="display:flex;justify-content:center;gap:10px;padding:10px;">
+                        <button id="mr-wd-prev" class="admin-btn small">上一页</button>
+                        <span id="mr-wd-page" class="admin-view-tip">第 1 页</span>
+                        <button id="mr-wd-next" class="admin-btn small">下一页</button>
+                    </div>
                 </div>
             </section>
 

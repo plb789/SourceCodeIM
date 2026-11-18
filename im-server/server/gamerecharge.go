@@ -23,12 +23,14 @@ import (
 	"strings"
 	"time"
 
+	"im-server/config"
 	"im-server/gwproto"
 	"im-server/logger"
 	"im-server/model"
 	"im-server/store"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // rechargeTimeout 订单下发后未终态的退分时限（网关离线/长期执行失败时玩家积分不被悬空占用）
@@ -549,19 +551,21 @@ func (s *Server) handleInternalGatewayRechargeAck(w http.ResponseWriter, r *http
 		if okN < len(req.OK) {
 			logger.Warn("充值回执部分未命中 pending（疑似网关迟到回执，订单已超时退分但游戏库可能已到账，请人工核对）：网关 %s 请求 %d 命中 %d", gwName, len(req.OK), okN)
 		}
-		// 充值成就触发：本次新落 success 的订单按 (username, game_id) 去重后，每对异步触发一次成就判定
+		// 充值成就触发 + 赞助充值商家分账：本次新落 success 的订单逐条处理
 		if okN > 0 {
 			var newlyOK []model.RechargeOrder
 			if err := store.DB.Where("id IN ? AND status = ? AND gw = ?", req.OK, model.RechargeOrderStatusSuccess, gwName).
-				Select("username, game_id").Find(&newlyOK).Error; err == nil {
+				Select("id, username, game_id, points").Find(&newlyOK).Error; err == nil {
 				seen := map[string]bool{}
 				for _, o := range newlyOK {
+					// 成就：按 (username, game_id) 去重异步触发
 					key := o.Username + "|" + strconv.FormatUint(uint64(o.GameID), 10)
-					if seen[key] {
-						continue
+					if !seen[key] {
+						seen[key] = true
+						go s.achEngineEvaluatePay(o.Username, o.GameID)
 					}
-					seen[key] = true
-					go s.achEngineEvaluatePay(o.Username, o.GameID)
+					// 商家赞助充值分账（type=5）——和成就触发同级异步，不阻塞 ack HTTP 响应
+					go sponsorRechargeSettle(s.cfg, &o)
 				}
 			}
 		}
@@ -614,6 +618,8 @@ func rechargeRefund(o *model.RechargeOrder, reason string) bool {
 	}
 	after, _ := userPoints(o.Username)
 	recordPointsLog(o.Username, o.Points, after, "game_recharge_refund", "system", fmt.Sprintf("充值失败退还（订单 %d）: %s", o.ID, reason))
+	// 赞助充值商家扣回（type=5 的反向操作）
+	sponsorRechargeRefund(o)
 	logger.Info("充值订单退分：订单 %d 用户 %s 退 %.3f（%s）", o.ID, o.Username, o.Points, reason)
 	return true
 }
@@ -648,6 +654,232 @@ func rechargeRefundLoop() {
 				}
 			}()
 			rechargeTimeoutSweep()
+		}()
+	}
+}
+
+// sponsorRechargeSettle 赞助充值商家分账（type=5）：订单 success 后查游戏 owner 的 Merchant，
+// 按 commission_rate 给商家加分账（pending_points 锁定期）。
+//
+// 三重保险防丢账：
+//  ① 幂等前置查 purchase_id=订单ID AND type=5 的 income_log，有就直接 return（防 goroutine 重试重复加分账）
+//  ② 事务内 FOR UPDATE 锁 merchant + income_log，并发 sweep/refund 串行不互踩
+//  ③ 3 次指数退避重试（100ms→200ms→400ms），全失败落 Error 日志供管理员 grep 补账
+//
+// purchase_id = RechargeOrder.ID（赞助充值没有 GameLibrary.ID，用订单 ID 关联）
+func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
+	if o == nil || o.Points <= 0 {
+		return
+	}
+	if !cfg.Game.MerchantRevenueEnabled {
+		return
+	}
+	// ===== 幂等前置：查是否已分过账（重试防重、补偿任务重复触发都靠这里兜底） =====
+	var existCount int64
+	if err := store.DB.Model(&model.MerchantIncomeLog{}).
+		Where("purchase_id = ? AND type = 5", uint(o.ID)).
+		Count(&existCount).Error; err == nil && existCount > 0 {
+		logger.Info("赞助充值分账幂等跳过：订单 %d 已有 type=5 分账记录", o.ID)
+		return
+	}
+
+	var g model.Game
+	if err := store.DB.Select("id, owner_username").Where("id = ?", o.GameID).First(&g).Error; err != nil || g.OwnerUsername == "" {
+		if err != nil {
+			logger.Warn("赞助充值分账跳过：游戏#%d 不存在：%v", o.GameID, err)
+		}
+		return // 无 owner=官方游戏，不分账
+	}
+	var merchant model.Merchant
+	if err := store.DB.Where("username = ?", g.OwnerUsername).First(&merchant).Error; err != nil || merchant.Status != 0 {
+		logger.Warn("赞助充值分账跳过：游戏#%d owner=%s 商户不存在或已停用", o.GameID, g.OwnerUsername)
+		return
+	}
+	commission := merchant.CommissionRate / 100.0
+	if commission < 0 {
+		commission = 0
+	}
+	if commission > 1 {
+		commission = 1
+	}
+	merchantEarn := aiPointsRound3(o.Points * commission)
+	if merchantEarn <= 0 {
+		return
+	}
+	lockDays := cfg.Game.RefundDays
+	if lockDays <= 0 {
+		lockDays = 7
+	}
+	settleTime := time.Now().AddDate(0, 0, lockDays)
+
+	// ===== 指数退避重试（3 次）：防瞬时 DB 抖动 / FOR UPDATE 锁超时 =====
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+			// 事务内再查一次幂等（防并发两个 sponsorRechargeSettle 同时跑进这个 for 循环）
+			var innerCount int64
+			if cerr := tx.Model(&model.MerchantIncomeLog{}).
+				Where("purchase_id = ? AND type = 5", uint(o.ID)).
+				Count(&innerCount).Error; cerr == nil && innerCount > 0 {
+				return nil // 已被其他 goroutine 分过了，事务直接空提交
+			}
+			// FOR UPDATE 锁 merchant 行，和 sweep/refund/admin adjust 互斥串行
+			var lockedMerchant model.Merchant
+			if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("username = ?", merchant.Username).First(&lockedMerchant).Error; merr != nil {
+				return merr
+			}
+			res := tx.Model(&lockedMerchant).Updates(map[string]interface{}{
+				"pending_points": gorm.Expr("ROUND(pending_points + ?, 3)", merchantEarn),
+				"total_earned":    gorm.Expr("ROUND(total_earned + ?, 3)", merchantEarn),
+			})
+			if res.Error != nil {
+				return res.Error
+			}
+			logEntry := &model.MerchantIncomeLog{
+				Merchant:     merchant.Username,
+				GameID:       o.GameID,
+				Username:     o.Username,
+				PurchaseID:   uint(o.ID),
+				UserPay:      o.Points,
+				Commission:   commission,
+				MerchantEarn: merchantEarn,
+				Type:         5,
+				Status:       1,
+				SettleTime:   &settleTime,
+			}
+			if err := tx.Create(logEntry).Error; err != nil {
+				return err
+			}
+			return nil
+		})
+		if errTx == nil {
+			logger.Info("赞助充值分账：订单 %d 用户 %s 游戏#%d 付 %.3f → 商户 %s 应得 %.3f（commission=%.2f, attempt=%d）",
+				o.ID, o.Username, o.GameID, o.Points, merchant.Username, merchantEarn, commission, attempt)
+			return // ✅ 成功退出
+		}
+		lastErr = errTx
+		if attempt < maxAttempts {
+			backoff := time.Duration(100<<uint(attempt-1)) * time.Millisecond // 100ms, 200ms
+			logger.Warn("赞助充值分账失败（订单 %d），%d/%d 次重试：%v", o.ID, attempt, maxAttempts, errTx)
+			time.Sleep(backoff)
+		}
+	}
+	// 全部重试失败 → 落 Error 日志 + 管理员 grep sponsor_settle_failed 补账
+	logger.Error("⚡赞助充值分账全部重试失败⚡：订单 %d 用户 %s 游戏#%d 商户 %s 应得 %.3f，最后错误：%v —— 请人工补账：UPDATE merchant SET pending_points += %.3f WHERE username='%s'；INSERT income_log (type=5) 或调用 /admin/api/merchant/revenue/adjust",
+		o.ID, o.Username, o.GameID, merchant.Username, merchantEarn, lastErr, merchantEarn, merchant.Username)
+}
+
+// sponsorRechargeRefund 赞助充值退款扣回（type=5 的反向操作）：订单 failed/超时退分后，
+// 从商家 pending/balance 中扣回之前的分账。purchase_id = RechargeOrder.ID
+func sponsorRechargeRefund(o *model.RechargeOrder) {
+	if o == nil {
+		return
+	}
+	var purchaseLog model.MerchantIncomeLog
+	if err := store.DB.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("purchase_id = ? AND type = 5 AND status != 3", o.ID).
+		Order("id DESC").First(&purchaseLog).Error; err != nil {
+		// 找不到 → 可能开关中途关了、或 sweep 已把商家余额锁定期解了但还没被退款扣回过
+		logger.Info("赞助退款扣回跳过：订单 %d 无对应 type=5 income_log（可能开关中途关闭）", o.ID)
+		return
+	}
+	merchantEarn := purchaseLog.MerchantEarn
+	var deductPending, deductBalance float64 // 提到外层，事务闭包内外都可见
+
+	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		// FOR UPDATE 锁 merchant 行
+		var merchant model.Merchant
+		if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ?", purchaseLog.Merchant).First(&merchant).Error; merr != nil {
+			return merr
+		}
+		// 先扣 pending（sweep 可能已把它转到 balance）
+		if merchant.PendingPoints >= merchantEarn {
+			deductPending = merchantEarn
+			deductBalance = 0
+		} else {
+			deductPending = merchant.PendingPoints
+			deductBalance = aiPointsRound3(merchantEarn - merchant.PendingPoints)
+		}
+		uerr := tx.Model(&model.Merchant{}).Where("username = ?", merchant.Username).Updates(map[string]interface{}{
+			"pending_points": gorm.Expr("ROUND(GREATEST(pending_points - ?, 0), 3)", deductPending),
+			"balance_points":  gorm.Expr("ROUND(GREATEST(balance_points - ?, 0), 3)", deductBalance),
+			"total_refunded":  gorm.Expr("ROUND(total_refunded + ?, 3)", merchantEarn),
+		}).Error
+		if uerr != nil {
+			return uerr
+		}
+		// 原 type=5 流水标 refunded（CAS 防并发 sweep）
+		res2 := tx.Model(&purchaseLog).Where("id = ? AND status != 3", purchaseLog.ID).Update("status", 3)
+		if res2.Error != nil {
+			return res2.Error
+		}
+		// 写 type=6 负向流水
+		if err := tx.Create(&model.MerchantIncomeLog{
+			Merchant: merchant.Username, GameID: purchaseLog.GameID,
+			Username: o.Username, PurchaseID: uint(o.ID),
+			UserPay: -o.Points, Commission: purchaseLog.Commission,
+			MerchantEarn: -merchantEarn, Type: 6, Status: 3,
+		}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if errTx != nil {
+		logger.Error("赞助退款扣回事务失败（订单 %d 商户 %s）：%v", o.ID, purchaseLog.Merchant, errTx)
+		return
+	}
+	logger.Info("赞助退款扣回：订单 %d 商户 %s 原分账 %.3f 已扣回（pending=%.3f, balance=%.3f）",
+		o.ID, purchaseLog.Merchant, merchantEarn, deductPending, deductBalance)
+}
+
+// sponsorRechargeCompensateSweep 赞助充值分账补偿单轮（包级，供 InitGame 定时任务 + 单测直接调用）：
+// 扫 success 但没有产生 type=5 分账流水的订单（进程 OOM kill / sponsorRechargeSettle goroutine 还没跑到就被回收等极端场景），
+// 逐单调 sponsorRechargeSettle（幂等前置 COUNT 保证安全，不会重复加分账）。
+// 只扫最近 24h 内的订单（更早的已经跑过很多轮了、或游戏已被下架无 owner 了）
+func sponsorRechargeCompensateSweep(cfg *config.Config) int {
+	if cfg == nil || !cfg.Game.MerchantRevenueEnabled {
+		return 0
+	}
+	// LEFT JOIN 找 success 但没有 type=5 分账的订单（GORM 原生写法避免子查询）
+	var missed []model.RechargeOrder
+	if err := store.DB.Raw(`
+		SELECT ro.* FROM im_recharge_order ro
+		LEFT JOIN im_merchant_income_log mil
+			ON mil.purchase_id = ro.id AND mil.type = 5
+		WHERE ro.status = 1 AND mil.id IS NULL
+		  AND ro.create_time > NOW() - INTERVAL 24 HOUR
+		ORDER BY ro.id ASC LIMIT 50
+	`).Scan(&missed).Error; err != nil {
+		logger.Warn("赞助充值补偿查询失败：%v", err)
+		return 0
+	}
+	n := 0
+	for i := range missed {
+		sponsorRechargeSettle(cfg, &missed[i]) // 幂等前置保证安全，已经分过账的直接 return
+		n++
+	}
+	if n > 0 {
+		logger.Info("赞助充值补偿本轮扫描：%d 条 success 但未分账的订单，补调 sponsorRechargeSettle", n)
+	}
+	return n
+}
+
+// sponsorRechargeCompensateLoop 赞助充值分账补偿定时任务（InitGame 启动，60s 周期；可通过配置关闭）：
+// 兜底 sponsorRechargeSettle 因进程异常/重试耗尽而未执行的分账。
+// 正常情况下 sponsorRechargeSettle 本身 3 次重试已够，本任务应对最极端的"goroutine 还没跑到就 OOM kill"
+func sponsorRechargeCompensateLoop(cfg *config.Config) {
+	for {
+		time.Sleep(time.Minute)
+		func() {
+			defer func() {
+				if e := recover(); e != nil {
+					logger.Error("赞助充值补偿扫描异常（下轮继续）：%v", e)
+				}
+			}()
+			sponsorRechargeCompensateSweep(cfg)
 		}()
 	}
 }

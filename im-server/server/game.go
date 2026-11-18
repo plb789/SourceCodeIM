@@ -38,6 +38,7 @@ import (
 	"im-server/store"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // InitGame 游戏中心初始化：建表（惰性 AutoMigrate，与 Agent 任务表同模式）
@@ -52,7 +53,8 @@ func InitGame(cfg *config.Config) {
 	tables := []interface{}{&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{},
 		&model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{},
 		&model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}, &model.GatewayBook{},
-		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.RechargeCard{}, &model.Merchant{}}
+		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.RechargeCard{}, &model.Merchant{},
+		&model.MerchantIncomeLog{}, &model.MerchantWithdrawOrder{}}
 	migrateFailed := false
 	for _, t := range tables {
 		if err := store.DB.AutoMigrate(t); err != nil {
@@ -106,6 +108,15 @@ func InitGame(cfg *config.Config) {
 	logger.Info("游戏中心已启用，数据目录: %s", cfg.Game.LocalDir)
 	// 积分兑换充值超时退分定时任务（60s 周期；gamerecharge.go 归口）
 	go rechargeRefundLoop()
+	// 商家收益锁定期到期定时任务（60s 周期；pending→balance 自动解锁）
+	go merchantRevenueUnlockLoop()
+	// 赞助充值分账补偿定时任务（可通过 sponsor_recharge_compensate_enabled 配置关闭）
+	if cfg.Game.SponsorRechargeCompensateEnabled {
+		go sponsorRechargeCompensateLoop(cfg)
+		logger.Info("赞助充值分账补偿定时任务已启动（60s 周期）")
+	} else {
+		logger.Info("赞助充值分账补偿定时任务已配置关闭")
+	}
 }
 
 // gameEnabled 游戏中心开关归口（关闭时用户端与管理端接口统一拒绝）
@@ -1134,43 +1145,96 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 	if !hadHistory {
 		// 全新用户 或 已退款用户 → 重新付费/新入库
 		pay := aiPointsRound3(g.Price)
-		if pay > 0 {
-			// 先查余额给出可读错误（区分用户不存在与余额不足）
-			balance, err := userPoints(username)
-			if err != nil {
-				adminFail(w, http.StatusInternalServerError, "积分查询失败")
-				return
-			}
-			if balance < pay {
-				adminFail(w, http.StatusBadRequest, fmt.Sprintf("积分不足（余额 %.3f，需 %.3f），请联系管理员发放", balance, pay))
-				return
-			}
-			// 严格原子扣分：WHERE points >= pay 保证并发下不透支（失败即余额不足）
-			res := store.DB.Model(&model.User{}).
-				Where("username = ? AND points >= ?", username, pay).
-				Update("points", gorm.Expr("ROUND(points - ?, 3)", pay))
-			if res.Error != nil {
-				adminFail(w, http.StatusInternalServerError, "积分扣除失败")
-				return
-			}
-			if res.RowsAffected == 0 {
-				adminFail(w, http.StatusBadRequest, "积分不足，请联系管理员发放")
-				return
-			}
-			after, _ := userPoints(username)
-			recordPointsLog(username, -pay, after, "game_purchase", "system", "获取游戏: "+g.Name)
-		}
-		lib = model.GameLibrary{Username: username, GameID: g.ID, State: 0, PayPrice: pay}
-		if err := store.DB.Create(&lib).Error; err != nil {
-			// 入库落库失败回滚扣分（尽力补偿，失败仅记日志人工对账）
+		var lib model.GameLibrary
+		errTx := store.DB.Transaction(func(tx *gorm.DB) error {
 			if pay > 0 {
-				if res := store.DB.Model(&model.User{}).Where("username = ?", username).
-					Update("points", gorm.Expr("ROUND(points + ?, 3)", pay)); res.Error == nil {
-					after, _ := userPoints(username)
-					recordPointsLog(username, pay, after, "game_refund", "system", "入库失败自动退还: "+g.Name)
+				// 严格原子扣分：WHERE points >= pay 保证并发下不透支（失败即余额不足）
+				res := tx.Model(&model.User{}).
+					Where("username = ? AND points >= ?", username, pay).
+					Update("points", gorm.Expr("ROUND(points - ?, 3)", pay))
+				if res.Error != nil {
+					return fmt.Errorf("积分扣除失败: %w", res.Error)
+				}
+				if res.RowsAffected == 0 {
+					return fmt.Errorf("积分不足，请联系管理员发放")
+				}
+				// 事务内读扣后余额 + 写 PointsLog（与扣分同 tx，保证回滚对称）
+				var after float64
+				tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
+				if err := tx.Create(&model.PointsLog{
+					Username:     username, Change: -pay, BalanceAfter: after,
+					Reason: "game_purchase", Operator: "system", Detail: "获取游戏: " + g.Name,
+				}).Error; err != nil {
+					logger.Warn("入库流水写失败（将随事务回滚）：%v", err)
 				}
 			}
-			adminFail(w, http.StatusInternalServerError, "加入游戏库失败")
+			lib = model.GameLibrary{Username: username, GameID: g.ID, State: 0, PayPrice: pay}
+			if err := tx.Create(&lib).Error; err != nil {
+				return fmt.Errorf("入库失败: %w", err)
+			}
+			// ===== 商家销售分账（2026-11-18 新增；仅付费 + 有 owner + 开关开） =====
+			if pay > 0 && g.OwnerUsername != "" && s.cfg.Game.MerchantRevenueEnabled {
+				var merchant model.Merchant
+				if merr := tx.Where("username = ?", g.OwnerUsername).First(&merchant).Error; merr == nil && merchant.Status == 0 {
+					// commission_rate 是百分比（0~100），转小数
+					commission := merchant.CommissionRate / 100.0
+					if commission < 0 {
+						commission = 0
+					}
+					if commission > 1 {
+						commission = 1
+					}
+					merchantEarn := aiPointsRound3(pay * commission)
+					if merchantEarn > 0 {
+						// 锁定期：复用 refund_days（推荐方案 D9）
+						lockDays := s.cfg.Game.RefundDays
+						if lockDays <= 0 {
+							lockDays = 7 // 兜底
+						}
+						settleTime := time.Now().AddDate(0, 0, lockDays)
+						// 更新商家 pending + total_earned
+						res := tx.Model(&merchant).
+							Updates(map[string]interface{}{
+								"pending_points": gorm.Expr("ROUND(pending_points + ?, 3)", merchantEarn),
+								"total_earned":    gorm.Expr("ROUND(total_earned + ?, 3)", merchantEarn),
+							})
+						if res.Error != nil {
+							logger.Error("商家分账余额更新失败（商户 %s，应得 %.3f）：%v", merchant.Username, merchantEarn, res.Error)
+							return res.Error // 事务回滚
+						}
+						// 写收益流水
+						logEntry := &model.MerchantIncomeLog{
+							Merchant:     merchant.Username,
+							GameID:       g.ID,
+							Username:     username,
+							PurchaseID:   lib.ID,
+							UserPay:      pay,
+							Commission:   commission,
+							MerchantEarn: merchantEarn,
+							Type:         1, // 入库分账
+							Status:       1, // pending 锁定中
+							SettleTime:   &settleTime,
+						}
+						if err := tx.Create(logEntry).Error; err != nil {
+							logger.Error("商家收益流水写失败（商户 %s）：%v", merchant.Username, err)
+							return err
+						}
+					}
+				} else if merr != nil {
+					logger.Warn("商家分账跳过：游戏#%d owner=%s 对应商户不存在或已停用", g.ID, g.OwnerUsername)
+				}
+			}
+			return nil
+		})
+		if errTx != nil {
+			msg := errTx.Error()
+			// 用户可读错误：区分已知业务错误 vs 内部错误
+			if strings.Contains(msg, "积分不足") {
+				adminFail(w, http.StatusBadRequest, msg)
+			} else {
+				logger.Error("入库事务失败：%v", errTx)
+				adminFail(w, http.StatusInternalServerError, "加入游戏库失败")
+			}
 			return
 		}
 		// 下载计数（仅首次入库计一次，重新激活不计数）
@@ -1327,43 +1391,103 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 		deadline := lib.CreateTime.AddDate(0, 0, refundDays)
 		canRefund = time.Now().Before(deadline)
 	}
-	// 先执行软删除并标记退款状态（所有权模型）
 	now := time.Now()
-	updates := map[string]interface{}{
-		"removed_at": now,
-		"state":      0, // 移出后重置安装状态（下次激活从 0 开始）
-	}
-	// 需要退款且确实执行退款成功 → 标记 pay_refunded=true（失去所有权）
-	// 超期不退或免费 → pay_refunded 保持 false（所有权保留）
-	shouldMarkRefunded := false
-	if pay > 0 {
-		if !canRefund {
-			// 超期不退
+	// 事务：软删除 + 用户退款 + 商家扣回，原子性保证
+	var refunded bool
+	var refundExpired bool
+	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		// 需要退款（退款期内 + 付费游戏）：先退用户积分，再扣商家
+		if pay > 0 && canRefund {
+			res := tx.Model(&model.User{}).Where("username = ?", username).
+				Update("points", gorm.Expr("ROUND(points + ?, 3)", pay))
+			if res.Error != nil {
+				return fmt.Errorf("积分退还失败: %w", res.Error)
+			}
+			// 事务内读退款后余额 + 写 PointsLog（同 tx，回滚对称）
+			var after float64
+			tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
+			if err := tx.Create(&model.PointsLog{
+				Username: username, Change: pay, BalanceAfter: after,
+				Reason: "game_refund", Operator: "system", Detail: "移出游戏库退还: 游戏#" + strconv.FormatUint(id, 10),
+			}).Error; err != nil {
+				logger.Warn("退款流水写失败（将随事务回滚）：%v", err)
+			}
+			refunded = true
+			// ===== 商家扣回（2026-11-18 新增；对应入库分账的反向流水） =====
+			if s.cfg.Game.MerchantRevenueEnabled {
+				// 先用 ROW 锁 purchaseLog，保证不会与 unlock sweep 并发改同一条
+				var purchaseLog model.MerchantIncomeLog
+				if cerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("purchase_id = ? AND type IN (1, 5) AND status != 3", lib.ID).
+					Order("id DESC").First(&purchaseLog).Error; cerr == nil {
+					merchantEarn := purchaseLog.MerchantEarn
+					// FOR UPDATE 锁 merchant 行后重新 SELECT，拿到最新 pending/balance
+					var merchant model.Merchant
+					if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+						Where("username = ?", purchaseLog.Merchant).First(&merchant).Error; merr == nil {
+						// 按当前最新状态算扣回量（sweep 可能已把 pending 转 balance）
+						var deductPending, deductBalance float64
+						if merchant.PendingPoints >= merchantEarn {
+							deductPending = merchantEarn
+						} else {
+							deductPending = merchant.PendingPoints
+							deductBalance = aiPointsRound3(merchantEarn - merchant.PendingPoints)
+						}
+						// 合并成一条 SQL 表达式，一次 UPDATE 原子性完成三字段
+						uerr := tx.Model(&model.Merchant{}).Where("username = ?", merchant.Username).Updates(map[string]interface{}{
+							"pending_points": gorm.Expr("ROUND(GREATEST(pending_points - ?, 0), 3)", deductPending),
+							"balance_points":  gorm.Expr("ROUND(GREATEST(balance_points - ?, 0), 3)", deductBalance),
+							"total_refunded":  gorm.Expr("ROUND(total_refunded + ?, 3)", merchantEarn),
+						}).Error
+						if uerr != nil {
+							return fmt.Errorf("商家扣回更新失败: %w", uerr)
+						}
+						// 原分账流水标记 refunded，必须加 CAS 条件（防 unlock sweep 已先改 status=2）
+						res2 := tx.Model(&purchaseLog).Where("id = ? AND status != 3", purchaseLog.ID).Update("status", 3)
+						if res2.Error != nil {
+							return fmt.Errorf("原分账流水状态更新失败: %w", res2.Error)
+						}
+						// 写退款扣回流水（type=2）
+						if err := tx.Create(&model.MerchantIncomeLog{
+							Merchant:     merchant.Username, GameID: purchaseLog.GameID,
+							Username: username, PurchaseID: lib.ID,
+							UserPay: -pay, Commission: purchaseLog.Commission,
+							MerchantEarn: -merchantEarn, Type: 2, Status: 3,
+						}).Error; err != nil {
+							return fmt.Errorf("退款扣回流水写失败: %w", err)
+						}
+						logger.Info("商家退款扣回：商户 %s 游戏#%d 原分账 %.3f 已扣回（pending=%.3f, balance=%.3f）",
+							merchant.Username, purchaseLog.GameID, merchantEarn, deductPending, deductBalance)
+					} else {
+						logger.Warn("退款扣回跳过：商户 %s 不存在或已停用", purchaseLog.Merchant)
+					}
+				} else {
+					logger.Info("退款扣回跳过：purchase_id=%d 无对应 type IN (1,5) income_log（可能 sweep 已解锁、或开关中途关闭、或为赞助充值记录）", lib.ID)
+				}
+			}
+		} else if pay > 0 && !canRefund {
+			refundExpired = true
 			logger.Info("移出库超期不退：用户 %s 游戏#%d 入库 %v 超 %d 天期限，应退 %.3f 未退",
 				username, id, lib.CreateTime, refundDays, pay)
-		} else {
-			// 尝试退款
-			res := store.DB.Model(&model.User{}).Where("username = ?", username).
-				Update("points", gorm.Expr("ROUND(points + ?, 3)", pay))
-			if res.Error == nil {
-				after, _ := userPoints(username)
-				recordPointsLog(username, pay, after, "game_refund", "system", "移出游戏库退还: 游戏#"+strconv.FormatUint(id, 10))
-				shouldMarkRefunded = true // 退款成功 → 失去所有权
-			} else {
-				// 积分退款失败但库条目软删除已执行（所有权保留，下次可免费加回）
-				logger.Error("移出库退款失败（用户 %s，应退 %.3f）：%v", username, pay, res.Error)
-			}
 		}
-	}
-	if shouldMarkRefunded {
-		updates["pay_refunded"] = true
-	}
-	if err := store.DB.Model(&lib).Updates(updates).Error; err != nil {
+		// 软删除库条目
+		updates := map[string]interface{}{
+			"removed_at": now,
+			"state":      0,
+		}
+		if refunded {
+			updates["pay_refunded"] = true // 退款成功 → 失去所有权
+		}
+		if err := tx.Model(&lib).Updates(updates).Error; err != nil {
+			return fmt.Errorf("移出失败: %w", err)
+		}
+		return nil
+	})
+	if errTx != nil {
+		logger.Error("移出库事务失败：%v", errTx)
 		adminFail(w, http.StatusInternalServerError, "移出失败")
 		return
 	}
-	refunded := shouldMarkRefunded
-	refundExpired := pay > 0 && !canRefund
 	balance, _ := userPoints(username)
 	resp := map[string]interface{}{"ok": true, "balance": aiPointsRound3(balance), "refunded": refunded}
 	if refundExpired {
@@ -2607,4 +2731,80 @@ func (s *Server) HandleGameReviewReplyDelete(w http.ResponseWriter, r *http.Requ
 	}
 	store.DB.Model(&model.GameReview{}).Where("id = ?", rev.ID).UpdateColumn("reply_count", gorm.Expr("GREATEST(reply_count - 1, 0)"))
 	adminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// ===== 商家销售分成：锁定期到期定时任务 =====
+
+// merchantRevenueUnlockLoop 锁定期到期自动解锁（pending_points → balance_points）：
+// 60s 周期扫 MerchantIncomeLog 中 status=pending 且 settle_time<=NOW 的记录，
+// 批量更新商家余额。与 rechargeRefundLoop 同风格（panic recover + 无限循环）
+func merchantRevenueUnlockLoop() {
+	for {
+		time.Sleep(time.Minute)
+		func() {
+			defer func() {
+				if e := recover(); e != nil {
+					logger.Error("商家收益解锁扫描异常（下轮继续）：%v", e)
+				}
+			}()
+			merchantRevenueUnlockSweep()
+		}()
+	}
+}
+
+func merchantRevenueUnlockSweep() {
+	// 取一批到期的 pending 记录（LIMIT 防一次扫太多）
+	var logs []model.MerchantIncomeLog
+	if err := store.DB.Where("type IN (1, 5) AND status = 1 AND settle_time <= NOW()").
+		Limit(100).Find(&logs).Error; err != nil {
+		return
+	}
+	if len(logs) == 0 {
+		return
+	}
+	totalUnlocked := 0.0
+	for _, l := range logs {
+		errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+			// FOR UPDATE 锁 income_log（与 refund 同锁同一行，两个事务互斥）
+			var check model.MerchantIncomeLog
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ? AND status = 1", l.ID).First(&check).Error; err != nil {
+				return err
+			}
+			// FOR UPDATE 锁 merchant 行，保证 pending/balance 读写原子
+			var merchant model.Merchant
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("username = ?", check.Merchant).First(&merchant).Error; err != nil {
+				return err
+			}
+			// 同一 tx 内直接表达式更新
+			merchantEarn := check.MerchantEarn
+			newPending := aiPointsRound3(merchant.PendingPoints - merchantEarn)
+			if newPending < 0 {
+				newPending = 0
+			}
+			newBalance := aiPointsRound3(merchant.BalancePoints + merchantEarn)
+			if err := tx.Model(&model.Merchant{}).Where("username = ?", merchant.Username).
+				Updates(map[string]interface{}{"pending_points": newPending, "balance_points": newBalance}).Error; err != nil {
+				return err
+			}
+			// CAS 改 income_log 状态，必须加 WHERE status=1 防 refund 抢先
+			res2 := tx.Model(&model.MerchantIncomeLog{}).Where("id = ? AND status = 1", check.ID).
+				Update("status", 2)
+			if res2.Error != nil {
+				return res2.Error
+			}
+			if res2.RowsAffected == 0 {
+				return fmt.Errorf("income_log 状态 CAS 失败（可能被 refund 抢先）")
+			}
+			totalUnlocked += merchantEarn
+			return nil
+		})
+		if errTx != nil {
+			logger.Warn("商家收益解锁扫漏（流水 #%d，下轮重试）：%v", l.ID, errTx)
+		}
+	}
+	if totalUnlocked > 0 {
+		logger.Info("商家收益锁定期到期解锁：%d 条记录，累计 %.3f 积分已从 pending 转 balance", len(logs), totalUnlocked)
+	}
 }

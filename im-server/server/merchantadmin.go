@@ -6,12 +6,17 @@ package server
 // 游戏审核：待审核队列 + 通过（audit=2，保持原上架状态，商户自主决定上架/下架）/ 驳回（audit=3 + 必填理由）
 
 import (
+	"encoding/csv"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"im-server/logger"
 	"im-server/model"
@@ -28,6 +33,13 @@ func registerMerchantAdminRoutes(s *Server) {
 	// 游戏审核
 	http.HandleFunc("GET /admin/api/merchant/audit/list", s.adminGuard(s.handleAdminGameAuditList))
 	http.HandleFunc("POST /admin/api/merchant/audit/{id}", s.adminGuard(s.handleAdminGameAuditAct))
+	// 商家提现审批（2026-11-19 Phase 3）
+	http.HandleFunc("GET /admin/api/merchant/withdraw/list", s.adminGuard(s.handleAdminMerchantWithdrawList))
+	http.HandleFunc("POST /admin/api/merchant/withdraw/{id}/approve", s.adminGuard(s.handleAdminMerchantWithdrawApprove))
+	http.HandleFunc("POST /admin/api/merchant/withdraw/{id}/reject", s.adminGuard(s.handleAdminMerchantWithdrawReject))
+	// 运营工具（2026-11-19 Phase 4）
+	http.HandleFunc("POST /admin/api/merchant/revenue/adjust", s.adminGuard(s.handleAdminMerchantRevenueAdjust))
+	http.HandleFunc("GET /admin/api/merchant/revenue/export", s.adminGuard(s.handleAdminMerchantRevenueExport))
 }
 
 // handleAdminMerchantList 商户列表（含游戏数与成功充值总额聚合）
@@ -72,6 +84,13 @@ func (s *Server) handleAdminMerchantList(w http.ResponseWriter, r *http.Request)
 			"username": m.Username, "name": m.Name, "commission_rate": m.CommissionRate,
 			"status": m.Status, "remark": m.Remark, "game_count": gameCnt,
 			"recharge_total": sum,
+			// ===== 商家收益（2026-11-19 新增） =====
+			"balance_points":  aiPointsRound3(m.BalancePoints),
+			"pending_points":  aiPointsRound3(m.PendingPoints),
+			"total_earned":    aiPointsRound3(m.TotalEarned),
+			"total_refunded":  aiPointsRound3(m.TotalRefunded),
+			"total_withdrawn": aiPointsRound3(m.TotalWithdrawn),
+			"net_earned":      aiPointsRound3(m.TotalEarned - m.TotalRefunded),
 			// 存储配额与占用（安全加固）：管理员分配视角——quota 0=跟随全局 / -1=不限 / >0=专属字节
 			"storage_quota_bytes": m.StorageQuotaBytes,
 			"storage_used_bytes":  usedMap[m.Username],
@@ -335,5 +354,353 @@ func (s *Server) handleAdminGameAuditAct(w http.ResponseWriter, r *http.Request)
 		adminJSON(w, map[string]interface{}{"ok": true, "audit_status": model.GameAuditRejected})
 	default:
 		adminFail(w, http.StatusBadRequest, fmt.Sprintf("未知审核动作: %s", req.Action))
+	}
+}
+
+// ===== 商家提现审批（2026-11-19 Phase 3） =====
+
+// handleAdminMerchantWithdrawList GET /admin/api/merchant/withdraw/list
+// 所有商户的提现申请单列表：status 过滤（0 待批优先，1 已批 2 已拒）+ keyword（商户账号/备注）+ 分页
+func (s *Server) handleAdminMerchantWithdrawList(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	st, _ := strconv.Atoi(r.URL.Query().Get("status"))
+	kw := strings.TrimSpace(r.URL.Query().Get("keyword"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 200 {
+		size = 30
+	}
+	db := store.DB.Model(&model.MerchantWithdrawOrder{})
+	if st >= 0 && st <= 2 {
+		db = db.Where("status = ?", st)
+	} else {
+		// 默认：待批优先
+		db = db.Where("status = ?", 0)
+	}
+	if kw != "" {
+		db = db.Where("merchant LIKE ? OR remark LIKE ?", "%"+kw+"%", "%"+kw+"%")
+	}
+	var total int64
+	db.Count(&total)
+	var list []model.MerchantWithdrawOrder
+	// 默认待批优先（status ASC 把 pending=0 放最前），再按 id DESC 最新在前
+	if st >= 0 && st <= 2 {
+		db.Order("id DESC")
+	} else {
+		db.Order("status ASC, id DESC")
+	}
+	db.Offset((page - 1) * size).Limit(size).Find(&list)
+	// 批量查商户显示名
+	merchants := make(map[string]model.Merchant)
+	for _, o := range list {
+		if _, ok := merchants[o.Merchant]; !ok {
+			var m model.Merchant
+			if err := store.DB.Select("username, name").Where("username = ?", o.Merchant).First(&m).Error; err == nil {
+				merchants[o.Merchant] = m
+			}
+		}
+	}
+	statusMap := map[int8]string{0: "待审批", 1: "已批准", 2: "已拒绝"}
+	items := make([]map[string]interface{}, 0, len(list))
+	for _, o := range list {
+		mname := merchants[o.Merchant].Name
+		items = append(items, map[string]interface{}{
+			"id":            o.ID,
+			"merchant":      o.Merchant,
+			"merchant_name": mname,
+			"points":        aiPointsRound3(o.Points),
+			"status":        o.Status,
+			"status_text":   statusMap[o.Status],
+			"reject_reason": o.RejectReason,
+			"operator":      o.Operator,
+			"remark":        o.Remark,
+			"audit_time":    o.AuditTime,
+			"create_time":   o.CreateTime,
+		})
+	}
+	adminJSON(w, map[string]interface{}{"total": total, "page": page, "size": size, "items": items})
+}
+
+// handleAdminMerchantWithdrawApprove POST /admin/api/merchant/withdraw/{id}/approve
+// 审批通过：事务内 WHERE status=0 CAS 改状态 + 双重检查防并发
+func (s *Server) handleAdminMerchantWithdrawApprove(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	now := time.Now()
+	op := adminUserFromCtx(r)
+	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		var wo model.MerchantWithdrawOrder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&wo, id).Error; err != nil {
+			return fmt.Errorf("申请单不存在: %w", err)
+		}
+		if wo.Status != 0 {
+			return fmt.Errorf("该申请已审批（status=%d），不可重复操作", wo.Status)
+		}
+		res := tx.Model(&wo).Where("id = ? AND status = 0", id).Updates(map[string]interface{}{
+			"status":        1,
+			"operator":      op,
+			"audit_time":    now,
+			"reject_reason": "",
+		})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("CAS 失败：申请单已被其他管理员处理")
+		}
+		logger.Info("商家提现审批通过: 订单#%d 商户=%s 积分=%.3f 操作人=%s", wo.ID, wo.Merchant, wo.Points, op)
+		return nil
+	})
+	if errTx != nil {
+		adminFail(w, http.StatusBadRequest, errTx.Error())
+		return
+	}
+	adminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleAdminMerchantWithdrawReject POST /admin/api/merchant/withdraw/{id}/reject
+// 审批拒绝：事务内回滚商家 balance_points + 扣减 total_withdrawn + 写负向 type=4 流水 + 改申请单状态
+func (s *Server) handleAdminMerchantWithdrawReject(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	var wo model.MerchantWithdrawOrder
+	if err := store.DB.First(&wo, id).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "申请单不存在")
+		return
+	}
+	if wo.Status != 0 {
+		adminFail(w, http.StatusBadRequest, "该申请已审批（status="+strconv.FormatInt(int64(wo.Status), 10)+"），不可重复操作")
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := jsonDecodeLimit(w, r, &req, 2048); err != nil {
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		adminFail(w, http.StatusBadRequest, "拒绝必须填写理由")
+		return
+	}
+	if len(reason) > 255 {
+		adminFail(w, http.StatusBadRequest, "理由过长（最多 255 字）")
+		return
+	}
+	now := time.Now()
+	op := adminUserFromCtx(r)
+	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		// 双重检查：状态可能在两次查询之间已被处理
+		var check model.MerchantWithdrawOrder
+		if err := tx.First(&check, id).Error; err != nil {
+			return err
+		}
+		if check.Status != 0 {
+			return fmt.Errorf("申请单已被其他管理员审批（status=%d），请刷新列表后重试", check.Status)
+		}
+		// 回滚商家余额：balance +X，total_withdrawn -X（钳零）
+		res := tx.Model(&model.Merchant{}).Where("username = ?", wo.Merchant).
+			Updates(map[string]interface{}{
+				"balance_points":  gorm.Expr("ROUND(balance_points + ?, 3)", wo.Points),
+				"total_withdrawn": gorm.Expr("ROUND(GREATEST(total_withdrawn - ?, 0), 3)", wo.Points),
+			})
+		if res.Error != nil {
+			return fmt.Errorf("余额回滚失败: %w", res.Error)
+		}
+		// 更新申请单状态
+		if err := tx.Model(&wo).Updates(map[string]interface{}{
+			"status":        2,
+			"reject_reason": reason,
+			"operator":      op,
+			"audit_time":    now,
+		}).Error; err != nil {
+			return err
+		}
+		// 写商家收益流水 type=4 手动调整（负向冲回提现扣减）
+		if err := tx.Create(&model.MerchantIncomeLog{
+			Merchant:     wo.Merchant,
+			GameID:       0,
+			Username:     wo.Merchant,
+			PurchaseID:   uint(wo.ID),
+			UserPay:      wo.Points,
+			Commission:   0,
+			MerchantEarn: wo.Points, // 正向（冲回）
+			Type:         4,
+			Status:       2, // settled（已回滚到余额）
+		}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if errTx != nil {
+		logger.Error("商家提现审批拒绝失败：%v", errTx)
+		adminFail(w, http.StatusInternalServerError, errTx.Error())
+		return
+	}
+	logger.Info("商家提现审批拒绝: 订单#%d 商户=%s 积分=%.3f 理由=%s 操作人=%s", wo.ID, wo.Merchant, wo.Points, reason, op)
+	adminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// ===== 运营工具（2026-11-19 Phase 4） =====
+
+// handleAdminMerchantRevenueAdjust POST /admin/api/merchant/revenue/adjust
+// 管理员手动调账：调整指定商户的 balance_points（可正可负），必须填写 reason
+// 事务内：UPDATE merchant.balance_points + 写 type=4 手动调整流水
+func (s *Server) handleAdminMerchantRevenueAdjust(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Merchant string  `json:"merchant"`
+		Points   float64 `json:"points"`   // 正数=增加，负数=扣减
+		Reason   string  `json:"reason"`
+	}
+	if err := jsonDecodeLimit(w, r, &req, 4096); err != nil {
+		return
+	}
+	req.Merchant = strings.TrimSpace(req.Merchant)
+	if req.Merchant == "" {
+		adminFail(w, http.StatusBadRequest, "请指定商户")
+		return
+	}
+	req.Points = aiPointsRound3(req.Points)
+	if req.Points == 0 {
+		adminFail(w, http.StatusBadRequest, "调账积分不能为 0")
+		return
+	}
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.Reason == "" {
+		adminFail(w, http.StatusBadRequest, "请填写调账理由（必填，纳入流水对账）")
+		return
+	}
+	if len(req.Reason) > 255 {
+		adminFail(w, http.StatusBadRequest, "理由过长（最多 255 字）")
+		return
+	}
+	op := adminUserFromCtx(r)
+	var afterBalance float64
+	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		// FOR UPDATE 锁 merchant 行，并发调账串行
+		var m model.Merchant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ?", req.Merchant).First(&m).Error; err != nil {
+			return fmt.Errorf("商户不存在: %w", err)
+		}
+		newBalance := aiPointsRound3(m.BalancePoints + req.Points)
+		if newBalance < 0 {
+			return fmt.Errorf("调账后余额不能为负（当前 %.3f，调账 %.3f，结果 %.3f）", m.BalancePoints, req.Points, newBalance)
+		}
+		// 用 SQL 表达式原子增减（防并发丢失更新）
+		updates := map[string]interface{}{
+			"balance_points": gorm.Expr("ROUND(balance_points + ?, 3)", req.Points),
+		}
+		if req.Points > 0 {
+			updates["total_earned"] = gorm.Expr("ROUND(total_earned + ?, 3)", req.Points)
+		} else {
+			updates["total_refunded"] = gorm.Expr("ROUND(total_refunded + ?, 3)", -req.Points)
+		}
+		if err := tx.Model(&model.Merchant{}).Where("username = ?", req.Merchant).Updates(updates).Error; err != nil {
+			return fmt.Errorf("调账失败: %w", err)
+		}
+		afterBalance = newBalance
+		if err := tx.Create(&model.MerchantIncomeLog{
+			Merchant:     m.Username, GameID: 0, Username: m.Username,
+			PurchaseID: 0, UserPay: req.Points, Commission: 0,
+			MerchantEarn: req.Points, Type: 4, Status: 2,
+		}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if errTx != nil {
+		adminFail(w, http.StatusBadRequest, errTx.Error())
+		return
+	}
+	direction := "增加"
+	if req.Points < 0 {
+		direction = "扣减"
+	}
+	logger.Info("管理员手动调账: %s 商户=%s 积分=%.3f(%s) 理由=%s 操作人=%s 余额剩=%.3f",
+		time.Now().Format("2006-01-02 15:04:05"), req.Merchant, req.Points, direction, req.Reason, op, afterBalance)
+	adminJSON(w, map[string]interface{}{
+		"ok":            true,
+		"merchant":      req.Merchant,
+		"adjust_points": req.Points,
+		"balance":       afterBalance,
+	})
+}
+
+// handleAdminMerchantRevenueExport GET /admin/api/merchant/revenue/export
+// 批量导出商家收益流水 CSV：支持 merchant / type / 时间范围过滤；1000 行分批流式输出
+// 范式复用 handleAdminPointsLogsExport（adminusers.go），中文 UTF-8 BOM + filename* 编码
+func (s *Server) handleAdminMerchantRevenueExport(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	merchant := strings.TrimSpace(q.Get("merchant"))
+	qType := strings.TrimSpace(q.Get("type"))
+	startStr := strings.TrimSpace(q.Get("start"))
+	endStr := strings.TrimSpace(q.Get("end"))
+
+	db := store.DB.Model(&model.MerchantIncomeLog{})
+	if merchant != "" {
+		db = db.Where("merchant = ?", merchant)
+	}
+	if qType != "" {
+		db = db.Where("type = ?", qType)
+	}
+	if startStr != "" {
+		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+			db = db.Where("create_time >= ?", t)
+		}
+	}
+	if endStr != "" {
+		if t, err := time.Parse("2006-01-02", endStr); err == nil {
+			db = db.Where("create_time < ?", t.AddDate(0, 0, 1))
+		}
+	}
+	// 首批建表验证
+	const batch = 1000
+	lastID := uint64(0)
+	var logs []model.MerchantIncomeLog
+	if err := db.Where("id > ?", lastID).Order("id ASC").Limit(batch).Find(&logs).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "导出准备失败")
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="merchant_revenue.csv"; filename*=UTF-8''`+
+		url.PathEscape("商家收益流水_"+time.Now().Format("20060102_150405")+".csv"))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("\uFEFF"))
+	cw := csv.NewWriter(w)
+	typeMap := map[int8]string{1: "入库分账", 2: "入库退款扣回", 3: "提现扣减", 4: "手动调整", 5: "赞助充值分账", 6: "赞助退款扣回"}
+	statusMap := map[int8]string{1: "锁定中", 2: "已解锁", 3: "已扣回"}
+	_ = cw.Write([]string{"时间", "商户", "游戏ID", "付费用户", "购买ID", "用户实付", "分成比例", "商家收益", "类型", "状态", "解锁时间"})
+	for {
+		for _, l := range logs {
+			lastID = l.ID
+			settle := ""
+			if l.SettleTime != nil {
+				settle = l.SettleTime.Format("2006-01-02 15:04:05")
+			}
+			_ = cw.Write([]string{
+				l.CreateTime.Format("2006-01-02 15:04:05"),
+				l.Merchant,
+				strconv.FormatUint(uint64(l.GameID), 10),
+				l.Username,
+				strconv.FormatUint(uint64(l.PurchaseID), 10),
+				fmtF3(l.UserPay),
+				fmt.Sprintf("%.0f%%", l.Commission*100),
+				fmtF3(l.MerchantEarn),
+				typeMap[l.Type],
+				statusMap[l.Status],
+				settle,
+			})
+		}
+		cw.Flush()
+		if len(logs) < batch {
+			break
+		}
+		if err := db.Where("id > ?", lastID).Order("id ASC").Limit(batch).Find(&logs).Error; err != nil {
+			return
+		}
 	}
 }

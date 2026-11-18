@@ -44,7 +44,21 @@
             // 阶段二百九十三：服务号管理图标（Material campaign 喇叭——代表公众号推送/通知）
             official: 'M18 11v-2c0-3.07-1.64-5.64-4.5-6.32V2c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 3.36 6 5.92 6 9v2H4v2h2v4c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-4h.91l4.09 3.6V17c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-1.76l4-3.6v-.64l-2-.56zm-5 7.83l-2.11-1.83H8V9h5V4.07c1.42.72 2.5 2.53 2.5 4.93v2.27l2 .56V11h2v-2h-2z',
             // 阶段二百九十七：Redis 管理图标（Material database 数据库——代表 Redis 缓存管理）
-            redis: 'M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2zm0 2c5.2 0 8 1.83 8 2.5S17.2 9 12 9 4 7.17 4 6.5 6.8 4 12 4zm0 16c-5.2 0-8-1.83-8-2.5V9.74c2.47 1.16 5.84 1.76 8 1.76s5.53-.6 8-1.76v7.76c0 .67-2.8 2.5-8 2.5z'
+            redis: 'M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2zm0 2c5.2 0 8 1.83 8 2.5S17.2 9 12 9 4 7.17 4 6.5 6.8 4 12 4zm0 16c-5.2 0-8-1.83-8-2.5V9.74c2.47 1.16 5.84 1.76 8 1.76s5.53-.6 8-1.76v7.76c0 .67-2.8 2.5-8 2.5z',
+            // 阶段三百零一：商户管理图标（Material store 小店——代表商户入驻/管理）
+            merchants: 'M20 4H4v2h16V4zm1 10v-2l-1-5H4l-1 5v2h1v6h10v-6h4v6h2v-6h1zm-9 4H6v-4h6v4z',
+            // 阶段三百零二：商户收益审批图标（Material paid 钱袋——代表收益分成/提现审批）
+            merchantrevenue: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm.01 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM12.5 7H11v5l4.25 2.52.75-1.23-3.5-2.08z',
+            // 游戏管理子项图标（Material Icons 风格统一）
+            gamenew:    'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z',
+            gn:         'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z',
+            gwbook:     'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z',
+            groders:    'M19 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.11 0 2-.9 2-2V5c0-1.1-.89-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z',
+            cards:      'M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z',
+            gaudit:     'M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z',
+            gameach:    'M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z',
+            quarantine: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
+            whitelist:  'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'
         };
         var nav = document.querySelector('.admin-nav');
         if (!nav) return;
@@ -473,6 +487,8 @@
             else if (item.dataset.view === 'whitelist') { stopKBPolling(); whitelistLoad(); }
             // 商户管理（游戏管理二级页）：进入视图拉取商户列表并复位表单为「创建」态
             else if (item.dataset.view === 'merchants') { merchantsResetForm(); merchantsLoad(); }
+            // 阶段三百零二：商户收益审批（游戏管理二级页）：进入视图拉取提现申请列表（重置到第一页）
+            else if (item.dataset.view === 'merchantrevenue') { mrLoaded = false; mrWdPage = 1; loadMerchantRevenue(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
@@ -10209,4 +10225,136 @@
     // ===== 暴露到 window 供表格 inline onclick 调用 =====
     window.gameachEdit = gameachEdit;
     window.gameachDelete = gameachDelete;
+
+    // ==================== 商户收益审批（2026-11-19 Phase 3-4 新增） ====================
+    var mrWdPage = 1, mrWdSize = 20, mrWdStatus = 0, mrWdKw = '';
+    var mrLoaded = false;
+
+    function loadMerchantRevenue() {
+        mrLoaded = true;
+        mrWdPage = 1;
+        loadMerchantWithdrawList();
+    }
+    function loadMerchantWithdrawList() {
+        var tb = $('mr-wd-tbody');
+        if (!tb) return;
+        tb.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:#888;">加载中…</td></tr>';
+        var url = '/admin/api/merchant/withdraw/list?page=' + mrWdPage + '&size=' + mrWdSize;
+        if (mrWdStatus >= 0) url += '&status=' + mrWdStatus;
+        if (mrWdKw) url += '&keyword=' + encodeURIComponent(mrWdKw);
+        api('GET', url).then(function (res) {
+            if (!res.ok) throw new Error(res.msg || '加载失败');
+            var d = res.data || {};
+            var list = d.items || [];
+            if (!list.length) {
+                tb.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:#888;">暂无数据</td></tr>';
+            } else {
+                var ST = { 0: ['pending', '待审批'], 1: ['ok', '已批准'], 2: ['rej', '已拒绝'] };
+                var html = '';
+                list.forEach(function (o) {
+                    var sd = ST[o.status] || ST[0];
+                    html += '<tr style="border-bottom:1px solid #2a2a3a;">' +
+                        '<td style="padding:8px;">' + esc(o.create_time) + '</td>' +
+                        '<td style="padding:8px;">#' + o.id + '</td>' +
+                        '<td style="padding:8px;">' + esc(o.merchant) + (o.merchant_name ? ' <span style="color:#888;">(' + esc(o.merchant_name) + ')</span>' : '') + '</td>' +
+                        '<td style="padding:8px;text-align:right;">' + fmtPts(o.points) + '</td>' +
+                        '<td style="padding:8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(o.remark || '') + '">' + esc(o.remark || '—') + '</td>' +
+                        '<td style="padding:8px;"><span class="m-badge ' + sd[0] + '">' + sd[1] + '</span></td>' +
+                        '<td style="padding:8px;">' + esc(o.operator || '—') + '</td>' +
+                        '<td style="padding:8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(o.reject_reason || '') + '" class="neg">' + esc(o.reject_reason || '—') + '</td>' +
+                        '<td style="padding:8px;text-align:center;">' + renderMrActions(o) + '</td>' +
+                        '</tr>';
+                });
+                tb.innerHTML = html;
+            }
+            var totalPage = Math.max(1, Math.ceil((d.total || 0) / mrWdSize));
+            $('mr-wd-page').textContent = '第 ' + mrWdPage + ' / ' + totalPage + ' 页（共 ' + (d.total || 0) + ' 条）';
+            $('mr-wd-prev').disabled = mrWdPage <= 1;
+            $('mr-wd-next').disabled = mrWdPage >= totalPage;
+        }).catch(function () {
+            tb.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:#f55;">加载失败</td></tr>';
+        });
+    }
+    function renderMrActions(o) {
+        if (o.status !== 0) return '<span style="color:#666;">—</span>';
+        return '<button class="admin-btn small primary" onclick="mrApprove(' + o.id + ')">批准</button> ' +
+            '<button class="admin-btn small danger" onclick="mrReject(' + o.id + ')">拒绝</button>';
+    }
+    window.mrApprove = function (id) {
+        if (!confirm('确认批准订单 #' + id + ' 的提现申请？')) return;
+        api('POST', '/admin/api/merchant/withdraw/' + id + '/approve').then(function () {
+            showToast('已批准', 'ok');
+            loadMerchantWithdrawList();
+        });
+    };
+    window.mrReject = function (id) {
+        var reason = prompt('请输入拒绝理由（必填，将回滚商家余额）：');
+        if (reason === null) return;
+        reason = reason.trim();
+        if (!reason) { showToast('必须填写理由'); return; }
+        api('POST', '/admin/api/merchant/withdraw/' + id + '/reject', { reason: reason }).then(function () {
+            showToast('已拒绝并回滚余额', 'ok');
+            loadMerchantWithdrawList();
+        });
+    };
+
+    // 导出 CSV
+    var _mrExport = $('mr-export');
+    if (_mrExport) _mrExport.addEventListener('click', function () {
+        var url = '/admin/api/merchant/revenue/export';
+        fetch(url, { headers: { 'Authorization': 'Bearer ' + getToken() } }).then(function (r) {
+            if (!r.ok) return r.json().then(function (j) { throw new Error(j.msg || '导出失败'); });
+            return r.blob();
+        }).then(function (blob) {
+            var a = document.createElement('a');
+            var obj = URL.createObjectURL(blob);
+            a.href = obj;
+            a.download = 'merchant_revenue_' + new Date().toISOString().slice(0, 10) + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(obj);
+        }).catch(function (e) { showToast(e.message || '导出失败'); });
+    });
+
+    // 手动调账
+    var _mrAdjBtn = $('mr-adj-btn');
+    if (_mrAdjBtn) _mrAdjBtn.addEventListener('click', function () {
+        var m = $('mr-adj-merchant').value.trim();
+        var p = parseFloat($('mr-adj-pts').value);
+        var r = $('mr-adj-reason').value.trim();
+        if (!m) { showToast('请输入商户账号'); return; }
+        if (!p || isNaN(p)) { showToast('请输入有效的积分'); return; }
+        if (!r) { showToast('调账理由必填'); return; }
+        var label = (p > 0 ? '增加 ' : '扣减 ') + fmtPts(Math.abs(p)) + ' 积分';
+        if (!confirm('确认对商户 [' + m + '] ' + label + '？')) return;
+        _mrAdjBtn.disabled = true;
+        api('POST', '/admin/api/merchant/revenue/adjust', { merchant: m, points: p, reason: r }).then(function (res) {
+            if (!res.ok) throw new Error(res.msg || '调账失败');
+            var d = res.data || {};
+            showToast('调账成功，余额剩 ' + fmtPts(d.balance), 'ok');
+            $('mr-adj-merchant').value = '';
+            $('mr-adj-pts').value = '';
+            $('mr-adj-reason').value = '';
+        }).catch(function () { }).then(function () { _mrAdjBtn.disabled = false; });
+    });
+
+    // 搜索
+    var _mrWdSearch = $('mr-wd-search');
+    if (_mrWdSearch) _mrWdSearch.addEventListener('click', function () {
+        mrWdKw = ($('mr-wd-kw').value || '').trim();
+        mrWdPage = 1; loadMerchantWithdrawList();
+    });
+    var _mrWdKw = $('mr-wd-kw');
+    if (_mrWdKw) _mrWdKw.addEventListener('keydown', function (e) { if (e.key === 'Enter') _mrWdSearch.click(); });
+    var _mrWdStatus = $('mr-wd-status');
+    if (_mrWdStatus) _mrWdStatus.addEventListener('change', function () {
+        mrWdStatus = parseInt(this.value, 10); mrWdPage = 1; loadMerchantWithdrawList();
+    });
+    var _mrWdPrev = $('mr-wd-prev'), _mrWdNext = $('mr-wd-next');
+    if (_mrWdPrev) _mrWdPrev.addEventListener('click', function () { mrWdPage--; loadMerchantWithdrawList(); });
+    if (_mrWdNext) _mrWdNext.addEventListener('click', function () { mrWdPage++; loadMerchantWithdrawList(); });
+
+    // ===== 暴露 view 切换入口 =====
+    window.__adminLoadMerchantRevenue = loadMerchantRevenue;
 })();

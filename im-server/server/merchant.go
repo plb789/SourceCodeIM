@@ -11,9 +11,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"maps"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 
 	"im-server/logger"
 	"im-server/model"
@@ -59,6 +64,13 @@ func registerMerchantRoutes(s *Server) {
 	http.HandleFunc("GET /api/merchant/recharge/summary", s.merchantGuard(s.handleMerchantRechargeSummary))
 	http.HandleFunc("GET /api/merchant/recharge/orders", s.merchantGuard(s.handleMerchantRechargeOrders))
 	http.HandleFunc("GET /api/merchant/gateway/package", s.merchantGuard(s.handleMerchantGatewayPackage))
+	// 商家销售分成·收益查询（2026-11-19 Phase 2）
+	http.HandleFunc("GET /api/merchant/revenue/summary", s.merchantGuard(s.handleMerchantRevenueSummary))
+	http.HandleFunc("GET /api/merchant/revenue/orders", s.merchantGuard(s.handleMerchantRevenueOrders))
+	http.HandleFunc("GET /api/merchant/withdraw/min", s.merchantGuard(s.handleMerchantWithdrawMin))
+	// 商家提现（2026-11-19 Phase 3）
+	http.HandleFunc("POST /api/merchant/withdraw/apply", s.merchantGuard(s.handleMerchantWithdrawApply))
+	http.HandleFunc("GET /api/merchant/withdraw/orders", s.merchantGuard(s.handleMerchantWithdrawOrders))
 	// P2.2：成就定义 CRUD + 图标上传
 	http.HandleFunc("POST /api/merchant/games/{id}/achievement", s.merchantGuard(s.handleMerchantAchievementSave))
 	http.HandleFunc("GET /api/merchant/games/{id}/achievements", s.merchantGuard(s.handleMerchantAchievementsGet))
@@ -199,3 +211,282 @@ func merchantOwnGame(owner string, gameID uint64) (model.Game, bool) {
 
 // merchantIP 复用 adminClientIP（防爆破维度一致），别名归口便于语义追踪
 func merchantIP(r *http.Request) string { return adminClientIP(r) }
+
+// ===== 商家销售分成·收益查询（2026-11-19 新增，Phase 2） =====
+
+// handleMerchantRevenueSummary GET /api/merchant/revenue/summary
+// 返回当前商户收益概览：余额 + 待结算 + 累计收益/退款/提现 + 今日/本周新增
+func (s *Server) handleMerchantRevenueSummary(w http.ResponseWriter, r *http.Request) {
+	musername := merchantUserFromCtx(r)
+	var m model.Merchant
+	if err := store.DB.Select("username, name, balance_points, pending_points, total_earned, total_refunded, total_withdrawn, commission_rate").
+		Where("username = ?", musername).First(&m).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "商户不存在")
+		return
+	}
+	// 今日新增（本地自然日）
+	todayStart := timeBeginOfDay(time.Now())
+	var todayEarn, todayRefund float64
+	store.DB.Model(&model.MerchantIncomeLog{}).
+		Where("merchant = ? AND type = 1 AND create_time >= ?", musername, todayStart).
+		Select("COALESCE(SUM(merchant_earn),0)").Scan(&todayEarn)
+	store.DB.Model(&model.MerchantIncomeLog{}).
+		Where("merchant = ? AND type = 2 AND create_time >= ?", musername, todayStart).
+		Select("COALESCE(SUM(ABS(merchant_earn)),0)").Scan(&todayRefund)
+	// 本周新增
+	weekStart := timeBeginOfWeek(time.Now())
+	var weekEarn float64
+	store.DB.Model(&model.MerchantIncomeLog{}).
+		Where("merchant = ? AND type = 1 AND create_time >= ?", musername, weekStart).
+		Select("COALESCE(SUM(merchant_earn),0)").Scan(&weekEarn)
+	adminJSON(w, map[string]interface{}{
+		"merchant":       m.Username,
+		"name":           m.Name,
+		"commission":     m.CommissionRate,
+		"balance":        aiPointsRound3(m.BalancePoints),
+		"pending":        aiPointsRound3(m.PendingPoints),
+		"total_earned":   aiPointsRound3(m.TotalEarned),
+		"total_refund":   aiPointsRound3(m.TotalRefunded),
+		"total_withdraw": aiPointsRound3(m.TotalWithdrawn),
+		"net_earned":     aiPointsRound3(m.TotalEarned - m.TotalRefunded),
+		"today_earn":     aiPointsRound3(todayEarn),
+		"today_refund":   aiPointsRound3(todayRefund),
+		"week_earn":      aiPointsRound3(weekEarn),
+		"min_withdraw":   aiPointsRound3(s.cfg.Game.MinWithdrawPoints),
+		"revenue_enabled": s.cfg.Game.MerchantRevenueEnabled,
+	})
+}
+
+// handleMerchantRevenueOrders GET /api/merchant/revenue/orders
+// 分账明细流水：支持 type 过滤（1=入库分账 2=入库退款扣回 3=提现扣减 4=手动调整 5=赞助充值分账 6=赞助退款扣回）、分页
+// 返回 game_name（关联游戏名）+ username（付费用户）+ status（pending/settled/refunded）
+func (s *Server) handleMerchantRevenueOrders(w http.ResponseWriter, r *http.Request) {
+	musername := merchantUserFromCtx(r)
+	qType := strings.TrimSpace(r.URL.Query().Get("type"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 200 {
+		size = 30
+	}
+	db := store.DB.Where("merchant = ?", musername)
+	if qType != "" {
+		db = db.Where("type = ?", qType)
+	}
+	var total int64
+	db.Model(&model.MerchantIncomeLog{}).Count(&total)
+	var logs []model.MerchantIncomeLog
+	if err := db.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&logs).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	// 关联游戏名 + 状态文案
+	type enrich struct {
+		model.MerchantIncomeLog
+		GameName string `json:"game_name"`
+		TypeText string `json:"type_text"`
+		StatusText string `json:"status_text"`
+	}
+	// 批量查游戏名
+	gameIDs := make(map[uint]bool)
+	for _, l := range logs {
+		gameIDs[l.GameID] = true
+	}
+	gameNames := map[uint]string{}
+	if len(gameIDs) > 0 {
+		var games []model.Game
+		if err := store.DB.Select("id, name").Where("id IN ?", maps.Keys(gameIDs)).Find(&games).Error; err == nil {
+			for _, g := range games {
+				gameNames[g.ID] = g.Name
+			}
+		}
+	}
+	typeMap := map[int8]string{1: "入库分账", 2: "入库退款扣回", 3: "提现扣减", 4: "手动调整", 5: "赞助充值分账", 6: "赞助退款扣回"}
+	statusMap := map[int8]string{1: "锁定中", 2: "已解锁", 3: "已扣回"}
+	items := make([]map[string]interface{}, 0, len(logs))
+	for _, l := range logs {
+		item := map[string]interface{}{
+			"id":           l.ID,
+			"game_id":      l.GameID,
+			"game_name":    gameNames[l.GameID],
+			"username":     l.Username,
+			"purchase_id":  l.PurchaseID,
+			"user_pay":     aiPointsRound3(l.UserPay),
+			"commission":   l.Commission,
+			"merchant_earn": aiPointsRound3(l.MerchantEarn),
+			"type":         l.Type,
+			"type_text":    typeMap[l.Type],
+			"status":       l.Status,
+			"status_text":  statusMap[l.Status],
+			"settle_time":  l.SettleTime,
+			"create_time":  l.CreateTime,
+		}
+		items = append(items, item)
+		_ = enrich{} // avoid unused
+	}
+	adminJSON(w, map[string]interface{}{
+		"total": total,
+		"page":  page,
+		"size":  size,
+		"items": items,
+	})
+}
+
+// handleMerchantWithdrawMin GET /api/merchant/withdraw/min
+// 返回当前提现最小积分额（前端预校验）
+func (s *Server) handleMerchantWithdrawMin(w http.ResponseWriter, r *http.Request) {
+	adminJSON(w, map[string]interface{}{
+		"min_withdraw": aiPointsRound3(s.cfg.Game.MinWithdrawPoints),
+		"enabled":      s.cfg.Game.MerchantRevenueEnabled,
+	})
+}
+
+// handleMerchantWithdrawApply POST /api/merchant/withdraw/apply
+// 商家提交提现申请：事务内扣 balance_points → total_withdrawn 增加 → 写 withdraw_order status=0 → 写 type=3 流水
+// 设计（方案 D3 Phase 3）：申请即扣余额，管理员审批=确认；拒绝时回滚
+func (s *Server) handleMerchantWithdrawApply(w http.ResponseWriter, r *http.Request) {
+	musername := merchantUserFromCtx(r)
+	var req struct {
+		Points float64 `json:"points"`
+		Remark string  `json:"remark"`
+	}
+	if err := jsonDecodeLimit(w, r, &req, 4096); err != nil {
+		return
+	}
+	points := aiPointsRound3(req.Points)
+	minW := aiPointsRound3(s.cfg.Game.MinWithdrawPoints)
+	if points <= 0 {
+		adminFail(w, http.StatusBadRequest, "提现积分须大于 0")
+		return
+	}
+	if minW > 0 && points < minW {
+		adminFail(w, http.StatusBadRequest, fmt.Sprintf("提现积分不得小于最小额 %.3f", minW))
+		return
+	}
+	if len(strings.TrimSpace(req.Remark)) > 255 {
+		adminFail(w, http.StatusBadRequest, "备注过长（最多 255 字）")
+		return
+	}
+	if !s.cfg.Game.MerchantRevenueEnabled {
+		adminFail(w, http.StatusBadRequest, "商家收益功能未启用")
+		return
+	}
+	var orderID uint64
+	var afterBalance float64
+	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		var m model.Merchant
+		if err := tx.Where("username = ?", musername).First(&m).Error; err != nil {
+			return fmt.Errorf("商户不存在: %w", err)
+		}
+		if m.BalancePoints < points {
+			return fmt.Errorf("可提现余额不足（当前 %.3f，申请 %.3f）", m.BalancePoints, points)
+		}
+		res := tx.Model(&m).Where("username = ? AND balance_points >= ?", musername, points).
+			Updates(map[string]interface{}{
+				"balance_points":  gorm.Expr("ROUND(balance_points - ?, 3)", points),
+				"total_withdrawn": gorm.Expr("ROUND(total_withdrawn + ?, 3)", points),
+			})
+		if res.Error != nil {
+			return fmt.Errorf("余额扣减失败: %w", res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("余额不足，请稍后重试")
+		}
+		// 写提现申请单
+		wo := model.MerchantWithdrawOrder{
+			Merchant: musername,
+			Points:   points,
+			Status:   0, // pending
+			Remark:   strings.TrimSpace(req.Remark),
+		}
+		if err := tx.Create(&wo).Error; err != nil {
+			return err
+		}
+		orderID = wo.ID
+		// 写商家收益流水 type=3 提现扣减（balance→withdraw 属于商家内部转账）
+		if err := tx.Create(&model.MerchantIncomeLog{
+			Merchant:     musername,
+			GameID:       0,
+			Username:     musername,
+			PurchaseID:   uint(wo.ID),
+			UserPay:      -points,
+			Commission:   0,
+			MerchantEarn: -points,
+			Type:         3,
+			Status:       3, // 终态
+		}).Error; err != nil {
+			return err
+		}
+		afterBalance = aiPointsRound3(m.BalancePoints - points)
+		return nil
+	})
+	if errTx != nil {
+		adminFail(w, http.StatusBadRequest, errTx.Error())
+		return
+	}
+	logger.Info("商家提现申请: 商户 %s 积分 %.3f 订单#%d 余额剩 %.3f", musername, points, orderID, afterBalance)
+	adminJSON(w, map[string]interface{}{
+		"ok":          true,
+		"order_id":    orderID,
+		"balance":     afterBalance,
+	})
+}
+
+// handleMerchantWithdrawOrders GET /api/merchant/withdraw/orders
+// 商家自己的提现申请列表：status 可选过滤（0=pending / 1=approved / 2=rejected）+ 分页
+func (s *Server) handleMerchantWithdrawOrders(w http.ResponseWriter, r *http.Request) {
+	musername := merchantUserFromCtx(r)
+	st, _ := strconv.Atoi(r.URL.Query().Get("status"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 200 {
+		size = 30
+	}
+	db := store.DB.Where("merchant = ?", musername)
+	if st >= 0 && st <= 2 {
+		db = db.Where("status = ?", st)
+	}
+	var total int64
+	db.Model(&model.MerchantWithdrawOrder{}).Count(&total)
+	var list []model.MerchantWithdrawOrder
+	if err := db.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&list).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	statusMap := map[int8]string{0: "待审批", 1: "已批准", 2: "已拒绝"}
+	items := make([]map[string]interface{}, 0, len(list))
+	for _, o := range list {
+		items = append(items, map[string]interface{}{
+			"id":            o.ID,
+			"points":        aiPointsRound3(o.Points),
+			"status":        o.Status,
+			"status_text":   statusMap[o.Status],
+			"reject_reason": o.RejectReason,
+			"operator":      o.Operator,
+			"remark":        o.Remark,
+			"audit_time":    o.AuditTime,
+			"create_time":   o.CreateTime,
+		})
+	}
+	adminJSON(w, map[string]interface{}{"total": total, "page": page, "size": size, "items": items})
+}
+
+// ===== 辅助：自然日/周起始 =====
+
+func timeBeginOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func timeBeginOfWeek(t time.Time) time.Time {
+	// Go time.Weekday: Sunday=0 ... Monday=1
+	// 中国习惯周一起始
+	offset := (int(t.Weekday()) + 6) % 7 // 周一=0, 周日=6
+	day := timeBeginOfDay(t)
+	return day.AddDate(0, 0, -offset)
+}
+
