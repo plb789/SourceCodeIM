@@ -75,7 +75,9 @@ func scanAdminUploadStats(dir string) {
 		return nil
 	})
 	if err != nil {
-		logger.Warn("上传目录扫描失败 %s: %v", dir, err)
+		// INFO 而不是 WARN：5 分钟定时扫描遇到目录短暂不可用（杀毒锁/备份软件瞬时 rename/网络盘抖动）
+		// 不应每轮都刷 WARN 造成日志污染；目录持续不可用管理员通过仪表盘"文件数=0"即能观察到
+		logger.Info("上传目录扫描失败（%s），下轮重试：%v", dir, err)
 		return
 	}
 	adminUploadFiles.Store(files)

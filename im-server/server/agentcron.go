@@ -115,6 +115,12 @@ func (s *Server) agentCronTick() {
 }
 
 // agentCronFire 单行触发：上次任务状态回填 → 防重叠判定 → 归口发起 → 推进下次运行时间
+//
+// 发起失败防抖：连续 cronLaunchStreakThreshold 次失败后自动停用该行——避免绑定的 agent 被删/
+// Session 被清理等不可恢复错误在每个 tick 都打 WARN 造成日志污染。与 agentCronAdvance
+// 遇到调度值非法时自动 disable 的设计意图完全一致（注释："防每 tick 报错空转"）
+const cronLaunchStreakThreshold = 3
+
 func (s *Server) agentCronFire(row *model.AgentCronTask) {
 	// 上次触发任务的真实终态回填（列表"上次结果"展示；查不到留原值）
 	if row.LastTaskID != "" {
@@ -139,12 +145,30 @@ func (s *Server) agentCronFire(row *model.AgentCronTask) {
 	taskID, err := s.agentCronLaunch(row)
 	now := time.Now()
 	if err != nil {
-		// 发起失败不重试（巡检语义下个周期再来）：留痕后照常推进，防每 tick 空转报错
-		logger.Warn("定时任务 %d（用户 %s）发起失败：%v", row.ID, row.Username, err)
-		store.DB.Model(row).Updates(map[string]interface{}{"last_run_at": now, "last_status": "launch_failed"})
+		// 发起失败连续 N 次自动停用该行——不可恢复错误（agent 被删/Session 被清/功能关闭等）
+		// 持续重试只会刷日志、不会自愈。参考 agentCronAdvance 遇到调度值非法时自动 disable
+		// 的设计意图："防每 tick 报错空转"
+		streak := row.LaunchFailStreak + 1
+		updates := map[string]interface{}{
+			"last_run_at":          now,
+			"last_status":          "launch_failed",
+			"launch_fail_streak":   streak,
+		}
+		if streak >= cronLaunchStreakThreshold {
+			updates["enabled"] = false
+			logger.Error("定时任务 %d（用户 %s）连续发起失败 %d 次，已自动停用：%v", row.ID, row.Username, streak, err)
+		} else {
+			logger.Warn("定时任务 %d（用户 %s）发起失败（%d/%d）：%v", row.ID, row.Username, streak, cronLaunchStreakThreshold, err)
+		}
+		store.DB.Model(row).Updates(updates)
 		row.LastStatus = "launch_failed"
 	} else {
-		store.DB.Model(row).Updates(map[string]interface{}{"last_run_at": now, "last_task_id": taskID, "last_status": "running"})
+		store.DB.Model(row).Updates(map[string]interface{}{
+			"last_run_at":        now,
+			"last_task_id":       taskID,
+			"last_status":        "running",
+			"launch_fail_streak": 0, // 发起成功清零防抖计数
+		})
 		row.LastStatus = "running"
 		logger.Info("定时任务 %d（用户 %s）已自动发起任务 %s（%s %s）", row.ID, row.Username, taskID, row.Kind, row.Value)
 	}

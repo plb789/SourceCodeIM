@@ -286,6 +286,8 @@ func (s *Server) HandleGameRecharge(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	errInsufficient := fmt.Errorf("积分不足")
+	errDayLimit := fmt.Errorf("超出日限额")
 	rate := g.RechargeRate
 	if rate <= 0 {
 		rate = 1
@@ -293,14 +295,10 @@ func (s *Server) HandleGameRecharge(w http.ResponseWriter, r *http.Request) {
 	amount := aiPointsRound3(pay * rate)
 	gw := strings.ToLower(strings.TrimSpace(g.RechargeGw))
 	order := model.RechargeOrder{Username: username, GameID: g.ID, Points: pay, Amount: amount, Status: model.RechargeOrderStatusPending, Gw: gw}
-	// 事务归口：扣分与建单同事务（任一失败整体回滚，积分不悬空）；
-	// 扣分 WHERE points>=pay 并发不透支（rowsAffected=0 即余额不足）。
-	// 日限额复检在事务内且置于扣分 UPDATE 之后：该 UPDATE 持有用户行锁直至提交，同用户并发下单
-	// 在此天然串行——后到者复检时先到者的订单已提交可见，超额即回滚（外层预检存在 check-then-act
-	// 窗口，两并发单可同时通过预检，此处复检是真正的限额约束；读视图在扣分等待结束后建立，必见先到订单）
-	errInsufficient := fmt.Errorf("积分不足")
-	errDayLimit := fmt.Errorf("超出日限额")
+	// 事务归口：扣分 + 建单 + 流水同事务（任一失败整体回滚，积分不悬空）；
+	var after float64
 	err := store.DB.Transaction(func(tx *gorm.DB) error {
+		// 同用户并发下单串行化（隐式 UPDATE User 持有行锁直至事务提交）
 		res := tx.Model(&model.User{}).
 			Where("username = ? AND points >= ?", username, pay).
 			Update("points", gorm.Expr("ROUND(points - ?, 3)", pay))
@@ -324,7 +322,19 @@ func (s *Server) HandleGameRecharge(w http.ResponseWriter, r *http.Request) {
 				return errDayLimit
 			}
 		}
-		return tx.Create(&order).Error
+		if err := tx.Create(&order).Error; err != nil {
+			return err
+		}
+		// 事务内读真实扣后余额（MVCC 视图保证看见上面的 UPDATE），供流水 BalanceAfter 使用
+		if err := tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after).Error; err != nil {
+			return err
+		}
+		// 流水也在事务内——与扣分 + 建单原子提交，杜绝"扣分成功但流水没写"的审计缺口
+		return tx.Create(&model.PointsLog{
+			Username: username, Change: -pay, BalanceAfter: after,
+			Reason: "game_recharge", Operator: "system",
+			Detail: fmt.Sprintf("积分兑换充值: %s（订单 %d）", g.Name, order.ID),
+		}).Error
 	})
 	if err != nil {
 		if err == errInsufficient {
@@ -338,10 +348,8 @@ func (s *Server) HandleGameRecharge(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusInternalServerError, "下单失败")
 		return
 	}
-	after, _ := userPoints(username)
-	recordPointsLog(username, -pay, after, "game_recharge", "system", fmt.Sprintf("积分兑换充值: %s（订单 %d）", g.Name, order.ID))
 	logger.Info("充值订单创建：用户 %s 游戏#%d 积分 %.3f 到账 %.3f 网关 %s 订单 %d", username, g.ID, pay, amount, gw, order.ID)
-	balance, _ := userPoints(username)
+	balance, _ := userPoints(username) // 回执用独立读（事务已 commit）
 	adminJSON(w, map[string]interface{}{"ok": true, "order_id": order.ID, "points": pay, "amount": amount, "balance": aiPointsRound3(balance)})
 }
 
@@ -592,12 +600,15 @@ func (s *Server) handleInternalGatewayRechargeAck(w http.ResponseWriter, r *http
 
 // rechargeRefund 退分归口（网关明确失败 / 超时扫描共用）：
 // 状态机 pending→failed 单向迁移（WHERE status=pending 条件更新，RowsAffected=1 唯一赢家），
-// 迁移成功才退积分——并发重复调用/重复回执绝不双重退分。返回是否本次调用完成退分
+// 迁移成功才退积分——并发重复调用/重复回执绝不双重退分。
+// 重要：积分退回 + 流水 + 商家分账扣回 全部在同一 DB 事务内原子完成——杜绝"标 failed 成功
+// 但退积分失败"或"退积分成功但商家没扣回"的半生效态
 func rechargeRefund(o *model.RechargeOrder, reason string) bool {
 	if len(reason) > 250 {
 		reason = reason[:250]
 	}
 	now := time.Now()
+	// 幂等前置：先做状态机 CAS 抢占（成功即唯一赢家，失败直接 return 幂等忽略）
 	res := store.DB.Model(&model.RechargeOrder{}).
 		Where("id = ? AND status = ?", o.ID, model.RechargeOrderStatusPending).
 		Updates(map[string]interface{}{"status": model.RechargeOrderStatusFailed, "fail_reason": reason, "done_time": &now})
@@ -608,19 +619,78 @@ func rechargeRefund(o *model.RechargeOrder, reason string) bool {
 	if res.RowsAffected == 0 {
 		return false // 已是终态（重复回执/并发扫描），幂等忽略
 	}
-	// 原值全额退分（ROUND 归一口径与扣分一致），流水 reason=game_recharge_refund
-	res2 := store.DB.Model(&model.User{}).Where("username = ?", o.Username).
-		Update("points", gorm.Expr("ROUND(points + ?, 3)", o.Points))
-	if res2.Error != nil {
-		// 标 failed 已生效但退分失败：人工对账归口（订单终态与积分不一致必须暴露）
-		logger.Error("充值退分失败（订单 %d 用户 %s 应退 %.3f）：%v", o.ID, o.Username, o.Points, res2.Error)
-		return true
+	// 状态机 CAS 抢占成功 → 积分退回 + 流水 + 商家扣回 同事务原子提交
+	var sponsorDeducted bool
+	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		// 积分退回：FOR UPDATE 锁 User 行（与充值下单的 User 锁同顺序，与商家扣回的 Merchant 锁同顺序）
+		var lockedUser model.User
+		if uerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ?", o.Username).First(&lockedUser).Error; uerr != nil {
+			return fmt.Errorf("锁定用户失败: %w", uerr)
+		}
+		// 原子加分 + 事务内读真实余额供流水使用
+		if uerr := tx.Model(&model.User{}).Where("username = ?", o.Username).
+			Update("points", gorm.Expr("ROUND(points + ?, 3)", o.Points)).Error; uerr != nil {
+			return uerr
+		}
+		var after float64
+		tx.Model(&model.User{}).Select("points").Where("username = ?", o.Username).Scan(&after)
+		if lerr := tx.Create(&model.PointsLog{
+			Username: o.Username, Change: o.Points, BalanceAfter: after,
+			Reason: "game_recharge_refund", Operator: "system",
+			Detail: fmt.Sprintf("充值失败退还（订单 %d）: %s", o.ID, reason),
+		}).Error; lerr != nil {
+			return lerr
+		}
+		// 商家赞助充值扣回（type=5 反向）：事务内执行 sponsorRechargeRefund 的扣回逻辑
+		// —— 直接复用 sponsorRechargeRefund 内部的独立事务会导致嵌套事务（GORM 不支持，会变成同事务），
+		// 这里用同样的 FOR UPDATE Merchant + MerchantIncomeLog 条件 CAS 逻辑内联
+		var purchaseLog model.MerchantIncomeLog
+		if cerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("purchase_id = ? AND type = 5 AND status != 3", o.ID).
+			Order("id DESC").First(&purchaseLog).Error; cerr != nil {
+			sponsorDeducted = false // 无对应 type=5 分账流水 → 无需扣回（开关中途关闭/未开过分账）
+			return nil
+		}
+		sponsorDeducted = true
+		var merchant model.Merchant
+		if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ?", purchaseLog.Merchant).First(&merchant).Error; merr != nil {
+			return merr
+		}
+		merchantEarn := purchaseLog.MerchantEarn
+		var deductPending, deductBalance float64
+		if merchant.PendingPoints >= merchantEarn {
+			deductPending = merchantEarn
+			deductBalance = 0
+		} else {
+			deductPending = merchant.PendingPoints
+			deductBalance = aiPointsRound3(merchantEarn - merchant.PendingPoints)
+		}
+		if uerr := tx.Model(&model.Merchant{}).Where("username = ?", merchant.Username).Updates(map[string]interface{}{
+			"pending_points": gorm.Expr("ROUND(GREATEST(pending_points - ?, 0), 3)", deductPending),
+			"balance_points":  gorm.Expr("ROUND(GREATEST(balance_points - ?, 0), 3)", deductBalance),
+			"total_refunded":  gorm.Expr("ROUND(total_refunded + ?, 3)", merchantEarn),
+		}).Error; uerr != nil {
+			return uerr
+		}
+		if uerr := tx.Model(&purchaseLog).Where("id = ? AND status != 3", purchaseLog.ID).Update("status", 3).Error; uerr != nil {
+			return uerr
+		}
+		return tx.Create(&model.MerchantIncomeLog{
+			Merchant: merchant.Username, GameID: purchaseLog.GameID,
+			Username: o.Username, PurchaseID: uint(o.ID),
+			UserPay: -o.Points, Commission: purchaseLog.Commission,
+			MerchantEarn: -merchantEarn, Type: 6, Status: 3,
+		}).Error
+	})
+	if errTx != nil {
+		// 状态机已标 failed，事务内积分退回/流水/商家扣回任一失败 → 必须暴露，人工对账
+		// 不能 silent return false 让状态机停在 failed 但积分没退
+		logger.Error("⚡充值退回事务失败（订单 %d 用户 %s）：状态机已标 failed 但积分/流水/商家扣回部分可能未生效 —— 请人工对账⚡：%v", o.ID, o.Username, errTx)
+		return true // RowsAffected=1 说明状态机 CAS 已成功，这次调用是赢家；虽然事务失败但订单已 failed，避免重复调用
 	}
-	after, _ := userPoints(o.Username)
-	recordPointsLog(o.Username, o.Points, after, "game_recharge_refund", "system", fmt.Sprintf("充值失败退还（订单 %d）: %s", o.ID, reason))
-	// 赞助充值商家扣回（type=5 的反向操作）
-	sponsorRechargeRefund(o)
-	logger.Info("充值订单退分：订单 %d 用户 %s 退 %.3f（%s）", o.ID, o.Username, o.Points, reason)
+	logger.Info("充值订单退分：订单 %d 用户 %s 退 %.3f（%s），商家扣回=%v", o.ID, o.Username, o.Points, reason, sponsorDeducted)
 	return true
 }
 
@@ -772,70 +842,6 @@ func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
 	// 全部重试失败 → 落 Error 日志 + 管理员 grep sponsor_settle_failed 补账
 	logger.Error("⚡赞助充值分账全部重试失败⚡：订单 %d 用户 %s 游戏#%d 商户 %s 应得 %.3f，最后错误：%v —— 请人工补账：UPDATE merchant SET pending_points += %.3f WHERE username='%s'；INSERT income_log (type=5) 或调用 /admin/api/merchant/revenue/adjust",
 		o.ID, o.Username, o.GameID, merchant.Username, merchantEarn, lastErr, merchantEarn, merchant.Username)
-}
-
-// sponsorRechargeRefund 赞助充值退款扣回（type=5 的反向操作）：订单 failed/超时退分后，
-// 从商家 pending/balance 中扣回之前的分账。purchase_id = RechargeOrder.ID
-func sponsorRechargeRefund(o *model.RechargeOrder) {
-	if o == nil {
-		return
-	}
-	var purchaseLog model.MerchantIncomeLog
-	if err := store.DB.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("purchase_id = ? AND type = 5 AND status != 3", o.ID).
-		Order("id DESC").First(&purchaseLog).Error; err != nil {
-		// 找不到 → 可能开关中途关了、或 sweep 已把商家余额锁定期解了但还没被退款扣回过
-		logger.Info("赞助退款扣回跳过：订单 %d 无对应 type=5 income_log（可能开关中途关闭）", o.ID)
-		return
-	}
-	merchantEarn := purchaseLog.MerchantEarn
-	var deductPending, deductBalance float64 // 提到外层，事务闭包内外都可见
-
-	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
-		// FOR UPDATE 锁 merchant 行
-		var merchant model.Merchant
-		if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("username = ?", purchaseLog.Merchant).First(&merchant).Error; merr != nil {
-			return merr
-		}
-		// 先扣 pending（sweep 可能已把它转到 balance）
-		if merchant.PendingPoints >= merchantEarn {
-			deductPending = merchantEarn
-			deductBalance = 0
-		} else {
-			deductPending = merchant.PendingPoints
-			deductBalance = aiPointsRound3(merchantEarn - merchant.PendingPoints)
-		}
-		uerr := tx.Model(&model.Merchant{}).Where("username = ?", merchant.Username).Updates(map[string]interface{}{
-			"pending_points": gorm.Expr("ROUND(GREATEST(pending_points - ?, 0), 3)", deductPending),
-			"balance_points":  gorm.Expr("ROUND(GREATEST(balance_points - ?, 0), 3)", deductBalance),
-			"total_refunded":  gorm.Expr("ROUND(total_refunded + ?, 3)", merchantEarn),
-		}).Error
-		if uerr != nil {
-			return uerr
-		}
-		// 原 type=5 流水标 refunded（CAS 防并发 sweep）
-		res2 := tx.Model(&purchaseLog).Where("id = ? AND status != 3", purchaseLog.ID).Update("status", 3)
-		if res2.Error != nil {
-			return res2.Error
-		}
-		// 写 type=6 负向流水
-		if err := tx.Create(&model.MerchantIncomeLog{
-			Merchant: merchant.Username, GameID: purchaseLog.GameID,
-			Username: o.Username, PurchaseID: uint(o.ID),
-			UserPay: -o.Points, Commission: purchaseLog.Commission,
-			MerchantEarn: -merchantEarn, Type: 6, Status: 3,
-		}).Error; err != nil {
-			return err
-		}
-		return nil
-	})
-	if errTx != nil {
-		logger.Error("赞助退款扣回事务失败（订单 %d 商户 %s）：%v", o.ID, purchaseLog.Merchant, errTx)
-		return
-	}
-	logger.Info("赞助退款扣回：订单 %d 商户 %s 原分账 %.3f 已扣回（pending=%.3f, balance=%.3f）",
-		o.ID, purchaseLog.Merchant, merchantEarn, deductPending, deductBalance)
 }
 
 // sponsorRechargeCompensateSweep 赞助充值分账补偿单轮（包级，供 InitGame 定时任务 + 单测直接调用）：

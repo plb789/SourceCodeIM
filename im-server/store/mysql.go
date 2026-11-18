@@ -110,6 +110,16 @@ func InitMySQL(cfg *config.Config) error {
 	// 补充遗漏：Agent/AI 记忆规则/MCP 插件相关 13 表（运行时高频查询，缺失即 500）
 	// A1：追加等级配置表 im_user_level_config（文档附录 A，管理员预设等级权益数据）
 	// A2：追加每日成就独立两表 im_game_daily_achievement / im_user_daily_achievement（方案 A，可每日重复解锁）
+	// AutoMigrate 之前先清洗存量负值数据——CHECK 约束（points >= 0）会 VALIDATE 存量行，
+	// 如果有任何一行 points < 0（绕过应用层的直连 SQL / 管理端误操作）会导致 ALTER TABLE 直接失败。
+	// 这些清洗与应用层的 GREATEST(points - ?, 0) 守卫口径一致，幂等可重跑
+	if r := db.Exec(`UPDATE im_user SET points = GREATEST(points, 0) WHERE points < 0`); r.Error != nil {
+		fmt.Printf("[store] WARN 存量 im_user.points 负值清洗失败（不影响主流程，服务启动后需手工对账）: %v\n", r.Error)
+	}
+	if r := db.Exec(`UPDATE im_merchant SET pending_points = GREATEST(pending_points, 0), balance_points = GREATEST(balance_points, 0), total_refunded = GREATEST(total_refunded, 0) WHERE pending_points < 0 OR balance_points < 0 OR total_refunded < 0`); r.Error != nil {
+		fmt.Printf("[store] WARN 存量 im_merchant 负值清洗失败（不影响主流程）: %v\n", r.Error)
+	}
+
 	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}, &model.UserKB{}, &model.PointsLog{}, &model.MCPServer{}, &model.MCPPlugin{}, &model.SysPrompt{}, &model.CallLog{}, &model.Group{}, &model.GroupMember{}, &model.GroupInvite{}, &model.Announcement{}, &model.AnnouncementAttachment{}, &model.AnnouncementRead{}, &model.WorkbenchApp{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RemoteLog{}, &model.DriveFile{}, &model.DriveShare{}, &model.DriveUploadSession{}, &model.AppVersion{}, &model.Device{}, &model.RemoteTrust{}, &model.RemoteCard{}, &model.Moment{}, &model.MomentLike{}, &model.MomentComment{}, &model.MomentUnread{}, &model.GatewayBook{}, &model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.OfficialAccount{}, &model.OfficialSubscribe{}, &model.OfficialMenu{}, &model.OfficialKeyword{}, &model.OfficialTemplate{}, &model.OfficialMessage{}, &model.OfficialAudit{}, &model.ClamavQuarantine{}, &model.ClamavWhitelist{}, &model.GameAchievement{}, &model.UserAchievement{}, &model.UserBadge{}, &model.ProfileExpLog{}, &model.ProfileShowcase{}, &model.ProfileComment{}, &model.ProfileScreenshot{}, &model.ProfileScreenshotLike{}, &model.Card{}, &model.UserCard{}, &model.BadgeTemplate{}, &model.UserShopItem{}, &model.AIMemory{}, &model.AIMemoryPref{}, &model.AIRule{}, &model.AISession{}, &model.AgentTaskRecord{}, &model.AgentTaskTpl{}, &model.AgentCronTask{}, &model.AgentWhitelist{}, &model.AgentStepRecord{}, &model.AgentChangeRecord{}, &model.MsgPurgeApply{}, &model.UserLevelConfig{}, &model.GameDailyAchievement{}, &model.UserDailyAchievement{}); err != nil {
 		return fmt.Errorf("自动建表失败: %w", err)
 	}

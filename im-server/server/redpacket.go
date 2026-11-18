@@ -159,79 +159,111 @@ func (s *Server) handleRedPacketSend(c *Client, msg *protocol.Message) {
 		p.Type = model.RedPacketTypeNormal
 	}
 
-	// 严格扣款（余额不足直接失败）：原子 UPDATE 带 points>=? 守卫，并发安全
-	balance, err := userPointsDeductStrict(c.username, amount)
-	if err != nil {
-		s.sendError(c, err.Error())
-		return
-	}
-	recordPointsLog(c.username, -amount, balance, "redpacket_send", "system",
-		fmt.Sprintf("发送红包（%s，%d 份，给 %s）", rpTypeName(p.Type), p.Count, msg.ToUser))
-
-	// 建红包记录（过期时间 = 现在 + 24h）
-	pkt := &model.RedPacket{
-		FromUser:        c.username,
-		ToUser:          msg.ToUser,
-		GroupID:         groupID,
-		Type:            p.Type,
-		Greeting:        greeting,
-		TotalAmount:     amount,
-		Count:           p.Count,
-		RemainingAmount: amount,
-		RemainingCount:  p.Count,
-		Status:          model.RedPacketStatusActive,
-		ExpireTime:      time.Now().Add(redPacketExpireAfter),
-	}
-	if err := store.DB.Create(pkt).Error; err != nil {
-		// 建包失败须回滚扣款（补偿性入账 + 流水，保证账实一致）
-		logger.Error("红包记录创建失败（用户 %s，%.3f 积分）：%v", c.username, amount, err)
-		if bal2, e2 := userPointsAdd(c.username, amount); e2 == nil {
-			recordPointsLog(c.username, amount, bal2, "redpacket_refund", "system", "红包创建失败自动退回")
+	// 事务归口：FOR UPDATE User → 严格扣款 → 建红包 → 消息落库（直接 tx.Create，绕批写）
+	// → 红包回填 msg_id → PointsLog 流水。任一步失败整体回滚——杜绝原来事务外补偿退回"退回过程中
+	// DB 断开 → 积分扣了红包没"的半生效态。补偿退回逻辑已删除（事务原子回滚）
+	//
+	// 消息落库走直接 tx.Create 不走 persistMessage 批写——保证与扣红包/积分同事务原子提交；
+	// 红包发送是低频操作（单用户单秒次），不走批写的 RTT 损失可忽略。
+	var balance float64
+	var pkt model.RedPacket
+	var record model.Message
+	err := store.DB.Transaction(func(tx *gorm.DB) error {
+		// 显式 FOR UPDATE 锁 User 行——与红包领取/过期退回/游戏退款/充值退款等所有积分
+		// 路径同锁顺序，杜绝死锁（详见项目锁顺序矩阵）
+		var lockedUser model.User
+		if uerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ?", c.username).First(&lockedUser).Error; uerr != nil {
+			return uerr
 		}
-		s.sendError(c, "红包发送失败，积分已退回")
+		// 严格扣款：WHERE points >= amount 守卫保证不超扣（余额不足 RowsAffected=0 返回业务错误）
+		res := tx.Model(&model.User{}).
+			Where("username = ? AND points >= ?", c.username, amount).
+			Update("points", gorm.Expr("ROUND(points - ?, 3)", amount))
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			// 区分"余额不足"和"用户不存在"
+			var count int64
+			tx.Model(&model.User{}).Where("username = ?", c.username).Count(&count)
+			if count == 0 {
+				return fmt.Errorf("用户不存在")
+			}
+			return fmt.Errorf("积分不足，发送红包至少需要 %.3f 积分", amount)
+		}
+		// 事务内读扣后余额（MVCC 视图保证看见上面的 UPDATE）
+		if err := tx.Model(&model.User{}).Select("points").Where("username = ?", c.username).Scan(&balance).Error; err != nil {
+			return err
+		}
+		// 建红包记录（过期时间 = 现在 + 24h）
+		pkt = model.RedPacket{
+			FromUser:        c.username,
+			ToUser:          msg.ToUser,
+			GroupID:         groupID,
+			Type:            p.Type,
+			Greeting:        greeting,
+			TotalAmount:     amount,
+			Count:           p.Count,
+			RemainingAmount: amount,
+			RemainingCount:  p.Count,
+			Status:          model.RedPacketStatusActive,
+			ExpireTime:      time.Now().Add(redPacketExpireAfter),
+		}
+		if err := tx.Create(&pkt).Error; err != nil {
+			return err
+		}
+		// 聊天消息信封（红包卡片数据源）
+		envelope, _ := json.Marshal(map[string]interface{}{
+			"rp": map[string]interface{}{
+				"id":       pkt.ID,
+				"type":     pkt.Type,
+				"count":    pkt.Count,
+				"amount":   pkt.TotalAmount,
+				"greeting": pkt.Greeting,
+				"status":   model.RedPacketStatusActive,
+			},
+		})
+		// 消息落库——直接 tx.Create 绕批写，与扣红包/积分同事务原子提交
+		record = model.Message{
+			MsgType:  int8(protocol.MsgTypeRedPacket),
+			FromUser: c.username,
+			ToUser:   msg.ToUser,
+			Content:  string(envelope),
+		}
+		if err := tx.Create(&record).Error; err != nil {
+			return err
+		}
+		// 红包回填 msg_id（卡片原位定位用）
+		if err := tx.Model(&pkt).Where("id = ?", pkt.ID).Update("msg_id", record.ID).Error; err != nil {
+			return err
+		}
+		// 事务内流水——与扣款 + 建红包 + 消息落库原子提交
+		return tx.Create(&model.PointsLog{
+			Username:     c.username,
+			Change:       -amount,
+			BalanceAfter: balance,
+			Reason:       "redpacket_send",
+			Operator:     "system",
+			Detail:       fmt.Sprintf("发送红包（%s，%d 份，给 %s）", rpTypeName(p.Type), p.Count, msg.ToUser),
+		}).Error
+	})
+	if err != nil {
+		logger.Error("红包发送事务失败（用户 %s）：%v", c.username, err)
+		s.sendError(c, "红包发送失败："+err.Error())
 		return
 	}
 
-	// 聊天消息信封（红包卡片数据源；status 快照恒为初始领取中，卡片实时态以 88 同步帧 + 89 详情查询归口）
-	envelope, _ := json.Marshal(map[string]interface{}{
-		"rp": map[string]interface{}{
-			"id":       pkt.ID,
-			"type":     pkt.Type,
-			"count":    pkt.Count,
-			"amount":   pkt.TotalAmount,
-			"greeting": pkt.Greeting,
-			"status":   model.RedPacketStatusActive,
-		},
-	})
-
+	// 事务外做网络广播/推送——DB 原子性由上面事务保证，这里不再半生效态
 	chatMsg := protocol.Message{
 		MsgType:   protocol.MsgTypeRedPacket,
 		FromUser:  c.username,
 		FromName:  nicknameOf(c.username),
 		ToUser:    msg.ToUser,
-		Content:   string(envelope),
+		Content:   record.Content,
 		Timestamp: time.Now().Unix(),
+		MsgID:     record.ID,
 	}
-
-	// 落库 + 回填消息 ID（红包卡片原位定位用）
-	record := model.Message{
-		MsgType:  int8(protocol.MsgTypeRedPacket),
-		FromUser: chatMsg.FromUser,
-		ToUser:   chatMsg.ToUser,
-		Content:  chatMsg.Content,
-	}
-	record.ID = s.persistMessage(&record)
-	if record.ID == 0 {
-		logger.Error("红包消息落库失败（红包 %d）", pkt.ID)
-		s.sendError(c, "红包发送失败，积分已退回")
-		if bal2, e2 := userPointsAdd(c.username, amount); e2 == nil {
-			recordPointsLog(c.username, amount, bal2, "redpacket_refund", "system", "红包消息落库失败自动退回")
-		}
-		store.DB.Delete(pkt)
-		return
-	}
-	chatMsg.MsgID = record.ID
-	store.DB.Model(&model.RedPacket{}).Where("id = ?", pkt.ID).Update("msg_id", record.ID)
 
 	data, _ := json.Marshal(chatMsg)
 	summary := "[红包] " + pkt.Greeting
@@ -556,40 +588,6 @@ func (s *Server) sendRedPacketOpenResult(username string, payload map[string]int
 // sendRedPacketReceipt 87 帧别名语义化封装（发送回执专用，与领取结果同帧型不同 act）
 func (s *Server) sendRedPacketReceipt(username string, payload map[string]interface{}) {
 	s.sendRedPacketOpenResult(username, payload)
-}
-
-// userPointsDeductStrict 严格扣款：余额不足直接失败（区别于 AI 扣分的钳零语义——红包必须真扣到钱）
-// 原子 UPDATE 带 points>=? 守卫，并发安全；影响行数 0 时区分"余额不足"与"用户不存在"
-func userPointsDeductStrict(username string, cost float64) (float64, error) {
-	res := store.DB.Model(&model.User{}).
-		Where("username = ? AND points >= ?", username, cost).
-		Update("points", gorm.Expr("ROUND(points - ?, 3)", cost)) // 阶段一百六十二：落库归一 3 位（double 减法误差长尾）
-	if res.Error != nil {
-		return 0, res.Error
-	}
-	if res.RowsAffected == 0 {
-		var count int64
-		store.DB.Model(&model.User{}).Where("username = ?", username).Count(&count)
-		if count == 0 {
-			return 0, fmt.Errorf("用户不存在: %s", username)
-		}
-		return 0, fmt.Errorf("积分余额不足")
-	}
-	return userPoints(username)
-}
-
-// userPointsAdd 积分入账（红包领取/退回），返回入账后余额
-func userPointsAdd(username string, amount float64) (float64, error) {
-	res := store.DB.Model(&model.User{}).
-		Where("username = ?", username).
-		Update("points", gorm.Expr("ROUND(points + ?, 3)", amount)) // 阶段一百六十二：落库归一 3 位（double 加法误差长尾）
-	if res.Error != nil {
-		return 0, res.Error
-	}
-	if res.RowsAffected == 0 {
-		return 0, fmt.Errorf("用户不存在: %s", username)
-	}
-	return userPoints(username)
 }
 
 // rpTypeName 红包类型中文名（日志/流水用）

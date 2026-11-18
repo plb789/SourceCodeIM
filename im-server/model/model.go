@@ -435,6 +435,10 @@ type AgentCronTask struct {
 	LastRunAt  *time.Time `gorm:"column:last_run_at" json:"last_run_at"`
 	LastTaskID string     `gorm:"column:last_task_id;type:varchar(40);not null;default:''" json:"last_task_id"`
 	LastStatus string     `gorm:"column:last_status;type:varchar(16);not null;default:''" json:"last_status"`
+	// LaunchFailStreak 连续发起失败计数（阶段二百六十三）：防抖计数器——agent 被删/Session 被清/功能关闭
+	// 等不可恢复错误持续重试只会刷日志，不会自愈；连续 cronLaunchStreakThreshold（=3）次失败后自动
+	// 停用该行（enabled=false），与 agentCronAdvance 遇到调度值非法时自动 disable 同设计意图
+	LaunchFailStreak int `gorm:"column:launch_fail_streak;not null;default:0" json:"launch_fail_streak"`
 	CreateTime time.Time  `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time  `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
