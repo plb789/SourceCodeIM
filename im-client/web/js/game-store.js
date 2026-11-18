@@ -2318,7 +2318,7 @@
         });
         if (curUrl) {
             ov.querySelector('#gpBgClear').addEventListener('click', function () {
-                showConfirm(T('清除横幅'), T('确定要清除横幅并恢复默认渐变色吗？'), T('清除'), true, function () {
+                showConfirm(T('清除横幅'), T('确定要清除横幅并恢复默认渐变色吗？'), T('清除'), function () {
                     api('DELETE', '/api/profile/background').then(function (res) {
                         if (res && res.ok) {
                             toast(T('已清除'));
@@ -2327,7 +2327,7 @@
                             state.profile.basic.profile_bg = '';
                         } else { toast((res && res.err) || T('清除失败')); }
                     });
-                });
+                }, true);
             });
         }
         ov.querySelector('#gpBgCancel').addEventListener('click', gpClose);
@@ -3076,6 +3076,7 @@
             if (!ssData || !ssData.list || ssData.list.length === 0) return null;
             var ssList = ssData.list.filter(function (ss) { return ss.type !== 'artwork'; });
             if (ssList.length === 0) return null;
+            var ssIsSelf = state.profile && state.profile.username;
             var ssGrid = el('div', 'gp-ss-grid');
             ssList.slice(0, 8).forEach(function (ss) {
                 var cell = el('div', 'gp-ss-cell');
@@ -3087,6 +3088,26 @@
                 if (ss.title) {
                     var cap = el('div', 'gp-ss-cap', ss.title);
                     cell.appendChild(cap);
+                }
+                // P2-b: 作者本人可见的删除按钮（左上角 ×，阻止冒泡不触发大图）
+                if (ssIsSelf && ssIsSelf === ss.username) {
+                    var delBtn = el('button', 'gp-del-btn', '×');
+                    delBtn.title = T('删除截图');
+                    delBtn.addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        showConfirm(T('删除截图'), T('确定要删除这张截图吗？删除后无法恢复。'), T('删除'), function () {
+                            api('POST', '/api/profile/screenshot/delete', { id: ss.id }).then(function (res) {
+                                if (res && res.ok) {
+                                    toast(T('已删除'));
+                                    // 刷新截图列表
+                                    api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(state.profile.username) + '&type=all').then(function (s2) {
+                                        if (s2 && s2.ok && s2.data) { state.profile.screenshots = s2.data; renderShowcases(); }
+                                    });
+                                } else { toast((res && res.err) || T('删除失败')); }
+                            });
+                        }, true);
+                    });
+                    cell.appendChild(delBtn);
                 }
                 // P2-a: 右下角点赞按钮 + 计数（点击不触发 cell 的 openImageViewer）
                 addLikeBar(cell, ss, ss.id);
@@ -3101,6 +3122,26 @@
             // 只展示 type=artwork 的艺术作品（区别于游戏截图网格）
             var awList = awData.list.filter(function (ss) { return ss.type === 'artwork'; });
             if (awList.length === 0) return null;
+            var awIsSelf = state.profile && state.profile.username;
+            // 公用删除按钮工厂（复用截图网格的删除逻辑）
+            function makeAwDelBtn(ss) {
+                var btn = el('button', 'gp-del-btn', '×');
+                btn.title = T('删除艺术作品');
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    showConfirm(T('删除艺术作品'), T('确定要删除这张艺术作品吗？删除后无法恢复。'), T('删除'), function () {
+                        api('POST', '/api/profile/screenshot/delete', { id: ss.id }).then(function (res) {
+                            if (res && res.ok) {
+                                toast(T('已删除'));
+                                api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(state.profile.username) + '&type=all').then(function (s2) {
+                                    if (s2 && s2.ok && s2.data) { state.profile.screenshots = s2.data; renderShowcases(); }
+                                });
+                            } else { toast((res && res.err) || T('删除失败')); }
+                        });
+                    }, true);
+                });
+                return btn;
+            }
             // Steam 风格艺术作品布局：第 1 张大图突出 + 后续小图横排
             var awWrap = el('div', 'gp-art-wrap');
             var awGrid = el('div', 'gp-art-grid');
@@ -3110,6 +3151,7 @@
             awList.slice(0, 3).forEach(function (ss, i) {
                 var cell = el('div', i === 0 ? 'gp-art-hero' : 'gp-art-cell');
                 cell.style.cursor = 'pointer';
+                cell.style.position = 'relative'; // 删除按钮绝对定位需要
                 var img = document.createElement('img');
                 img.src = assetUrl(ss.url);
                 img.loading = 'lazy';
@@ -3122,6 +3164,8 @@
                     cap.style.fontSize = i === 0 ? '13px' : '11px';
                     cell.appendChild(cap);
                 }
+                // P2-b: 作者本人可见的删除按钮
+                if (awIsSelf && awIsSelf === ss.username) cell.appendChild(makeAwDelBtn(ss));
                 addLikeBar(cell, ss, ss.id);
                 cell.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
                 awGrid.appendChild(cell);
@@ -3132,13 +3176,16 @@
                 var awMore = el('div', 'gp-art-more');
                 awMore.style.display = 'flex'; awMore.style.gap = '6px'; awMore.style.marginTop = '6px';
                 awList.slice(3, Math.min(awList.length, 7)).forEach(function (ss) {
+                    var tWrap = el('div'); // 包一层便于绝对定位删除按钮
+                    tWrap.style.position = 'relative'; tWrap.style.cursor = 'pointer';
                     var t = document.createElement('img');
                     t.src = assetUrl(ss.url); t.loading = 'lazy';
                     t.style.width = '48px'; t.style.height = '48px';
                     t.style.objectFit = 'cover'; t.style.borderRadius = '4px';
-                    t.style.cursor = 'pointer';
-                    t.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
-                    awMore.appendChild(t);
+                    tWrap.appendChild(t);
+                    if (awIsSelf && awIsSelf === ss.username) tWrap.appendChild(makeAwDelBtn(ss));
+                    tWrap.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
+                    awMore.appendChild(tWrap);
                 });
                 awWrap.appendChild(awMore);
             }

@@ -1527,6 +1527,69 @@ func (s *Server) HandleProfileScreenshotView(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// HandleProfileScreenshotDelete POST /api/profile/screenshot/delete
+// 作者删除自己的截图/艺术作品：事务清点赞 + 删主记录，然后删物理文件
+// 安全：只允许作者本人删；SQL 参数化；删文件前校验 URL 路径合法（防路径穿越）
+// 事务：清点赞 + 删主记录必须原子（包在同一个事务里），物理文件在事务外删除（不可回滚）
+func (s *Server) HandleProfileScreenshotDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		profileFail(w, "只支持 DELETE/POST"); return
+	}
+	username, _ := gameAuthToken(r)
+	if username == "" { profileFail(w, "请先登录"); return }
+
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		// 也支持 JSON body
+		var body struct { ID uint `json:"id"` }
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.ID > 0 {
+			idStr = strconv.FormatUint(uint64(body.ID), 10)
+		}
+	}
+	id, _ := strconv.ParseUint(idStr, 10, 64)
+	if id == 0 { profileFail(w, "id 必填"); return }
+
+	var shot model.ProfileScreenshot
+	if err := store.DB.First(&shot, id).Error; err != nil {
+		profileFail(w, "截图不存在"); return
+	}
+	if shot.Username != username {
+		profileFail(w, "无权删除他人的作品"); return
+	}
+
+	// 1. 事务原子清理：点赞关系 + 主记录（必须同时成功或同时回滚）
+	if err := store.DB.Transaction(func(tx *gorm.DB) error {
+		// 先清点赞关系（无外键 CASCADE，必须手动清）
+		if err := tx.Where("screenshot_id = ?", shot.ID).Delete(&model.ProfileScreenshotLike{}).Error; err != nil {
+			return err
+		}
+		// 再删主记录
+		if err := tx.Delete(&shot).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		profileFail(w, "删除失败："+err.Error()); return
+	}
+
+	// 2. 事务提交成功后再删物理文件（不可回滚，放在事务外）
+	// 安全：从 DB 的 URL 字段取，校验必须在 screenshots 目录下（防路径穿越）
+	if shot.URL != "" {
+		base := filepath.Join(s.cfg.WebDir, "static", "upload", "screenshots")
+		fname := filepath.Base(shot.URL) // 取最后一段文件名
+		// 二次校验：拒绝含 / \ .. 的恶意路径
+		if !strings.ContainsAny(fname, "/\\..") {
+			full := filepath.Join(base, fname)
+			// 确保 full 仍在 base 目录下
+			if strings.HasPrefix(filepath.Clean(full), filepath.Clean(base)) {
+				os.Remove(full) // 文件不存在也不报错
+			}
+		}
+	}
+
+	profileOK(w, map[string]interface{}{"id": shot.ID})
+}
+
 // ==================== custom_html 展示柜安全清洗 ====================
 
 // Go regexp（RE2 引擎）不支持反向引用 \1，所以危险标签成对匹配必须用显式 alternation 列出每一对

@@ -4309,6 +4309,34 @@ html.m .mobile-plus-panel:not(.hidden) {
     100% { background-position: 250% 50%; }
 }
 
+/* ===== P2-b: 截图/艺术作品 —— 作者本人可见的删除按钮（左上角 ×，hover cell 时显示） ===== */
+.gp-del-btn {
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 11;
+    opacity: 0;
+    transition: opacity 0.18s ease, background 0.15s ease, transform 0.15s ease;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+.gp-ss-cell:hover .gp-del-btn,
+.gp-art-wrap:hover .gp-del-btn { opacity: 1; }
+.gp-del-btn:hover { background: rgba(220, 53, 69, 0.85); transform: scale(1.1); }
+.gp-del-btn:active { transform: scale(0.92); }
+
 /* ===== P2-a: 截图/艺术作品右下角统计条（浏览量 + 点赞） ===== */
 .gp-like-bar {
     position: absolute;

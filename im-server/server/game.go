@@ -733,6 +733,8 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("POST /api/profile/screenshot/like", s.HandleProfileScreenshotLike)
 	// 增强：截图浏览量累加（防刷：同 IP 30s 去重）
 	http.HandleFunc("POST /api/profile/screenshot/view", s.HandleProfileScreenshotView)
+	// 增强：作者删除自己的截图/艺术作品（清理 DB + 物理文件 + 点赞记录）
+	http.HandleFunc("POST /api/profile/screenshot/delete", s.HandleProfileScreenshotDelete)
 	// 增强：背景横幅上传 + 经验值日志
 	http.HandleFunc("POST /api/profile/background", s.HandleProfileBgUpload)
 	http.HandleFunc("DELETE /api/profile/background", s.HandleProfileBgDelete)
