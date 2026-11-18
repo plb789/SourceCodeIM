@@ -3917,6 +3917,13 @@ html.m .mobile-plus-panel:not(.hidden) {
     min-height: 0;
     padding: 16px;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.gp-cw-panel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 /* ================ 抽卡面板 ================ */
@@ -4780,6 +4787,196 @@ html.m .mobile-plus-panel:not(.hidden) {
     .gp-art-hero { grid-column: 1; grid-row: 1; }
     .gp-art-cell:nth-of-type(2) { grid-column: 1; grid-row: 2; }
     .gp-art-cell:nth-of-type(3) { grid-column: 1; grid-row: 3; }
+}
+
+/* ==================== 横幅编辑器 V2（固定尺寸·拖拽·预设皮肤） ==================== */
+.gp-bg-editor {
+    width: 620px !important;
+    max-width: 92vw !important;
+    height: 64vh !important;
+    max-height: 80vh;
+    min-height: 520px;
+}
+.gp-bg-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    padding: 14px;
+    overflow: hidden;
+}
+
+/* 预览区 */
+.gp-bg-preview {
+    position: relative;
+    flex-shrink: 0;
+    height: 100px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+}
+.gp-bg-preview-inner {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.gp-bg-preview-inner img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.gp-bg-empty-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+.gp-bg-source-tag {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 3px;
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    pointer-events: none;
+}
+
+/* 拖拽上传区 */
+.gp-bg-drop {
+    position: relative;
+    flex-shrink: 0;
+    min-height: 64px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    background: var(--panel-bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    padding: 8px;
+}
+.gp-bg-drop:hover,
+.gp-bg-drop.drag-over {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 3%, var(--panel-bg));
+}
+.gp-bg-drop input[type="file"] {
+    position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
+}
+.gp-bg-drop-ico { font-size: 18px; line-height: 1; }
+.gp-bg-drop-text { font-size: 12px; font-weight: 500; color: var(--text); }
+.gp-bg-drop-hint { font-size: 10px; color: var(--text-secondary); opacity: 0.7; }
+
+/* 预设横幅皮肤面板 */
+.gp-bg-skins {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+}
+.gp-bg-skins-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.gp-bg-skins-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.gp-bg-skins-hint {
+    font-size: 10px;
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+.gp-bg-skins-list {
+    flex: 1;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 8px;
+    align-content: start;
+    min-height: 0;
+}
+.gp-bg-skin {
+    position: relative;
+    border-radius: 6px;
+    border: 2px solid var(--border);
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s;
+    background: var(--panel-bg);
+    align-self: start;     /* 关键：不被 grid stretch 压高度 */
+    display: flex;
+    flex-direction: column;
+}
+.gp-bg-skin:hover { border-color: var(--primary); }
+.gp-bg-skin.active { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent); }
+.gp-bg-skin.locked { opacity: 0.55; cursor: not-allowed; }
+.gp-bg-skin-preview {
+    width: 100%;
+    aspect-ratio: 16 / 6;
+    flex-shrink: 0;
+}
+.gp-bg-skin-name {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text);
+    padding: 4px 6px;
+    background: var(--panel-bg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gp-bg-skin-active,
+.gp-bg-skin-apply,
+.gp-bg-skin-lock {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 600;
+    border-radius: 3px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    pointer-events: none;
+}
+.gp-bg-skin-active { background: var(--primary); }
+.gp-bg-skin.locked .gp-bg-skin-lock { background: rgba(150,150,150,0.7); }
+
+/* ===== 6 个预设横幅皮肤 CSS 渐变（纯 CSS，零后端资源） ===== */
+.gp-bskin-forest {
+    background: linear-gradient(135deg, #134e2b 0%, #1f7a3f 35%, #2d9c52 70%, #5cc47a 100%);
+}
+.gp-bskin-neon {
+    background: linear-gradient(135deg, #1a0a2e 0%, #3d1a5c 30%, #e91e8c 60%, #ff6baf 100%);
+}
+.gp-bskin-ocean {
+    background: linear-gradient(135deg, #0a1b3a 0%, #0e3d6b 35%, #1a6fb0 70%, #3ab0d8 100%);
+}
+.gp-bskin-aurora {
+    background: linear-gradient(135deg, #0a0f2e 0%, #1a2a6c 25%, #4a2a8c 55%, #b21f6b 100%);
+}
+.gp-bskin-lava {
+    background: linear-gradient(135deg, #1a0a0a 0%, #4a1a0a 25%, #b83a0a 60%, #ff6b1a 100%);
+}
+.gp-bskin-cherry {
+    background: linear-gradient(135deg, #3d1a3d 0%, #8c3a5c 30%, #e86b9a 65%, #ffb3c7 100%);
 }
 
 /* ==================== 阶段二百九十六 P2.6：展示柜主题（积分商店） ==================== */

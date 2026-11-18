@@ -512,8 +512,9 @@ type ProfileBasicResp struct {
 	Level         int    `json:"level"`
 	Exp           int64  `json:"exp"`
 	Title         string `json:"title"`
-	ProfileBg     string `json:"profile_bg"`
-	FavoriteGame  int    `json:"favorite_game_id"`
+	ProfileBg         string `json:"profile_bg"`
+	ProfileBannerSkin string `json:"profile_banner_skin"` // 预设横幅皮肤（商店购买后应用，空=未使用预设）
+	FavoriteGame      int    `json:"favorite_game_id"`
 	// 隐私设置（仅自己查看时完整返回；他人查看时仅返回 profile_visibility 用于判断是否可见）
 	ProfileVisibility int8 `json:"profile_visibility"`
 	GameVisibility    int8 `json:"game_visibility"`
@@ -2035,12 +2036,13 @@ func (s *Server) HandleProfileBasicPut(w http.ResponseWriter, r *http.Request) {
 	if !ok || username == "" { profileFail(w, "请先登录"); return }
 
 	var body struct {
-		Nickname     string  `json:"nickname"`
-		Signature    string  `json:"signature"`
-		Title        string  `json:"title"`
-		ProfileBg    string  `json:"profile_bg"`
-		FavoriteGame int     `json:"favorite_game_id"`
-		ProfileTheme *string `json:"profile_theme"` // nil=未传 不更新；非nil 不管空/非空都处理
+		Nickname          string  `json:"nickname"`
+		Signature         string  `json:"signature"`
+		Title             string  `json:"title"`
+		ProfileBg         string  `json:"profile_bg"`
+		FavoriteGame      int     `json:"favorite_game_id"`
+		ProfileTheme      *string `json:"profile_theme"`       // nil=未传 不更新；非nil 不管空/非空都处理
+		ProfileBannerSkin *string `json:"profile_banner_skin"` // 同上，横幅皮肤
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil { profileFail(w, "JSON 错误"); return }
 
@@ -2062,6 +2064,16 @@ func (s *Server) HandleProfileBasicPut(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		updates["profile_theme"] = *body.ProfileTheme
+	}
+	// 横幅皮肤：同 profile_theme 校验逻辑
+	if body.ProfileBannerSkin != nil {
+		if *body.ProfileBannerSkin != "" {
+			var owned model.UserShopItem
+			if err := store.DB.Where("username = ? AND item_id = ?", username, *body.ProfileBannerSkin).First(&owned).Error; err != nil {
+				profileFail(w, "该横幅皮肤未解锁，请先到积分商店购买"); return
+			}
+		}
+		updates["profile_banner_skin"] = *body.ProfileBannerSkin
 	}
 
 	if len(updates) == 0 { profileFail(w, "没有要更新的字段"); return }
@@ -2184,7 +2196,10 @@ func (s *Server) HandleProfileBgUpload(w http.ResponseWriter, r *http.Request) {
 		profileFail(w, "文件写入失败"); return
 	}
 	url := "/static/upload/profile_bg/" + name
-	if err := store.DB.Model(&model.User{}).Where("username = ?", username).Update("profile_bg", url).Error; err != nil {
+	if err := store.DB.Model(&model.User{}).Where("username = ?", username).Updates(map[string]interface{}{
+		"profile_bg":          url,
+		"profile_banner_skin": "", // 上传自定义横幅 → 自动取消预设皮肤（两者互斥）
+	}).Error; err != nil {
 		profileFail(w, "保存失败"); return
 	}
 	profileOK(w, map[string]interface{}{"url": url})

@@ -41,6 +41,13 @@ var shopItemPrices = map[string]float64{
 	"showcase_theme_ocean":   400, // 展示柜主题：深海蔚蓝
 	"showcase_theme_forest":  500, // 展示柜主题：森林秘境
 	"showcase_theme_sunset":  600, // 展示柜主题：落日余晖
+	// — 横幅皮肤（CSS 渐变，零后端资源） —
+	"banner_skin_forest":     250, // 翠林秘境
+	"banner_skin_neon":       300, // 赛博霓虹
+	"banner_skin_ocean":      350, // 深海微光
+	"banner_skin_aurora":     400, // 极光星空
+	"banner_skin_lava":       450, // 熔岩烈焰
+	"banner_skin_cherry":     500, // 樱雪缤纷
 }
 
 // HandlePointsShopBuy POST /api/points/shop/buy

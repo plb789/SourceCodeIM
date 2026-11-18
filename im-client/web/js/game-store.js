@@ -783,10 +783,25 @@
     function renderProfile() {
         var p = state.profile;
 
-        // 1. 背景横幅
+        // 1. 背景横幅（自定义图片 / 预设皮肤 / 默认渐变 三选一，互斥）
         var bg = $('gpBg');
+        bg.className = 'gp-bg'; // 恢复基类（position:absolute; inset:0; 覆盖父容器）
         if (p.basic && p.basic.profile_bg) {
+            // 自定义图片优先
             bg.style.backgroundImage = 'url(' + assetUrl(p.basic.profile_bg) + ')';
+        } else if (p.basic && p.basic.profile_banner_skin) {
+            // 预设皮肤（纯 CSS 渐变）
+            var skinClsMap = {
+                'banner_skin_forest': 'gp-bskin-forest',
+                'banner_skin_neon':   'gp-bskin-neon',
+                'banner_skin_ocean':  'gp-bskin-ocean',
+                'banner_skin_aurora': 'gp-bskin-aurora',
+                'banner_skin_lava':   'gp-bskin-lava',
+                'banner_skin_cherry': 'gp-bskin-cherry',
+            };
+            var skinCls = skinClsMap[p.basic.profile_banner_skin];
+            if (skinCls) { bg.classList.add(skinCls); bg.style.backgroundImage = ''; }
+            else { bg.style.backgroundImage = ''; }
         } else {
             bg.style.backgroundImage = '';
         }
@@ -2277,9 +2292,10 @@
             '</div>' +
           '</div>';
         document.body.appendChild(ov);
-        var bodyScroll = ov.querySelector('.gp-modal-body');
-        if (bodyScroll) osbInit(bodyScroll);
-        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+        // 注意：不要在这里调 osbInit —— #gpCwPanel 此时还是空的
+        // renderCwPanel('draw')（函数末尾 L2503）会先 destroyOsb 再 osbInit，一次到位
+        var panelScroll = ov.querySelector('#gpCwPanel');
+        function gpClose() { destroyOsb(panelScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
         var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
         document.addEventListener('keydown', _gpEsc);
         var points = (state.profile.basic && state.profile.basic.points != null) ? state.profile.basic.points : 0;
@@ -2296,10 +2312,12 @@
         });
         function renderCwPanel(tab) {
             var panel = ov.querySelector('#gpCwPanel');
+            destroyOsb(panel);        // 清掉上一轮的悬浮滑块
             panel.innerHTML = '';
             if (tab === 'draw') renderDrawPanel(panel);
             else if (tab === 'craft') renderCraftPanel(panel);
             else renderShopPanel(panel);
+            osbInit(panel);           // 重绘后重新初始化悬浮滑块
         }
         // ================ 抽卡面板 ================
         function renderDrawPanel(panel) {
@@ -2433,7 +2451,14 @@
                 { id: 'showcase_theme_dark', name: T('暗夜深空'), price: 300, icon: '🌌', desc: T('深空黑色背景 + 星光点缀') },
                 { id: 'showcase_theme_ocean', name: T('深海蔚蓝'), price: 400, icon: '🌊', desc: T('蓝色渐变背景 + 海浪纹理') },
                 { id: 'showcase_theme_forest', name: T('森林秘境'), price: 500, icon: '🌲', desc: T('翠绿渐变背景 + 树叶纹理') },
-                { id: 'showcase_theme_sunset', name: T('落日余晖'), price: 600, icon: '🌅', desc: T('橙粉渐变背景 + 光晕效果') }
+                { id: 'showcase_theme_sunset', name: T('落日余晖'), price: 600, icon: '🌅', desc: T('橙粉渐变背景 + 光晕效果') },
+                // — 横幅皮肤（CSS 渐变，零后端资源） —
+                { id: 'banner_skin_forest', name: T('翠林秘境横幅'), price: 250, icon: '🌲', desc: T('翠绿与薄荷渐变横幅') },
+                { id: 'banner_skin_neon',   name: T('赛博霓虹横幅'), price: 300, icon: '🌆', desc: T('紫粉霓虹都市风横幅') },
+                { id: 'banner_skin_ocean',  name: T('深海微光横幅'), price: 350, icon: '🌊', desc: T('深蓝与青色渐变横幅') },
+                { id: 'banner_skin_aurora', name: T('极光星空横幅'), price: 400, icon: '🌌', desc: T('紫蓝极光渐变横幅') },
+                { id: 'banner_skin_lava',   name: T('熔岩烈焰横幅'), price: 450, icon: '🔥', desc: T('赤橙熔岩渐变横幅') },
+                { id: 'banner_skin_cherry', name: T('樱雪缤纷横幅'), price: 500, icon: '🌸', desc: T('粉白樱花渐变横幅') },
             ];
             var box = el('div', 'gp-shop-list');
             items.forEach(function (it) {
@@ -2454,7 +2479,12 @@
                             toast(T('购买成功！'));
                             points = res.data.points_left;
                             ov.querySelector('#gpPointsBadge').textContent = '⚡ ' + points;
-                            if (it.id.indexOf('showcase_theme_') === 0) {
+                            // 横幅皮肤购买成功 → 直接应用
+                            if (it.id.indexOf('banner_skin_') === 0) {
+                                api('PUT', '/api/profile/basic', { profile_banner_skin: it.id }).then(function () {
+                                    toast(T('横幅皮肤已应用，可在「编辑横幅」中更换'));
+                                });
+                            } else if (it.id.indexOf('showcase_theme_') === 0) {
                                 api('PUT', '/api/profile/basic', { profile_theme: it.id }).then(function () {
                                     toast(T('主题已应用！'));
                                 });
@@ -2470,61 +2500,205 @@
         renderCwPanel('draw');
     }
 
-    // ==================== 增强：背景横幅编辑器 ====================
+    // ==================== 增强：背景横幅编辑器 V2（固定尺寸·拖拽·预设横幅皮肤） ====================
     function openBackgroundEditor() {
         var curUrl = (state.profile.basic && state.profile.basic.profile_bg) || '';
+        var curSkin = (state.profile.basic && state.profile.basic.profile_banner_skin) || '';
+        var ownedItems = (state.profile.shop_items || []);
+        var curIsSelf = state.profile && state.profile.username;
+
+        // 预设横幅皮肤表（纯 CSS 渐变，零后端资源）
+        var BANNER_SKINS = [
+            { id: 'banner_skin_forest', name: T('翠林秘境'), icon: '🌲', cls: 'gp-bskin-forest' },
+            { id: 'banner_skin_neon',   name: T('赛博霓虹'), icon: '🌆', cls: 'gp-bskin-neon' },
+            { id: 'banner_skin_ocean',  name: T('深海微光'), icon: '🌊', cls: 'gp-bskin-ocean' },
+            { id: 'banner_skin_aurora', name: T('极光星空'), icon: '🌌', cls: 'gp-bskin-aurora' },
+            { id: 'banner_skin_lava',   name: T('熔岩烈焰'), icon: '🔥', cls: 'gp-bskin-lava' },
+            { id: 'banner_skin_cherry', name: T('樱雪缤纷'), icon: '🌸', cls: 'gp-bskin-cherry' },
+        ];
+        function isSkinOwned(id) { return ownedItems.indexOf(id) >= 0; }
+
         var ov = document.createElement('div');
         ov.className = 'gp-mask';
         ov.innerHTML = '<div class="gp-modal gp-bg-editor">' +
-            '<div class="gp-modal-title">' + T('编辑资料横幅') + '</div>' +
-            '<div class="gp-modal-body">' +
+            '<div class="gp-modal-title">' +
+              '<span>' + T('编辑资料横幅') + '</span>' +
+              '<button class="gp-modal-x" id="gpBgCloseX" title="' + T('关闭') + '">×</button>' +
+            '</div>' +
+            '<div class="gp-modal-body gp-bg-body">' +
+              // 预览区
               '<div class="gp-bg-preview" id="gpBgPreview">' +
-                (curUrl ? '<img src="' + assetUrl(curUrl) + '">' : '<span class="gp-bg-empty-hint">' + T('暂无横幅，默认使用主题渐变色') + '</span>') +
+                '<div class="gp-bg-preview-inner" id="gpBgPreviewInner">' +
+                  (curUrl ? '<img src="' + assetUrl(curUrl) + '">' :
+                   curSkin ? '' :
+                   '<div class="gp-bg-empty-hint">' + T('暂无横幅，默认使用主题渐变色') + '</div>') +
+                '</div>' +
+                '<div class="gp-bg-source-tag" id="gpBgSourceTag">' +
+                  (curUrl ? T('来源：自定义图片') : (curSkin ? T('来源：预设皮肤') : T('来源：默认'))) +
+                '</div>' +
               '</div>' +
-              '<input type="file" id="gpBgFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none">' +
-              '<div class="gp-bg-btns">' +
-                '<button class="gp-btn primary" id="gpBgPick">' + T('选择图片') + '</button>' +
-                (curUrl ? '<button class="gp-btn" id="gpBgClear">' + T('清除横幅') + '</button>' : '') +
+              // 拖拽上传区
+              '<div class="gp-bg-drop" id="gpBgDrop">' +
+                '<input type="file" id="gpBgFile" accept="image/png,image/jpeg,image/gif,image/webp">' +
+                '<div class="gp-bg-drop-ico">🖼️</div>' +
+                '<div class="gp-bg-drop-text">' + T('点击选择 / 拖拽横幅图片到这里') + '</div>' +
+                '<div class="gp-bg-drop-hint">' + T('建议尺寸 1920×360，不超过 8MB') + '</div>' +
               '</div>' +
-              '<div class="gp-bg-size-hint">' + T('建议尺寸 1920×360，不超过 8MB') + '</div>' +
+              // 预设横幅皮肤面板
+              '<div class="gp-bg-skins">' +
+                '<div class="gp-bg-skins-head">' +
+                  '<div class="gp-bg-skins-title">' + T('预设横幅皮肤') + '</div>' +
+                  '<div class="gp-bg-skins-hint">' + T('（积分商店购买后解锁）') + '</div>' +
+                '</div>' +
+                '<div class="gp-bg-skins-list" id="gpBgSkinsList"></div>' +
+              '</div>' +
             '</div>' +
             '<div class="gp-modal-foot">' +
-              '<button class="gp-btn" id="gpBgCancel">' + T('取消') + '</button>' +
-              '<button class="gp-btn primary" id="gpBgSave" disabled>' + T('保存') + '</button>' +
+              '<button class="gp-btn" id="gpBgClear">' + T('清除横幅') + '</button>' +
+              '<button class="gp-btn primary" id="gpBgSave" disabled>' + T('上传保存') + '</button>' +
             '</div>' +
           '</div>';
         document.body.appendChild(ov);
         var bodyScroll = ov.querySelector('.gp-modal-body');
         if (bodyScroll) osbInit(bodyScroll);
-        function gpClose() { destroyOsb(bodyScroll); document.removeEventListener('keydown', _gpEsc); if (ov.parentNode) document.body.removeChild(ov); }
+
+        var selectedFile = null;
+
+        // === 关闭 ===
+        function gpClose() {
+            if (selectedFile && !ov._saved) { if (!confirm(T('有未保存的图片，确定关闭？'))) return; }
+            if (selectedFile) URL.revokeObjectURL(selectedFile._previewUrl);
+            destroyOsb(bodyScroll);
+            document.removeEventListener('keydown', _gpEsc);
+            if (ov.parentNode) document.body.removeChild(ov);
+        }
         var _gpEsc = function (e) { if (e.key === 'Escape') gpClose(); };
         document.addEventListener('keydown', _gpEsc);
-        var selectedFile = null;
-        ov.querySelector('#gpBgPick').addEventListener('click', function () { ov.querySelector('#gpBgFile').click(); });
-        ov.querySelector('#gpBgFile').addEventListener('change', function (e) {
-            selectedFile = e.target.files[0];
-            if (!selectedFile) return;
-            if (selectedFile.size > 8 << 20) { toast(T('图片超过 8MB 限制')); selectedFile = null; return; }
-            var pv = ov.querySelector('#gpBgPreview');
-            pv.innerHTML = '<img src="' + URL.createObjectURL(selectedFile) + '">';
-            ov.querySelector('#gpBgSave').disabled = false;
-        });
-        if (curUrl) {
-            ov.querySelector('#gpBgClear').addEventListener('click', function () {
-                showConfirm(T('清除横幅'), T('确定要清除横幅并恢复默认渐变色吗？'), T('清除'), function () {
-                    api('DELETE', '/api/profile/background').then(function (res) {
-                        if (res && res.ok) {
+        ov.querySelector('#gpBgCloseX').addEventListener('click', gpClose);
+        var cancelBtn = ov.querySelector('#gpBgCancel'); if (cancelBtn) cancelBtn.addEventListener('click', gpClose);
+        ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
+
+        // === 清除横幅（清除图片+预设皮肤，恢复默认渐变） ===
+        function doClear() {
+            showConfirm(T('清除横幅'), T('确定要清除横幅并恢复默认渐变色吗？'), T('清除'), function () {
+                api('DELETE', '/api/profile/background').then(function (res) {
+                    if (res && res.ok) {
+                        // 同时清空 banner_skin
+                        api('PUT', '/api/profile/basic', { profile_banner_skin: '' }).then(function () {
                             toast(T('已清除'));
-                            gpClose();
-                            $('gpBg').style.backgroundImage = '';
+                            var bg = $('gpBg'); if (bg) { bg.style.backgroundImage = ''; bg.className = 'gp-bg'; }
                             state.profile.basic.profile_bg = '';
-                        } else { toast((res && res.err) || T('清除失败')); }
-                    });
-                }, true);
+                            state.profile.basic.profile_banner_skin = '';
+                            gpClose();
+                        });
+                    } else { toast((res && res.err) || T('清除失败')); }
+                });
+            }, true);
+        }
+        ov.querySelector('#gpBgClear').addEventListener('click', doClear);
+
+        // === 预览更新函数 ===
+        function updatePreview() {
+            var inner = ov.querySelector('#gpBgPreviewInner');
+            var tag = ov.querySelector('#gpBgSourceTag');
+            inner.className = 'gp-bg-preview-inner';
+            inner.innerHTML = '';
+            if (selectedFile) {
+                inner.innerHTML = '<img src="' + selectedFile._previewUrl + '">';
+                tag.textContent = T('来源：待上传图片');
+                ov.querySelector('#gpBgSave').disabled = false;
+            } else if (curUrl) {
+                inner.innerHTML = '<img src="' + assetUrl(curUrl) + '">';
+                tag.textContent = T('来源：自定义图片');
+                ov.querySelector('#gpBgSave').disabled = true;
+            } else if (curSkin) {
+                // 用 CSS 类渲染预设皮肤
+                var skin = BANNER_SKINS.find(function (s) { return s.id === curSkin; });
+                if (skin) inner.classList.add(skin.cls);
+                tag.textContent = T('来源：预设皮肤') + ' · ' + (skin ? skin.name : curSkin);
+                ov.querySelector('#gpBgSave').disabled = true;
+            } else {
+                inner.innerHTML = '<div class="gp-bg-empty-hint">' + T('暂无横幅，默认使用主题渐变色') + '</div>';
+                tag.textContent = T('来源：默认');
+                ov.querySelector('#gpBgSave').disabled = true;
+            }
+            renderSkinsList(); // 更新皮肤选中态
+        }
+
+        // === 预设横幅皮肤列表渲染 ===
+        function renderSkinsList() {
+            var list = ov.querySelector('#gpBgSkinsList');
+            list.innerHTML = '';
+            BANNER_SKINS.forEach(function (skin) {
+                var owned = isSkinOwned(skin.id);
+                var active = (curSkin === skin.id) && !selectedFile;
+                var cell = el('div', 'gp-bg-skin' + (owned ? '' : ' locked') + (active ? ' active' : ''));
+                cell.innerHTML =
+                    '<div class="gp-bg-skin-preview ' + skin.cls + '"></div>' +
+                    '<div class="gp-bg-skin-name">' + skin.icon + ' ' + skin.name + '</div>' +
+                    (active ? '<div class="gp-bg-skin-active">' + T('使用中') + '</div>' :
+                     owned ? '<div class="gp-bg-skin-apply">' + T('点击应用') + '</div>' :
+                     '<div class="gp-bg-skin-lock">' + T('未解锁') + '</div>');
+                if (owned && !active) {
+                    cell.addEventListener('click', function () { applySkin(skin.id); });
+                } else if (!owned) {
+                    cell.title = T('请到积分商店购买后解锁');
+                }
+                list.appendChild(cell);
             });
         }
-        ov.querySelector('#gpBgCancel').addEventListener('click', gpClose);
-        ov.addEventListener('click', function (e) { if (e.target === ov) gpClose(); });
+
+        // === 应用预设皮肤 ===
+        function applySkin(skinId) {
+            showConfirm(T('应用横幅皮肤'), T('确定要切换为该预设横幅皮肤吗？'), T('应用'), function () {
+                api('PUT', '/api/profile/basic', { profile_banner_skin: skinId }).then(function (res) {
+                    if (res && res.ok) {
+                        curSkin = skinId;
+                        curUrl = ''; // 预设皮肤和自定义图片互斥
+                        state.profile.basic.profile_banner_skin = skinId;
+                        state.profile.basic.profile_bg = '';
+                        // 关闭弹窗 + 刷新资料页
+                        toast(T('横幅皮肤已应用'));
+                        gpClose();
+                        api('GET', '/api/profile?username=' + encodeURIComponent(username)).then(function (s2) {
+                            if (s2 && s2.ok && s2.data) {
+                                state.profile.basic = state.profile.basic || {};
+                                state.profile.basic.profile_banner_skin = s2.data.basic && s2.data.basic.profile_banner_skin;
+                                state.profile.basic.profile_bg = s2.data.basic && s2.data.basic.profile_bg;
+                                renderProfile();
+                            }
+                        });
+                    } else { toast((res && res.err) || T('应用失败')); }
+                });
+            }, true);
+        }
+
+        // === 拖拽上传 ===
+        var drop = ov.querySelector('#gpBgDrop');
+        ['dragenter', 'dragover'].forEach(function (evt) {
+            drop.addEventListener(evt, function (e) { e.preventDefault(); drop.classList.add('drag-over'); });
+        });
+        ['dragleave', 'drop'].forEach(function (evt) {
+            drop.addEventListener(evt, function (e) { e.preventDefault(); drop.classList.remove('drag-over'); });
+        });
+        drop.addEventListener('drop', function (e) {
+            if (e.dataTransfer && e.dataTransfer.files) handleFile(e.dataTransfer.files[0]);
+        });
+        ov.querySelector('#gpBgFile').addEventListener('change', function (e) {
+            if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+            e.target.value = '';
+        });
+        function handleFile(file) {
+            if (!file) return;
+            if (!/image\/(png|jpeg|gif|webp)/.test(file.type)) { toast(T('仅支持 png/jpg/gif/webp')); return; }
+            if (file.size > 8 << 20) { toast(T('图片超过 8MB 限制')); return; }
+            if (selectedFile && selectedFile._previewUrl) URL.revokeObjectURL(selectedFile._previewUrl);
+            file._previewUrl = URL.createObjectURL(file);
+            selectedFile = file;
+            updatePreview();
+        }
+
+        // === 上传保存 ===
         ov.querySelector('#gpBgSave').addEventListener('click', function () {
             if (!selectedFile) { toast(T('请先选择要上传的图片')); return; }
             var fd = new FormData();
@@ -2537,15 +2711,21 @@
                 try {
                     var res = JSON.parse(xhr.responseText);
                     if (res.ok && res.data && res.data.url) {
+                        ov._saved = true;
                         $('gpBg').style.backgroundImage = 'url(' + assetUrl(res.data.url) + ')';
                         state.profile.basic.profile_bg = res.data.url;
+                        state.profile.basic.profile_banner_skin = ''; // 后端已自动清除，前端同步
                         toast(T('横幅已更新'));
                         gpClose();
                     } else { toast((res && res.err) || T('上传失败')); }
                 } catch (e) { toast(T('上传失败')); }
             };
+            xhr.onerror = function () { toast(T('上传失败')); };
             xhr.send(fd);
         });
+
+        // 初始渲染
+        updatePreview();
     }
 
     // ==================== 增强：经验值历史查看器（支持万级数据·分页·筛选·时间轴分组） ====================
