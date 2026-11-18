@@ -32,6 +32,8 @@ const (
 	qrLoginTTL     = 2 * time.Minute  // 二维码有效期（微信同款约 2 分钟，过期置灰刷新）
 	qrLoginCodeTTL = 60 * time.Second // 确认后签发的一次性登录码有效期
 	qrLoginLimitN  = 30               // 单 IP 每分钟 create 次数上限（防刷）
+	qrPollLimitN   = 120              // 单 IP 每分钟 poll 次数上限（防刷：高频轮询 DoS + 抢码窗口）
+	qrSweepEvery   = 5 * time.Minute  // qrLimits / qrSessions 定期清理周期
 )
 
 // QRLoginCodePrefix 扫码登录通道登录帧 content 前缀（复用 msg_type=7 登录链路，服务端识别走免密码通道）
@@ -93,6 +95,17 @@ func qrSweepExpired() {
 	}
 }
 
+// qrSweepLimitsLocked 阶段二百九十八补：清理 qrLimits map 中长期无新请求的 IP key（持 qrLimitMu 锁调用）
+// 原实现只惰性清理时间窗内的过期请求，但整个 IP key 永不删除 → 长期运行下 map 无限增长
+// 清理策略：整个时间窗全部过期（最新请求距 now > 1 分钟）则删除该 IP key
+func qrSweepLimitsLocked(now time.Time) {
+	for ip, wins := range qrLimits {
+		if len(wins) == 0 || now.Sub(wins[len(wins)-1]) > time.Minute {
+			delete(qrLimits, ip)
+		}
+	}
+}
+
 // qrClientIP 客户端真实 IP 归口（X-Forwarded-For 首跳优先，回退 RemoteAddr；限频用）
 func qrClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
@@ -136,6 +149,7 @@ func (s *Server) HandleQRLoginCreate(w http.ResponseWriter, r *http.Request) {
 			fresh = append(fresh, t)
 		}
 	}
+	qrSweepLimitsLocked(now) // 阶段二百九十八补：顺便清理长时间无请求的 IP key
 	if len(fresh) >= qrLoginLimitN {
 		qrLimitMu.Unlock()
 		qrWriteJSON(w, map[string]interface{}{"ok": false, "err": "too_many"})
@@ -174,6 +188,28 @@ func (s *Server) HandleQRLoginCreate(w http.ResponseWriter, r *http.Request) {
 // confirmed 时一次性下发登录码 code 并置 used（重复轮询/并发轮询仅首个拿到，拿码后即停轮询）
 // 响应不携带用户名（防枚举——账号归属仅手机确认页可见）
 func (s *Server) HandleQRLoginPoll(w http.ResponseWriter, r *http.Request) {
+	// 阶段二百九十八补：poll 单 IP 限频（120 次/分钟，防高频轮询 DoS + 抢码窗口）
+	// 与 create 共享 qrLimits / qrLimitMu，key 加 ":poll" 后缀分桶避免和 create 互抢配额
+	ip := qrClientIP(r)
+	now := time.Now()
+	pollKey := ip + ":poll"
+	qrLimitMu.Lock()
+	wins := qrLimits[pollKey]
+	fresh := wins[:0]
+	for _, t := range wins {
+		if now.Sub(t) < time.Minute {
+			fresh = append(fresh, t)
+		}
+	}
+	qrSweepLimitsLocked(now) // 阶段二百九十八补：顺便清理长时间无请求的 IP key（防 qrLimits map 无限增长）
+	if len(fresh) >= qrPollLimitN {
+		qrLimitMu.Unlock()
+		qrWriteJSON(w, map[string]interface{}{"state": "expired"}) // 超限不返回 too_many，统一过期避免暴露限频策略
+		return
+	}
+	qrLimits[pollKey] = append(fresh, now)
+	qrLimitMu.Unlock()
+
 	id := r.URL.Query().Get("id")
 	qrMu.Lock()
 	sess, ok := qrSessions[id]
@@ -289,10 +325,31 @@ func (s *Server) HandleQRSign(c *Client, msg *protocol.Message) {
 			reply(false, "请先扫描二维码", "")
 			return
 		}
-		sess.Username = c.username
-		sess.State = qrStateConfirmed
+		// 阶段二百九十八补：确认者账号状态前置检查（WS 连接建立时账号正常，但登录后可能被管理员封禁/注销）
+		// 不持锁查 DB 避免阻塞其他扫码请求；若账号异常则直接拒绝，不给 PC 端签发登录码
 		qrMu.Unlock()
-		logger.Info("扫码登录：%s 已确认二维码 %s（%s 端待登录）", c.username, sess.ID, sess.Platform)
+		var u model.User
+		if err := store.DB.Where("username = ?", c.username).First(&u).Error; err != nil {
+			reply(false, "账号状态异常，请重新登录后再试", "")
+			return
+		}
+		if rejectMsg := userStatusRejectMsg(&u); rejectMsg != "" {
+			logger.Warn("扫码登录确认被账号状态拦截：username=%s reason=%s", c.username, rejectMsg)
+			reply(false, rejectMsg, "")
+			return
+		}
+		qrMu.Lock()
+		// 复核：锁释放期间二维码可能过期/被其他手机确认
+		sess2, ok2 := qrSessions[body.QRID]
+		if !ok2 || sess2.State != qrStateScanned || time.Now().After(sess2.Expires) {
+			qrMu.Unlock()
+			reply(false, "二维码状态已变化，请重新扫描", "")
+			return
+		}
+		sess2.Username = c.username
+		sess2.State = qrStateConfirmed
+		qrMu.Unlock()
+		logger.Info("扫码登录：%s 已确认二维码 %s（%s 端待登录）", c.username, sess2.ID, sess2.Platform)
 		reply(true, "", "")
 	case "cancel":
 		// 手机端取消：回退 waiting（PC 端轮询自动回到待扫描态，可再次扫码）
