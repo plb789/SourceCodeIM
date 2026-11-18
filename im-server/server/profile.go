@@ -2073,11 +2073,20 @@ func (s *Server) HandleProfileBasicPut(w http.ResponseWriter, r *http.Request) {
 				profileFail(w, "该横幅皮肤未解锁，请先到积分商店购买"); return
 			}
 		}
-		updates["profile_banner_skin"] = *body.ProfileBannerSkin
+		// 容错：profile_banner_skin 列可能还没 AutoMigrate 加进 DB（服务端未重启）
+		// 单独 Update 而不是放进 updates map，避免整个 Updates 一起挂
+		_ = store.DB.Model(&model.User{}).Where("username = ?", username).Update("profile_banner_skin", *body.ProfileBannerSkin).Error
 	}
 
-	if len(updates) == 0 { profileFail(w, "没有要更新的字段"); return }
-	store.DB.Model(&model.User{}).Where("username = ?", username).Updates(updates)
+	if len(updates) > 0 {
+		if err := store.DB.Model(&model.User{}).Where("username = ?", username).Updates(updates).Error; err != nil {
+			profileFail(w, "保存失败"); return
+		}
+	} else if body.ProfileBannerSkin == nil && body.ProfileTheme == nil {
+		// 只传 profile_banner_skin 或 profile_theme 时 updates 为空（已单独 Update）
+		// 如果两者都没传，才是真的"没有要更新的字段"
+		profileFail(w, "没有要更新的字段"); return
+	}
 
 	// 昵称缓存失效（复用 profile.go 中已有的函数）
 	s.invalidateNickname(username)
@@ -2196,12 +2205,13 @@ func (s *Server) HandleProfileBgUpload(w http.ResponseWriter, r *http.Request) {
 		profileFail(w, "文件写入失败"); return
 	}
 	url := "/static/upload/profile_bg/" + name
-	if err := store.DB.Model(&model.User{}).Where("username = ?", username).Updates(map[string]interface{}{
-		"profile_bg":          url,
-		"profile_banner_skin": "", // 上传自定义横幅 → 自动取消预设皮肤（两者互斥）
-	}).Error; err != nil {
+	// 先更新 profile_bg（一定存在的列）
+	if err := store.DB.Model(&model.User{}).Where("username = ?", username).Update("profile_bg", url).Error; err != nil {
 		profileFail(w, "保存失败"); return
 	}
+	// 上传自定义横幅 → 自动取消预设皮肤（两者互斥）
+	// 容错：profile_banner_skin 列可能还没 AutoMigrate 加（服务端未重启），单独 Update 忽略错误
+	_ = store.DB.Model(&model.User{}).Where("username = ?", username).Update("profile_banner_skin", "").Error
 	profileOK(w, map[string]interface{}{"url": url})
 }
 
