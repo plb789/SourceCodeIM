@@ -4645,6 +4645,83 @@ html.m .mobile-plus-panel:not(.hidden) {
     transition: background 0.15s, transform 0.15s;
 }
 
+/* ===== 好友展示（资料页展示柜 Steam 风格） ===== */
+/* 外层网格 */
+.gp-friends-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 14px;
+}
+/* 单个好友 cell：头像 + 名字垂直居中，不固定宽 */
+.gp-friend-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    min-width: 56px;
+    max-width: 72px;
+    padding: 4px 3px;
+    border-radius: 8px;
+    transition: background 0.15s;
+}
+.gp-friend-cell:hover {
+    background: var(--hover, rgba(255,255,255,0.06));
+}
+/* 头像：48px 圆形，比评论头像大一号 */
+.gp-friend-av {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--primary, #2a7cfb);
+    color: #fff;
+    font-size: 18px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+    position: relative;
+    transition: transform 0.18s ease;
+}
+.gp-friend-cell:hover .gp-friend-av {
+    transform: scale(1.06);
+}
+.gp-friend-av img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+/* 在线态：头像右下角绿点（比外圈描边更精致，不抢头像） */
+.gp-friend-av.gp-online::after {
+    content: '';
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--gp-friend-online, #22c55e);
+    border: 2px solid var(--bg, #111);
+    box-sizing: border-box;
+}
+/* 名字：单行 ellipsis 截断，鼠标 hover 显示完整名（title） */
+.gp-friend-name {
+    font-size: 12px;
+    color: var(--text);
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
+    text-align: center;
+}
+.gp-friend-cell:hover .gp-friend-name {
+    color: var(--primary, #2a7cfb);
+}
+
 /* ===== 展示柜编辑器：槽位上限状态 ===== */
 .gp-showcase-hint {
     font-size: 11.5px;

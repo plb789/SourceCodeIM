@@ -3006,21 +3006,34 @@
         }
         if (type === 'friends') {
             var box = el('div', 'gp-friends-grid');
-            box.style.display = 'flex'; box.style.gap = '10px'; box.style.flexWrap = 'wrap';
-            (state.profile.friends || []).slice(0, 8).forEach(function (f) {
+            // 最多展示 12 个（Steam 默认 8~12），按在线状态优先排序
+            var frList = (state.profile.friends || []).slice();
+            frList.sort(function (a, b) {
+                // 在线的排前面
+                return (b.is_online ? 1 : 0) - (a.is_online ? 1 : 0);
+            });
+            frList.slice(0, 12).forEach(function (f) {
                 var cell = el('div', 'gp-friend-cell');
-                cell.style.width = '44px'; cell.style.textAlign = 'center'; cell.style.cursor = 'pointer';
-                var fav = el('div', 'gp-cmt-av');
-                fav.style.width = '42px'; fav.style.height = '42px';
-                if (f.avatar) { var fi = document.createElement('img'); fi.src = assetUrl(f.avatar); fav.appendChild(fi); }
-                else fav.textContent = initialOf(f.nickname || f.username);
-                if (f.is_online) {
-                    fav.classList.add('gp-online');
+                // 头像
+                var fav = el('div', 'gp-friend-av');
+                if (f.is_online) fav.classList.add('gp-online');
+                var fullName = f.nickname || f.username || '';
+                if (f.avatar) {
+                    var fi = document.createElement('img');
+                    fi.src = assetUrl(f.avatar);
+                    fi.alt = fullName;
+                    fav.appendChild(fi);
+                } else {
+                    fav.textContent = initialOf(fullName);
                 }
                 cell.appendChild(fav);
-                cell.appendChild(el('div', '', (f.nickname || f.username).slice(0, 4)));
+                // 名字：CSS text-overflow ellipsis 截断 + hover title 显示完整名
+                var nameEl = el('div', 'gp-friend-name', fullName);
+                nameEl.title = fullName;
+                cell.appendChild(nameEl);
                 // 点击好友头像 → 打开该用户的 Steam 风格资料页（跳过自己）
                 if (f.username && f.username !== username) {
+                    cell.title = fullName + T(' — 点击查看资料');
                     cell.addEventListener('click', function () { openProfile(f.username); });
                 }
                 box.appendChild(cell);
