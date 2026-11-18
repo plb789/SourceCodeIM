@@ -7,6 +7,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RegisterRateLimitConfig 阶段二百九十八：注册防刷（IP 限流）配置
+type RegisterRateLimitConfig struct {
+	Enabled      bool `yaml:"enabled"`        // 总开关，默认 true（开启）
+	MaxPer30s    int  `yaml:"max_per_30s"`    // 同 IP 30s 内注册请求上限（无论成功失败，超限立即拒绝；默认 3）
+	MaxPerDay    int  `yaml:"max_per_day"`    // 同 IP 24h 内注册成功账号数上限（防批量脚本；默认 5）
+	FailLock     int  `yaml:"fail_lock"`      // 连续注册失败次数阈值（默认 5）
+	FailLockMins int  `yaml:"fail_lock_mins"` // 锁定时长（分钟；默认 10）
+}
+
 // Config 服务端全局配置
 type Config struct {
 	// WebSocket 监听地址
@@ -58,6 +67,13 @@ type Config struct {
 	// 指针语义区分"未配置"与"显式写 0"：配置文件缺省该键=回退默认 100（存量部署零回归）；
 	// 写 0=注册不赠送积分（Load 归一，负数同 0）。修改后需重启服务端生效
 	RegisterGiftPoints *float64 `yaml:"register_gift_points"`
+	// 阶段二百九十八：注册防刷（IP 限流，修改后需重启服务端生效）。
+	// 关闭（enabled=false）=完全不做 IP 维度校验（不推荐）；开启（默认）=三层兜底：
+	//  ① max_per_30s：同 IP 30s 内注册请求上限（无论成功失败，超限立即拒绝）
+	//  ② max_per_day：同 IP 24h 内注册成功账号数上限（防批量脚本）
+	//  ③ fail_lock：注册连续失败 N 次后锁定 fail_lock_mins 分钟（防爆破/穷举）
+	//  Redis 不可用时自动降级跳过限流（仅记日志），不阻塞正常注册流程
+	RegisterRateLimit RegisterRateLimitConfig `yaml:"register_rate_limit"`
 	// 全局一键清空积分开关（allow_points_clear）：控制后台"一键清空所有账号积分"功能是否允许执行。
 	// true  = 允许（默认，与新增功能零回归），管理员通过密码二次验证后可执行全局清零
 	// false = 禁止，即便管理员权限+密码正确，接口也会拒绝并返回"功能已禁用"提示。修改后需重启生效
@@ -772,6 +788,14 @@ func Default() *Config {
 		// 阶段一四五：注册开关默认开启（与历史"首次登录即注册"行为一致，存量部署零回归；
 		// 需要收紧为"仅显式注册"时在 config.yaml 中置 false）
 		RegisterEnabled: true,
+		// 阶段二百九十八：注册防刷默认开启，三层兜底阈值
+		RegisterRateLimit: RegisterRateLimitConfig{
+			Enabled:      true,
+			MaxPer30s:    3,
+			MaxPerDay:    5,
+			FailLock:     5,
+			FailLockMins: 10,
+		},
 		// 原实现：UploadDir: "../im-client/web/static/upload"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
 		// 现改为留空，由 Load 基于 WebDir 推导（锚定 exe 所在目录，任意目录启动均正确）
 		UploadDir:   "",
@@ -904,6 +928,30 @@ func Load() *Config {
 	if cfg.AllowPointsClear == nil {
 		v := true
 		cfg.AllowPointsClear = &v
+	}
+	// 阶段二百九十八：注册防刷配置兜底——yaml.Unmarshal 空块 {} 或缺字段会把
+	// Default() 正常值覆盖为零值（Enabled=false / 全 0），需要在 Load 里补归一
+	// 策略：Enabled 尊重用户显式设置（用户写了 false 就关掉），其他 0 值字段回退默认
+	rl := &cfg.RegisterRateLimit
+	if !rl.Enabled {
+		// 用户显式写 enabled: false → 尊重关闭；但如果是因为空块导致的零值（Enabled=false 但其他也全 0），
+		// 可能不是用户本意。策略：只要有一个正数值，就认为是用户显式配置，尊重 Enabled；
+		// 全部为零值（典型空块场景）→ 整体回退 Default 正常值，默认开启防刷
+		if rl.MaxPer30s == 0 && rl.MaxPerDay == 0 && rl.FailLock == 0 && rl.FailLockMins == 0 {
+			*rl = Default().RegisterRateLimit
+		}
+	}
+	if rl.MaxPer30s <= 0 {
+		rl.MaxPer30s = 3
+	}
+	if rl.MaxPerDay <= 0 {
+		rl.MaxPerDay = 5
+	}
+	if rl.FailLock <= 0 {
+		rl.FailLock = 5
+	}
+	if rl.FailLockMins <= 0 {
+		rl.FailLockMins = 10
 	}
 	if cfg.RecallWindow <= 0 {
 		cfg.RecallWindow = 120

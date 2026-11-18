@@ -588,8 +588,19 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	user, err := verifyUser(username, password)
 	if err == ErrUserNotFound {
 		if s.cfg.RegisterEnabled {
-			// 注册开关开启：尝试注册（全局群废弃：注册名单缓存已随全局群离线入队归口删除）
-			user, err = registerUser(username, password, s.registerGiftPoints())
+			// 阶段二百九十八：自动注册也加 IP 限流（脚本可绕过注册页直接打登录接口）
+			if rerr := checkRegisterRateLimit(c.ip, &s.cfg.RegisterRateLimit); rerr != nil {
+				logger.Warn("自动注册被限流：ip=%s err=%v", c.ip, rerr)
+				err = rerr // 限流错误也是业务错误，isAuthBusinessError 已覆盖，原样下发客户端
+			} else {
+				// 注册开关开启：尝试注册（全局群废弃：注册名单缓存已随全局群离线入队归口删除）
+				user, err = registerUser(username, password, s.registerGiftPoints())
+				if err != nil {
+					markRegisterFail(c.ip, &s.cfg.RegisterRateLimit) // 注册失败计入连续失败
+				} else {
+					markRegisterSuccess(c.ip) // 注册成功清失败计数 + 累加成功计数
+				}
+			}
 		} else {
 			// 注册开关关闭：登录链路不做静默注册，明确提示需先注册账号
 			err = ErrNeedRegister
@@ -720,8 +731,24 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 // 说明：注册页为短连接，注册成功不在此登录（客户端保存凭据后跳转 index.html 走正式登录链路），
 // 失败时同步写错误后关闭连接（与 handleLogin 错误同模式，防异步队列竞态导致提示丢失）
 func (s *Server) handleRegister(c *Client, msg *protocol.Message) {
-	user, err := registerUser(msg.FromUser, msg.Content, s.registerGiftPoints())
+	// 阶段二百九十八：注册防刷 IP 限流前置检查（独立注册页入口）
+	if err := checkRegisterRateLimit(c.ip, &s.cfg.RegisterRateLimit); err != nil {
+		logger.Warn("注册被限流：ip=%s err=%v", c.ip, err)
+		c.SendErrorAndClose(err.Error())
+		return
+	}
+	// 阶段二百九十八：解析注册信令 content（兼容老客户端纯密码 / 新客户端 JSON 信封）
+	password, hp, pageOpenMs := parseRegisterContent(msg.Content)
+	// 阶段二百九十八：前端行为检测（蜜罐 + 停留时间）——命中可疑信号直接拒绝，不入注册流程
+	if err := checkRegisterBotSignals(c.ip, hp, pageOpenMs); err != nil {
+		logger.Warn("注册行为检测命中：ip=%s err=%v", c.ip, err)
+		c.SendErrorAndClose(err.Error())
+		return
+	}
+	user, err := registerUser(msg.FromUser, password, s.registerGiftPoints())
 	if err != nil {
+		// 阶段二百九十八：注册失败——计入失败计数（连续失败达阈值后下次请求自动锁定）
+		markRegisterFail(c.ip, &s.cfg.RegisterRateLimit)
 		// 错误分级：仅业务校验错误（用户名已存在/密码不能为空等）原样下发；
 		// 底层依赖错误统一下发通用中文提示，完整错误记日志排查
 		userErrMsg := err.Error()
@@ -732,6 +759,8 @@ func (s *Server) handleRegister(c *Client, msg *protocol.Message) {
 		c.SendErrorAndClose(userErrMsg)
 		return
 	}
+	// 阶段二百九十八：注册成功——清失败计数 + 累加成功计数（24h 窗口）
+	markRegisterSuccess(c.ip)
 	// 注册成功：回执 ok（不登录不建会话），连接交由客户端自行断开
 	resp := protocol.Message{
 		MsgType: protocol.MsgTypeRegister,

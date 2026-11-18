@@ -120,6 +120,12 @@
                     </span>
                     <input type="password" id="reg-password2" placeholder="请再次输入密码" autocomplete="new-password">
                 </div>
+                <div style="position:absolute;left:-9999px;top:-9999px;opacity:0;width:1px;height:1px;overflow:hidden;">
+                    <!-- 阶段二百九十八：Honeypot 蜜罐字段（display:none 样式机器人会忽略用 tabIndex/autocomplete 等方式自动填所有 input）
+                         人类不会触碰、不会填写；脚本自动化工具（robotframework / selenium bot / php-curl 等）会自动填充所有 input
+                         后端也会二次校验 hp 非空直接拒绝（parseRegisterContent → checkRegisterBotSignals） -->
+                    <input type="text" id="reg-hp" tabindex="-1" autocomplete="off" aria-hidden="true" spellcheck="false">
+                </div>
                 <button id="register-btn">注 册</button>
                 <p class="login-hint">已有账号？<a class="login-reg-link" href="index.html?__app=1">返回登录</a></p>
                 <p class="login-form-foot" id="brand-copy">© 2026 即时通 · 山西梗阳新能源有限公司</p>
@@ -146,6 +152,11 @@
         var toastEl = document.getElementById('reg-toast');
         var toastTimer = null;
         var submitting = false;
+        // 阶段二百九十八：前端行为检测相关状态
+        var pageOpenTime = Date.now();           // 页面打开毫秒时间戳（停留时间检测）
+        var cooldownLeft = 0;                    // 注册按钮冷却剩余秒
+        var cooldownTimer = null;                // 冷却倒计时定时器句柄
+        var btnDefaultText = btn.textContent;    // 缓存按钮默认文案
 
         // ===== 自绘 Toast 提示 =====
         function showToast(text, isError) {
@@ -173,37 +184,103 @@
 
         function setSubmitting(v) {
             submitting = v;
-            btn.disabled = v;
-            btn.textContent = v ? I18N.t('注册中…') : I18N.t('注 册');
+            btn.disabled = v || cooldownLeft > 0;
+            btn.textContent = v ? I18N.t('注册中…') : (cooldownLeft > 0 ? ('请稍等 ' + cooldownLeft + 's') : btnDefaultText);
+        }
+
+        // ===== 阶段二百九十八：冷却倒计时（注册成功后 60s 内禁用按钮，防连点/脚本重复提交） =====
+        function startCooldown(seconds) {
+            cooldownLeft = seconds;
+            btn.disabled = true;
+            btn.textContent = '请稍等 ' + cooldownLeft + 's';
+            if (cooldownTimer) clearInterval(cooldownTimer);
+            cooldownTimer = setInterval(function () {
+                cooldownLeft--;
+                if (cooldownLeft <= 0) {
+                    clearInterval(cooldownTimer);
+                    cooldownTimer = null;
+                    btn.disabled = false;
+                    btn.textContent = btnDefaultText;
+                } else {
+                    btn.textContent = '请稍等 ' + cooldownLeft + 's';
+                }
+            }, 1000);
         }
 
         // ===== 注册提交 =====
         function doRegister() {
             if (submitting) return;
+            if (cooldownLeft > 0) { showToast('请稍后再试', true); return; }
+
             var username = usernameEl.value.trim();
             var password = passwordEl.value;
             var password2 = password2El.value;
             if (!username) { showToast(I18N.t('请输入账号'), true); usernameEl.focus(); return; }
             if (!password) { showToast(I18N.t('请输入密码'), true); passwordEl.focus(); return; }
             if (password !== password2) { showToast(I18N.t('两次输入的密码不一致'), true); password2El.focus(); return; }
+
+            // ===== 阶段二百九十八：前端行为检测（蜜罐 + 停留时间） =====
+            // ① 蜜罐检测：隐藏 input 非空 → 自动拒绝（后端也会再次校验，双重保险）
+            var hp = document.getElementById('reg-hp');
+            if (hp && hp.value.trim() !== '') {
+                // 直接清空并拒绝，给通用提示不暴露蜜罐存在（防止脚本反向学习）
+                if (hp) hp.value = '';
+                showToast('注册请求异常，请稍后重试', true);
+                return;
+            }
+            // ② 停留时间检测：页面打开到提交 < 2s → 脚本秒级提交（人类不可能）
+            var spend = Date.now() - pageOpenTime;
+            if (spend < 2000) {
+                showToast('注册过快，请稍后重试', true);
+                return;
+            }
+
             setSubmitting(true);
-            // 独立注册通道：短连接发 REGISTER 信令，服务端校验（重名/保留字/空值）后回执
-            IMSocket.register(username, password, function (ok, text) {
+
+            // ===== 阶段二百九十八：短连接发 REGISTER 信令，content 为 JSON 信封 =====
+            // 信封格式：{"p":"密码","hp":"","ts":页面打开毫秒时间戳}
+            // 后端 parseRegisterContent 自动兼容老客户端纯密码格式（零回归）
+            var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+            var url = proto + location.host + '/ws';
+            var regWs = new WebSocket(url);
+            var settled = false;
+            var done = function (ok, text) {
+                if (settled) return;
+                settled = true;
+                try { regWs.close(); } catch (e) {}
                 if (ok) {
                     // 注册成功：凭据写入与 chat.js saveAuth 同格式（登录持久化），
                     // 跳转 index.html 由自动登录链路完成正式登录（走 LOGIN_RESP 完成全部登录推送）
-                    try {
-                        localStorage.setItem('im_auth', btoa(encodeURIComponent(JSON.stringify({ u: username, p: password }))));
-                    } catch (e) {}
+                    try { localStorage.setItem('im_auth', btoa(encodeURIComponent(JSON.stringify({ u: username, p: password })))); } catch (e) {}
                     showToast(text || I18N.t('注册成功，正在进入…'), false);
-                    setTimeout(function () {
-                        location.href = 'index.html?__app=1';
-                    }, 900);
+                    startCooldown(60); // 阶段二百九十八：注册成功后 60s 冷却
+                    setTimeout(function () { location.href = 'index.html?__app=1'; }, 900);
                 } else {
                     setSubmitting(false);
                     showToast(text || I18N.t('注册失败，请稍后重试'), true);
                 }
-            });
+            };
+            regWs.onopen = function () {
+                var envelope = { p: password, hp: (hp ? hp.value : ''), ts: pageOpenTime };
+                regWs.send(JSON.stringify({
+                    msg_type: IMSocket.MSG ? IMSocket.MSG.REGISTER : 85,
+                    from_user: username,
+                    content: JSON.stringify(envelope)
+                }));
+            };
+            regWs.onmessage = function (e) {
+                var msg;
+                try { msg = JSON.parse(e.data); } catch (err) { return; }
+                if (!msg || msg.msg_type !== (IMSocket.MSG ? IMSocket.MSG.REGISTER : 85)) {
+                    if (msg && msg.msg_type === IMSocket.MSG.ERROR) {
+                        done(false, msg.content);
+                    }
+                    return;
+                }
+                done(msg.content === 'ok', msg.content === 'ok' ? '' : msg.content);
+            };
+            regWs.onerror = function () { done(false, '网络连接失败，请检查网络后重试'); };
+            regWs.onclose = function () { setTimeout(function () { if (!settled) done(false, '连接已断开，请稍后重试'); }, 500); };
         }
 
         btn.addEventListener('click', doRegister);
