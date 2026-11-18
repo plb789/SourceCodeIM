@@ -136,7 +136,7 @@
         body.className = 'ach-toast-body';
         var title = document.createElement('div');
         title.className = 'ach-toast-title';
-        title.textContent = t('成就解锁');
+        title.textContent = p.title || t('成就解锁');
         var name = document.createElement('div');
         name.className = 'ach-toast-name';
         name.textContent = p.name || '';
@@ -212,10 +212,12 @@
     window.AchievementToast = {
         show: function (payload) {
             console.debug('[ach-toast] show:', payload && payload.code, 'queue=', queue.length);
-            if (!payload || !payload.code) return;
+            if (!payload) return;
             var now = Date.now();
-            if (recent[payload.code] && now - recent[payload.code] < DEDUP_MS) return; // 竞态去重
-            recent[payload.code] = now;
+            // code 可选：无 code 场景（如上传截图得经验）自动生成一次性 code，不参与去重
+            var dedupCode = payload.code || ('__nocode_' + now + '_' + Math.random().toString(36).slice(2, 7));
+            if (payload.code && recent[dedupCode] && now - recent[dedupCode] < DEDUP_MS) return; // 竞态去重（仅对有 code 的生效）
+            if (payload.code) recent[dedupCode] = now;
             // 清理过期去重键（防长期运行 map 膨胀）
             for (var k in recent) {
                 if (Object.prototype.hasOwnProperty.call(recent, k) && now - recent[k] >= DEDUP_MS) delete recent[k];

@@ -2199,6 +2199,24 @@
                             success++;
                             gridUpdateStatus(idx, T('✓ 成功'));
                             slot.status = 'ok';
+                            // 上传成功 → 弹经验 toast（服务端返回 exp_gain / level_up / new_level）
+                            if (res.data) {
+                                var expGain = parseInt(res.data.exp_gain, 10) || 0;
+                                var lvlUp = !!res.data.level_up;
+                                var newLv = res.data.new_level || 0;
+                                if (expGain > 0 && window.AchievementToast) {
+                                    window.AchievementToast.show({
+                                        title: T('获得经验'),
+                                        name: T('上传截图'),
+                                        desc: f.file.name || T('截图上传成功'),
+                                        icon: '',
+                                        rarity: 0,
+                                        exp_reward: expGain,
+                                        level_up: lvlUp,
+                                        new_level: newLv,
+                                    });
+                                }
+                            }
                         } else {
                             fail++;
                             gridUpdateStatus(idx, T('✗ ') + (res.err || T('失败')));

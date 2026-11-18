@@ -1319,6 +1319,7 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 	}
 
 	expGain := 5 // 上传截图 +5 EXP
+	var newExp int64
 	var newLevel int
 	var levelUp bool
 
@@ -1331,7 +1332,7 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 		var user model.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("username = ?", username).First(&user).Error; err != nil {
-			return nil // 用户不存在（理论上不会），经验不发但截图仍生效
+			return err // 登录用户必然存在；FOR UPDATE 失败意味着数据库异常，整体回滚
 		}
 		newExp := user.Exp + int64(expGain)
 		newLevel = calcLevelFromExp(int(newExp))
@@ -1339,16 +1340,18 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 		updates := map[string]interface{}{"exp": newExp}
 		if levelUp {
 			updates["level"] = newLevel
-			tx.Model(&user).Updates(updates)
-			// 等级提升时创建等级徽章
-			tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.UserBadge{
+			// 等级徽章 OnConflict DoNothing 防并发重复发（同 achUnlockCore）
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.UserBadge{
 				Username: user.Username, Type: "level",
 				Code: "lv" + strconv.Itoa(newLevel),
 				Name: "等级 " + strconv.Itoa(newLevel),
 				Icon: "", Desc: "Steam 同款个人等级徽章",
-			})
-		} else {
-			tx.Model(&user).Updates(updates)
+			}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&user).Updates(updates).Error; err != nil {
+			return err
 		}
 		// 3. 经验日志
 		return tx.Create(&model.ProfileExpLog{
@@ -1364,7 +1367,11 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 		profileFail(w, "数据库写入失败: "+err.Error()); return
 	}
 
-	resp := map[string]interface{}{"id": ss.ID, "url": url, "exp_gain": expGain}
+	resp := map[string]interface{}{
+		"id": ss.ID, "url": url,
+		"exp_gain": expGain,
+		"new_exp":  newExp,
+	}
 	if levelUp {
 		resp["level_up"] = true
 		resp["new_level"] = newLevel
