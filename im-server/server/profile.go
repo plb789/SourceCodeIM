@@ -1317,11 +1317,59 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 		Username: username, Type: ssType, URL: url,
 		Title: title, GameID: uint(gameID),
 	}
-	if err := store.DB.Create(&ss).Error; err != nil {
+
+	expGain := 5 // 上传截图 +5 EXP
+	var newLevel int
+	var levelUp bool
+
+	err = store.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. 创建截图记录
+		if err := tx.Create(&ss).Error; err != nil {
+			return err
+		}
+		// 2. 给用户加经验（行锁防并发）
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ?", username).First(&user).Error; err != nil {
+			return nil // 用户不存在（理论上不会），经验不发但截图仍生效
+		}
+		newExp := user.Exp + int64(expGain)
+		newLevel = calcLevelFromExp(int(newExp))
+		levelUp = newLevel > user.Level
+		updates := map[string]interface{}{"exp": newExp}
+		if levelUp {
+			updates["level"] = newLevel
+			tx.Model(&user).Updates(updates)
+			// 等级提升时创建等级徽章
+			tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.UserBadge{
+				Username: user.Username, Type: "level",
+				Code: "lv" + strconv.Itoa(newLevel),
+				Name: "等级 " + strconv.Itoa(newLevel),
+				Icon: "", Desc: "Steam 同款个人等级徽章",
+			})
+		} else {
+			tx.Model(&user).Updates(updates)
+		}
+		// 3. 经验日志
+		return tx.Create(&model.ProfileExpLog{
+			Username: username, Change: expGain, Reason: "upload_screenshot",
+			Detail:  "上传截图" + func() string {
+				if title != "" { return "「" + title + "」" }
+				return ""
+			}(),
+		}).Error
+	})
+	if err != nil {
 		os.Remove(filepath.Join(dir, name))
-		profileFail(w, "数据库写入失败"); return
+		profileFail(w, "数据库写入失败: "+err.Error()); return
 	}
-	profileOK(w, map[string]interface{}{"id": ss.ID, "url": url})
+
+	resp := map[string]interface{}{"id": ss.ID, "url": url, "exp_gain": expGain}
+	if levelUp {
+		resp["level_up"] = true
+		resp["new_level"] = newLevel
+	}
+	profileOK(w, resp)
 }
 
 // HandleProfileScreenshotsGet GET /api/profile/screenshots?username=xxx&type=all
