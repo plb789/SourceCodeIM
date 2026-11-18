@@ -1873,6 +1873,8 @@ type ProfileScreenshot struct {
 	GameID   uint   `gorm:"column:game_id;default:0;index" json:"game_id"`
 	// LikeCount 点赞数
 	LikeCount int   `gorm:"column:like_count;default:0" json:"like_count"`
+	// ViewCount 浏览量（点击查看大图时累加）
+	ViewCount int   `gorm:"column:view_count;default:0" json:"view_count"`
 	// Sort 排序权重
 	Sort     int       `gorm:"column:sort;default:0" json:"sort"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`

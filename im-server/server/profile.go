@@ -1324,7 +1324,7 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 }
 
 // HandleProfileScreenshotsGet GET /api/profile/screenshots?username=xxx&type=all
-// 返回用户截图/艺术作品列表（按 create_time 倒序）
+// 返回用户截图/艺术作品列表（按 create_time 倒序）；已登录时附带每张截图的 liked 状态
 func (s *Server) HandleProfileScreenshotsGet(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("username")
 	if target == "" { profileFail(w, "username 必填"); return }
@@ -1356,7 +1356,31 @@ func (s *Server) HandleProfileScreenshotsGet(w http.ResponseWriter, r *http.Requ
 	}
 	var list []model.ProfileScreenshot
 	q.Order("create_time DESC").Find(&list)
-	profileOK(w, map[string]interface{}{"list": list})
+
+	// 如果有 viewer（已登录），查询他对每张截图是否已点赞
+	likedMap := make(map[uint]bool)
+	if viewer != "" && len(list) > 0 {
+		ids := make([]uint, 0, len(list))
+		for _, ss := range list {
+			ids = append(ids, ss.ID)
+		}
+		var likes []model.ProfileScreenshotLike
+		store.DB.Where("screenshot_id IN ? AND username = ?", ids, viewer).Find(&likes)
+		for _, l := range likes {
+			likedMap[l.ScreenshotID] = true
+		}
+	}
+
+	// 组装返回列表（附加 liked 字段）
+	type ssResp struct {
+		model.ProfileScreenshot
+		Liked bool `json:"liked"`
+	}
+	resp := make([]ssResp, 0, len(list))
+	for _, ss := range list {
+		resp = append(resp, ssResp{ProfileScreenshot: ss, Liked: likedMap[ss.ID]})
+	}
+	profileOK(w, map[string]interface{}{"list": resp})
 }
 
 // HandleProfileScreenshotLike POST /api/profile/screenshot/like
@@ -1450,6 +1474,56 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 		"liked":      liked,
 		"like_count": shot.LikeCount,
 		"exp_gain":   expGain, // 0=取消点赞无经验；>0=新增点赞给作者的经验
+	})
+}
+
+// HandleProfileScreenshotView POST /api/profile/screenshot/view
+// 浏览量累加：前端点击查看大图时调用，view_count + 1
+// 不强制登录（游客也能浏览计数），防刷：同一 IP 30 秒内对同一张截图只计一次
+// 安全降级：Redis 不可用或故障时跳过累加，仅返回当前 view_count，防止被刷
+func (s *Server) HandleProfileScreenshotView(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		profileFail(w, "只支持 POST"); return
+	}
+	var req struct {
+		ScreenshotID uint `json:"screenshot_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ScreenshotID == 0 {
+		profileFail(w, "参数错误"); return
+	}
+
+	// 防刷：通过 Redis SETNX 实现 30 秒去重
+	viewerIP := r.RemoteAddr
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		viewerIP = strings.Split(fwd, ",")[0]
+	}
+	redisKey := "ss_view:" + strconv.FormatUint(uint64(req.ScreenshotID), 10) + ":" + viewerIP
+
+	var counted bool // true=本次计入；false=被防刷跳过或 Redis 不可用
+	if store.RDB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		ok, err := store.RDB.SetNX(ctx, redisKey, "1", 30*time.Second).Result()
+		cancel()
+		if err == nil && ok {
+			// SETNX 成功 = 30 秒内第一次浏览 → 累加
+			res := store.DB.Model(&model.ProfileScreenshot{}).
+				Where("id = ?", req.ScreenshotID).
+				UpdateColumn("view_count", gorm.Expr("view_count + 1"))
+			if res.Error == nil && res.RowsAffected > 0 {
+				counted = true
+			}
+			// RowsAffected==0 → 截图不存在，静默忽略
+		}
+		// err != nil（Redis 故障）或 ok=false（30s 内重复）→ counted 保持 false
+	}
+	// Redis 不可用 → counted=false（安全降级，不做无防刷累加）
+
+	// 返回最新 view_count（一次查询足矣）
+	var shot model.ProfileScreenshot
+	store.DB.First(&shot, req.ScreenshotID)
+	profileOK(w, map[string]interface{}{
+		"view_count": shot.ViewCount,
+		"counted":    counted,
 	})
 }
 

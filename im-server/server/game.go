@@ -731,6 +731,8 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("GET /api/profile/screenshots", s.HandleProfileScreenshotsGet)
 	// P2-a：截图/艺术作品点赞 toggle（文档 §4.1，被点赞作者获得 +2 exp）
 	http.HandleFunc("POST /api/profile/screenshot/like", s.HandleProfileScreenshotLike)
+	// 增强：截图浏览量累加（防刷：同 IP 30s 去重）
+	http.HandleFunc("POST /api/profile/screenshot/view", s.HandleProfileScreenshotView)
 	// 增强：背景横幅上传 + 经验值日志
 	http.HandleFunc("POST /api/profile/background", s.HandleProfileBgUpload)
 	http.HandleFunc("DELETE /api/profile/background", s.HandleProfileBgDelete)

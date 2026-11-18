@@ -4309,36 +4309,53 @@ html.m .mobile-plus-panel:not(.hidden) {
     100% { background-position: 250% 50%; }
 }
 
-/* ===== P2-a: 截图/艺术作品点赞条（右下角 overlay） ===== */
+/* ===== P2-a: 截图/艺术作品右下角统计条（浏览量 + 点赞） ===== */
 .gp-like-bar {
     position: absolute;
     right: 6px;
     bottom: 6px;
     display: flex;
     align-items: center;
-    gap: 3px;
-    background: rgba(0, 0, 0, 0.55);
-    border-radius: 10px;
-    padding: 2px 6px;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 14px;
+    padding: 3px 7px;
     font-size: 12px;
     color: #fff;
-    z-index: 2;
-    backdrop-filter: blur(4px);
+    z-index: 10;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    line-height: 1;
+    user-select: none;
 }
 .gp-like-btn {
     background: none;
     border: none;
     color: #ccc;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1;
-    padding: 0;
+    padding: 2px;             /* 增加点击热区 */
+    min-width: 20px;
     transition: transform 0.15s ease, color 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
-.gp-like-btn:hover { color: #ff5c7a; transform: scale(1.15); }
+.gp-like-btn:hover { color: #ff5c7a; transform: scale(1.2); }
 .gp-like-btn.liked { color: #ff5c7a; }
-.gp-like-btn:disabled { opacity: 0.5; cursor: default; }
+.gp-like-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
 .gp-like-count { min-width: 14px; text-align: center; font-variant-numeric: tabular-nums; }
+/* 浏览量（小眼睛图标 + 数字） */
+.gp-view-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    color: #bbb;
+}
+.gp-view-item svg { display: block; }
+.gp-view-count { min-width: 12px; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* ===== P2-b: 头像裁剪弹窗 ===== */
 .gp-av-crop-wrap {

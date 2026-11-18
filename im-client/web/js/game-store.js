@@ -2822,37 +2822,61 @@
         return row;
     }
 
-    // P2-a: addLikeBar 给截图/艺术作品 cell 加右下角点赞条（绝对定位 overlay）
-    // 点击 toggle，调用 POST /api/profile/screenshot/like，更新 like_count DOM
-    // 自己的图只显示计数不允许点（防后端报错）
+    // P2-a: addLikeBar 给截图/艺术作品 cell 加右下角统计条（浏览量 👁 + 点赞 ♥）
+    // 点击心形 toggle，调用 POST /api/profile/screenshot/like；自己的图心形禁用（防自赞）
+    // bar 容器整体阻止冒泡，保证点心形/点数字都不会触发 cell 的 openImageViewer
     function addLikeBar(cell, ss, ssId) {
         if (!ssId || !cell) return;
         var isSelf = state.profile && state.profile.username === ss.username;
-        var liked = ss._liked === true; // 后端列表接口暂未返回 liked，这里只做本地 toggle 视觉
-        var cnt = ss.like_count || 0;
+        // 优先读后端列表返回的 liked 字段，兼容旧数据 fallback 到 _liked
+        var liked = (ss.liked === true) || (ss._liked === true);
+        var likeCnt = ss.like_count || 0;
+        var viewCnt = ss.view_count || 0;
 
         var bar = el('div', 'gp-like-bar');
-        bar.style.pointerEvents = isSelf ? 'none' : 'auto';
-        bar.style.opacity = isSelf ? '0.5' : '0.9';
 
+        // 浏览量项（👁 + 数字），始终显示
+        var viewItem = el('span', 'gp-view-item');
+        // 小眼睛 SVG（简洁线条图标，16x16）
+        var eyeSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        eyeSvg.setAttribute('viewBox', '0 0 24 24');
+        eyeSvg.setAttribute('width', '14');
+        eyeSvg.setAttribute('height', '14');
+        var eyePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        eyePath.setAttribute('fill', 'currentColor');
+        eyePath.setAttribute('d', 'M12 5C7 5 2.7 8.1 1.6 12.4a.9.9 0 0 0 0 .2C2.7 16.9 7 20 12 20s9.3-3.1 10.4-7.4a.9.9 0 0 0 0-.2C21.3 8.1 17 5 12 5zm0 12.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z');
+        eyeSvg.appendChild(eyePath);
+        viewItem.appendChild(eyeSvg);
+        var viewCntEl = el('span', 'gp-view-count', String(viewCnt));
+        viewItem.appendChild(viewCntEl);
+
+        // 点赞项（♥ + 数字）
         var btn = el('button', 'gp-like-btn' + (liked ? ' liked' : ''), '♥');
-        var cntEl = el('span', 'gp-like-count', String(cnt));
+        if (isSelf) { btn.disabled = true; btn.title = T('不能点赞自己的作品'); }
+        var likeCntEl = el('span', 'gp-like-count', String(likeCnt));
+
+        bar.appendChild(viewItem);
         bar.appendChild(btn);
-        bar.appendChild(cntEl);
+        bar.appendChild(likeCntEl);
+
+        // bar 容器整体阻止冒泡：点到 bar 任何部分都不触发 cell 的 click（打开大图）
+        bar.addEventListener('click', function (e) { e.stopPropagation(); });
+        bar.addEventListener('mousedown', function (e) { e.stopPropagation(); });
 
         btn.addEventListener('click', function (e) {
-            e.stopPropagation();   // 阻止冒泡触发 cell 的 openImageViewer
+            e.stopPropagation();
+            e.preventDefault();
             if (isSelf) { toast(T('不能点赞自己的作品')); return; }
             btn.disabled = true;
             api('POST', '/api/profile/screenshot/like', { screenshot_id: ssId }).then(function (res) {
                 btn.disabled = false;
                 if (res && res.ok) {
                     liked = res.data.liked;
-                    cnt = res.data.like_count;
+                    likeCnt = res.data.like_count;
                     btn.classList.toggle('liked', liked);
-                    cntEl.textContent = String(cnt);
+                    likeCntEl.textContent = String(likeCnt);
                     // 同步回 state，后续重渲染用
-                    ss._liked = liked; ss.like_count = cnt;
+                    ss.liked = liked; ss._liked = liked; ss.like_count = likeCnt;
                 } else {
                     toast((res && res.err) || T('操作失败'));
                 }
@@ -2861,6 +2885,12 @@
 
         cell.style.position = 'relative';
         cell.appendChild(bar);
+    }
+
+    // trackScreenshotView 上报浏览量（点击查看大图时调用，防刷由后端 30s 去重）
+    function trackScreenshotView(ssId) {
+        if (!ssId) return;
+        api('POST', '/api/profile/screenshot/view', { screenshot_id: ssId }).catch(function () {});
     }
 
     // ==================== custom_html 前端安全过滤（与服务端 sanitizeCustomHTML 同口径） ====================
@@ -3060,7 +3090,7 @@
                 }
                 // P2-a: 右下角点赞按钮 + 计数（点击不触发 cell 的 openImageViewer）
                 addLikeBar(cell, ss, ss.id);
-                cell.addEventListener('click', function () { openImageViewer(assetUrl(ss.url), ss.title); });
+                cell.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
                 ssGrid.appendChild(cell);
             });
             return ssGrid.childNodes.length ? ssGrid : null;
@@ -3093,7 +3123,7 @@
                     cell.appendChild(cap);
                 }
                 addLikeBar(cell, ss, ss.id);
-                cell.addEventListener('click', function () { openImageViewer(assetUrl(ss.url), ss.title); });
+                cell.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
                 awGrid.appendChild(cell);
             });
             awWrap.appendChild(awGrid);
@@ -3107,7 +3137,7 @@
                     t.style.width = '48px'; t.style.height = '48px';
                     t.style.objectFit = 'cover'; t.style.borderRadius = '4px';
                     t.style.cursor = 'pointer';
-                    t.addEventListener('click', function () { openImageViewer(assetUrl(ss.url), ss.title); });
+                    t.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
                     awMore.appendChild(t);
                 });
                 awWrap.appendChild(awMore);
