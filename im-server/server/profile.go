@@ -726,12 +726,12 @@ func (s *Server) HandleProfileGet(w http.ResponseWriter, r *http.Request) {
 		}}, badges...)
 	}
 
-	// 6. 最近游戏（按 play_seconds 倒序取前 6，有 last_play_at 时展示；受 GameVisibility 控制）
+	// 6. 最近游戏（按 last_play_at 最近游玩时间倒序取前 6；受 GameVisibility 控制）
 	recent := make([]ProfileRecentGameResp, 0)
 	if canSeeGame {
 		var libs []model.GameLibrary
 		store.DB.Where("username = ? AND play_seconds > 0", target).
-			Order("play_seconds DESC").Limit(6).Find(&libs)
+			Order("last_play_at DESC").Limit(6).Find(&libs)
 
 		if len(libs) > 0 {
 			// 批量查游戏元数据（避免 N+1 查询）

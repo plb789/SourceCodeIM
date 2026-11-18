@@ -3829,9 +3829,9 @@
             var d = res.data;
             if (d.basic) p.basic = Object.assign({}, p.basic, d.basic);
             if (d.stats) p.stats = d.stats;
-            if (d.badges) p.badges = d.badges;
-            if (d.recentGames) p.recentGames = d.recentGames;
-            if (d.favoriteGame) p.favoriteGame = d.favoriteGame;
+            if (d.badges_horizontal) p.badges = d.badges_horizontal;
+            if (d.recent_games) p.recentGames = d.recent_games;
+            if (d.favorite_game) p.favoriteGame = d.favorite_game;
             // 好友关系状态（服务端按 viewer 视角查库，前端不能自行伪造）
             p.is_friend = !!d.is_friend;
             p.is_self = !!d.is_self;
