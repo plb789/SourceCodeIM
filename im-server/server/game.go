@@ -1174,8 +1174,12 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 			}
 			// ===== 商家销售分账（2026-11-18 新增；仅付费 + 有 owner + 开关开） =====
 			if pay > 0 && g.OwnerUsername != "" && s.cfg.Game.MerchantRevenueEnabled {
+				// FOR UPDATE 锁 Merchant 行：与退款扣回（refund/ sweep）同一互斥行，
+				// 三者并发串行不会 lost update。锁顺序：已隐式锁 User 行（UPDATE points）后，
+				// 再锁 Merchant——与退款路径（User → Merchant）顺序完全一致，无死锁
 				var merchant model.Merchant
-				if merr := tx.Where("username = ?", g.OwnerUsername).First(&merchant).Error; merr == nil && merchant.Status == 0 {
+				if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("username = ?", g.OwnerUsername).First(&merchant).Error; merr == nil && merchant.Status == 0 {
 					// commission_rate 是百分比（0~100），转小数
 					commission := merchant.CommissionRate / 100.0
 					if commission < 0 {
@@ -1393,9 +1397,20 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 	}
 	now := time.Now()
 	// 事务：软删除 + 用户退款 + 商家扣回，原子性保证
+	// 锁顺序：User 行（先）→ Merchant / RedPacket 行（后）——与入库事务 HandleGameLibraryJoin
+	// 的 FOR UPDATE User → 扣积分锁顺序完全一致，避免不同路径间反向锁等待产生死锁
 	var refunded bool
 	var refundExpired bool
 	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+		// 显式 FOR UPDATE 锁 User 行：退款方向是"加分"，当前 UPDATE points = ROUND(points + pay, 3)
+		// InnoDB 隐式也会加行锁，但显式锁住意图更清晰，且统一了锁顺序（先 User 再 Merchant），
+		// 与 AI 问答扣分（aipoints.go FOR UPDATE User）、游戏入库（game.go HandleGameLibraryJoin
+		// FOR UPDATE User）的锁策略对齐，消除多路径间锁顺序不一致带来的死锁风险
+		var lockedUser model.User
+		if uerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ?", username).First(&lockedUser).Error; uerr != nil {
+			return fmt.Errorf("锁定用户失败: %w", uerr)
+		}
 		// 需要退款（退款期内 + 付费游戏）：先退用户积分，再扣商家
 		if pay > 0 && canRefund {
 			res := tx.Model(&model.User{}).Where("username = ?", username).

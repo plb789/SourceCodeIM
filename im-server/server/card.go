@@ -97,11 +97,15 @@ func (s *Server) HandlePointsShopBuy(w http.ResponseWriter, r *http.Request) {
 		if user.Points < price {
 			return errors.New("__insufficient__")
 		}
-		finalPoints = user.Points - price
+		// 积分扣除：SQL 表达式 ROUND 原子减法 + 3 位归一，与项目所有其他扣分路径
+		// （game.go/redpacket.go/gamerecharge.go/aipoints.go）同口径，裸 double 减法
+		// 会出现 0.10999999999999999 这类二进制误差长尾
 		if err := tx.Model(&model.User{}).Where("username = ?", username).
-			Update("points", finalPoints).Error; err != nil {
+			Update("points", gorm.Expr("ROUND(points - ?, 3)", price)).Error; err != nil {
 			return err
 		}
+		// 事务内读扣款后余额（tx 隔离级别保证看到 ROUND 后的真实值）
+		tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&finalPoints)
 		if err := tx.Create(&model.UserShopItem{Username: username, ItemID: req.ItemID}).Error; err != nil {
 			// 并发幂等：唯一索引冲突 → 积分扣除和 PointsLog 会随事务一起回滚
 			if isDuplicateKey(err) { dupErr = err; return nil }
@@ -224,11 +228,13 @@ func (s *Server) HandleCardDraw(w http.ResponseWriter, r *http.Request) {
 		if user.Points < cardDrawCost {
 			return gorm.ErrRecordNotFound // 触发事务回滚，外层转为"积分不足"
 		}
-		finalPoints = user.Points - cardDrawCost
+		// 积分扣除：SQL 表达式 ROUND 原子减法 + 3 位归一（同积分商店、入库、充值等所有扣分路径）
 		if err := tx.Model(&model.User{}).Where("username = ?", username).
-			Update("points", finalPoints).Error; err != nil {
+			Update("points", gorm.Expr("ROUND(points - ?, 3)", cardDrawCost)).Error; err != nil {
 			return err
 		}
+		// 事务内读扣款后余额（tx 隔离级别保证看到 ROUND 后的真实值）
+		tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&finalPoints)
 		if err := tx.Create(&model.PointsLog{
 			Username: username, Change: -cardDrawCost,
 			BalanceAfter: finalPoints, Reason: "card_draw", Operator: "system",
@@ -440,6 +446,7 @@ func (s *Server) HandleBadgeCraft(w http.ResponseWriter, r *http.Request) {
 
 	// 6. 事务：FOR UPDATE 锁 User 行 → 扣卡 + 发徽章 + 经验/积分
 	var finalUser model.User
+	var badgeFinalPoints float64 // 徽章入账后最终余额（事务内 SELECT 赋值，供回执与流水复用）
 	err := store.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("username = ?", username).First(&finalUser).Error; err != nil {
@@ -448,7 +455,6 @@ func (s *Server) HandleBadgeCraft(w http.ResponseWriter, r *http.Request) {
 		newExp := finalUser.Exp + int64(tpl.ExpReward)
 		newLevel := calcLevelFromExp(int(newExp))
 		levelUp := newLevel > finalUser.Level
-		newPoints := finalUser.Points + tpl.PointsReward
 
 		for _, c := range cards {
 			uc := hold[c.ID]
@@ -468,16 +474,20 @@ func (s *Server) HandleBadgeCraft(w http.ResponseWriter, r *http.Request) {
 		}).Error; err != nil {
 			return err
 		}
+		// 积分：用 SQL 表达式 ROUND 原子加法（3 位归一，与项目所有其他积分变动路径——红包入账、
+		// 退款、充值退分——同口径，避免裸 double 加法出现 0.10999999999999999 这类浮点累积误差）
 		upd := map[string]interface{}{"exp": newExp}
 		if levelUp {
 			upd["level"] = newLevel
 		}
 		if tpl.PointsReward > 0 {
-			upd["points"] = newPoints
+			upd["points"] = gorm.Expr("ROUND(points + ?, 3)", tpl.PointsReward)
 		}
 		if err := tx.Model(&model.User{}).Where("username = ?", username).Updates(upd).Error; err != nil {
 			return err
 		}
+		// 事务内读入账后余额（tx 隔离级别保证看到刚提交的 ROUND 后值）
+		tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&badgeFinalPoints)
 		if err := tx.Create(&model.ProfileExpLog{
 			Username: username, Change: tpl.ExpReward, Reason: "badge",
 			Detail: "合成徽章 " + tpl.Name,
@@ -487,7 +497,7 @@ func (s *Server) HandleBadgeCraft(w http.ResponseWriter, r *http.Request) {
 		if tpl.PointsReward > 0 {
 			if err := tx.Create(&model.PointsLog{
 				Username: username, Change: tpl.PointsReward,
-				BalanceAfter: newPoints, Reason: "badge_craft",
+				BalanceAfter: badgeFinalPoints, Reason: "badge_craft",
 				Operator: "system", Detail: "合成徽章 " + tpl.Name + " 奖励积分",
 			}).Error; err != nil {
 				return err

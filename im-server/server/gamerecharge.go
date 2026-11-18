@@ -686,13 +686,16 @@ func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
 	var g model.Game
 	if err := store.DB.Select("id, owner_username").Where("id = ?", o.GameID).First(&g).Error; err != nil || g.OwnerUsername == "" {
 		if err != nil {
-			logger.Warn("赞助充值分账跳过：游戏#%d 不存在：%v", o.GameID, err)
+			// INFO 而不是 WARN：游戏已下架或被删除是正常业务场景，不是系统异常；
+			// 更不会导致资金不一致——没有 owner 的游戏本来就不会产生商家分账
+			logger.Info("赞助充值分账跳过：游戏#%d 已下架或不存在（无 owner，无需分账）", o.GameID)
 		}
 		return // 无 owner=官方游戏，不分账
 	}
 	var merchant model.Merchant
 	if err := store.DB.Where("username = ?", g.OwnerUsername).First(&merchant).Error; err != nil || merchant.Status != 0 {
-		logger.Warn("赞助充值分账跳过：游戏#%d owner=%s 商户不存在或已停用", o.GameID, g.OwnerUsername)
+		// 同理 INFO：商家被删除/停用后其名下未分账的订单自然不需要再补分账
+		logger.Info("赞助充值分账跳过：游戏#%d owner=%s 商户不存在或已停用", o.GameID, g.OwnerUsername)
 		return
 	}
 	commission := merchant.CommissionRate / 100.0
@@ -843,14 +846,18 @@ func sponsorRechargeCompensateSweep(cfg *config.Config) int {
 	if cfg == nil || !cfg.Game.MerchantRevenueEnabled {
 		return 0
 	}
-	// LEFT JOIN 找 success 但没有 type=5 分账的订单（GORM 原生写法避免子查询）
+	// LEFT JOIN 找 success 但没有 type=5 分账的订单（GORM 原生写法避免子查询）；
+	// 额外 LEFT JOIN im_game 过滤掉已下架/无 owner 的游戏——它们本来就不会产生商家分账，
+	// 留在这里只会每轮扫到、每轮刷一遍"游戏不存在"日志，造成日志污染且浪费 DB 查询
 	var missed []model.RechargeOrder
 	if err := store.DB.Raw(`
 		SELECT ro.* FROM im_recharge_order ro
 		LEFT JOIN im_merchant_income_log mil
 			ON mil.purchase_id = ro.id AND mil.type = 5
+		INNER JOIN im_game g ON g.id = ro.game_id
 		WHERE ro.status = 1 AND mil.id IS NULL
 		  AND ro.create_time > NOW() - INTERVAL 24 HOUR
+		  AND g.owner_username != ''
 		ORDER BY ro.id ASC LIMIT 50
 	`).Scan(&missed).Error; err != nil {
 		logger.Warn("赞助充值补偿查询失败：%v", err)

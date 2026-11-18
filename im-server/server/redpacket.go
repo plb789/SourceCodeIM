@@ -383,19 +383,48 @@ func (s *Server) handleRedPacketOpen(c *Client, msg *protocol.Message) {
 		s.sendRedPacketOpenResult(c.username, map[string]interface{}{"ok": false, "packet_id": p.PacketID, "err": "领取失败，请重试"})
 		return
 	}
+
+	// 积分入账 + 流水（同事务原子性保证）：FOR UPDATE 锁 User 行 → SQL 表达式原子加法 →
+	// 事务内读入账后余额 → PointsLog 写入；以上任一失败整体回滚，不会再出现"commit 后 DB
+	// 断开/OOM 导致用户积分丢失、且事务已提交无法回滚"的无声丢分窗口
+	var newBalance float64
+	updRes := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Model(&model.User{}).
+		Where("username = ?", c.username).
+		Update("points", gorm.Expr("ROUND(points + ?, 3)", claimAmount))
+	if updRes.Error != nil {
+		tx.Rollback()
+		logger.Error("红包积分入账失败（事务内，红包 %d，用户 %s，%.3f）：%v", pkt.ID, c.username, claimAmount, updRes.Error)
+		s.sendRedPacketOpenResult(c.username, map[string]interface{}{"ok": false, "packet_id": p.PacketID, "err": "领取失败，请重试"})
+		return
+	}
+	if updRes.RowsAffected == 0 {
+		tx.Rollback()
+		logger.Error("红包积分入账目标用户不存在（红包 %d，用户 %s）", pkt.ID, c.username)
+		s.sendRedPacketOpenResult(c.username, map[string]interface{}{"ok": false, "packet_id": p.PacketID, "err": "领取失败，请重试"})
+		return
+	}
+	// 事务内读入账后余额（tx 隔离级别保证读到已提交的最新值）
+	tx.Model(&model.User{}).Select("points").Where("username = ?", c.username).Scan(&newBalance)
+	if err := tx.Create(&model.PointsLog{
+		Username:     c.username,
+		Change:       claimAmount,
+		BalanceAfter: newBalance,
+		Reason:       "redpacket_recv",
+		Operator:     pkt.FromUser,
+		Detail:       fmt.Sprintf("领取红包 #%d（%s）", pkt.ID, pkt.Greeting),
+	}).Error; err != nil {
+		tx.Rollback()
+		logger.Error("红包领取流水写失败（红包 %d，用户 %s）：%v", pkt.ID, c.username, err)
+		s.sendRedPacketOpenResult(c.username, map[string]interface{}{"ok": false, "packet_id": p.PacketID, "err": "领取失败，请重试"})
+		return
+	}
+
 	if err := tx.Commit().Error; err != nil {
 		logger.Error("红包领取事务提交失败（红包 %d，用户 %s）：%v", pkt.ID, c.username, err)
 		s.sendRedPacketOpenResult(c.username, map[string]interface{}{"ok": false, "packet_id": p.PacketID, "err": "领取失败，请重试"})
 		return
 	}
-
-	// 入账 + 流水（事务外补偿语义：明细已落库，入账失败仅记错误日志便于人工补偿）
-	newBalance, err := userPointsAdd(c.username, claimAmount)
-	if err != nil {
-		logger.Error("红包积分入账失败（红包 %d，用户 %s，%.3f）：%v", pkt.ID, c.username, claimAmount, err)
-	}
-	recordPointsLog(c.username, claimAmount, newBalance, "redpacket_recv", pkt.FromUser,
-		fmt.Sprintf("领取红包 #%d（%s）", pkt.ID, pkt.Greeting))
 
 	// 重新读取红包终态（领完/部分领）用于回执与状态同步
 	var latest model.RedPacket
@@ -592,7 +621,9 @@ func StartRedPacketRefundLoop() {
 }
 
 // redpacketRefundExpired 扫描过期红包并退回剩余积分：
-// 行锁事务内复核状态（防与领取并发双退）→ 退回 remaining_amount → 置已过期 → 状态同步帧通知会话成员
+// 行锁事务内复核状态（防与领取并发双退）→ 状态置为过期 → 退回 remaining_amount（事务内原子加分 + 流水）
+// commit 之后仅做广播通知——确保状态变更、积分退回、流水写入三者原子提交，避免"commit 后 DB 断开
+// 导致积分无声丢失"的与领取修复前同根因的漏洞
 func redpacketRefundExpired() {
 	var expired []model.RedPacket
 	if err := store.DB.Where("status = ? AND expire_time < ?", model.RedPacketStatusActive, time.Now()).
@@ -618,24 +649,54 @@ func redpacketRefundExpired() {
 			continue
 		}
 		refund := locked.RemainingAmount
+		// 状态置为过期
 		res := tx.Model(&model.RedPacket{}).Where("id = ?", locked.ID).
 			Updates(map[string]interface{}{"status": model.RedPacketStatusExpired})
 		if res.Error != nil || res.RowsAffected == 0 {
 			tx.Rollback()
 			continue
 		}
-		tx.Commit()
 
+		// 退回积分 + 流水（同事务原子性保证）：FOR UPDATE 锁 User → SQL 原子加法 → 流水
+		// 与领取事务的"先 RedPacket 行锁、再 User 行锁"完全一致的锁顺序，无死锁风险
 		if refund > 0.0001 {
-			if balance, err := userPointsAdd(locked.FromUser, refund); err == nil {
-				recordPointsLog(locked.FromUser, refund, balance, "redpacket_refund", "system",
-					fmt.Sprintf("红包 #%d 过期退回（剩余 %d 份未领）", locked.ID, locked.RemainingCount))
-			} else {
-				logger.Error("红包过期退回入账失败（红包 %d，用户 %s，%.3f）：%v", locked.ID, locked.FromUser, refund, err)
+			var refBalance float64
+			updRes := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Model(&model.User{}).
+				Where("username = ?", locked.FromUser).
+				Update("points", gorm.Expr("ROUND(points + ?, 3)", refund))
+			if updRes.Error != nil {
+				tx.Rollback()
+				logger.Error("红包过期退回入账失败（事务内，红包 %d，用户 %s，%.3f）：%v", locked.ID, locked.FromUser, refund, updRes.Error)
+				continue
+			}
+			if updRes.RowsAffected == 0 {
+				tx.Rollback()
+				logger.Error("红包过期退回目标用户不存在（红包 %d，用户 %s）", locked.ID, locked.FromUser)
+				continue
+			}
+			tx.Model(&model.User{}).Select("points").Where("username = ?", locked.FromUser).Scan(&refBalance)
+			if err := tx.Create(&model.PointsLog{
+				Username: locked.FromUser, Change: refund, BalanceAfter: refBalance,
+				Reason: "redpacket_refund", Operator: "system",
+				Detail: fmt.Sprintf("红包 #%d 过期退回（剩余 %d 份未领）", locked.ID, locked.RemainingCount),
+			}).Error; err != nil {
+				tx.Rollback()
+				logger.Error("红包过期退回流水写失败（红包 %d，用户 %s）：%v", locked.ID, locked.FromUser, err)
+				continue
 			}
 		}
+
+		if err := tx.Commit().Error; err != nil {
+			logger.Error("红包过期退回事务提交失败（红包 %d）：%v", locked.ID, err)
+			continue
+		}
+
+		// commit 之后：状态广播通知 + 日志（这两者失败不影响已提交的积分/流水）
 		locked.Status = model.RedPacketStatusExpired
-		srv.broadcastRedPacketSync(&locked)
+		if srv != nil {
+			srv.broadcastRedPacketSync(&locked)
+		}
 		logger.Info("红包过期退回：红包 %d（%s）退回 %.3f 积分给 %s", locked.ID, locked.Greeting, refund, locked.FromUser)
 	}
 }

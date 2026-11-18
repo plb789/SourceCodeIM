@@ -26,7 +26,9 @@ type User struct {
 	// 双精度保留 3 位小数，如 4506 tokens = 4.506 积分），余额不足拦截 AI 提问；
 	// 列默认值 100：AutoMigrate 加列时存量用户自动补 100，注册逻辑另显式赋值；
 	// 双精度迁移：int → double（AutoMigrate 改列型，存量整数值自动成为浮点值，无需数据修复）
-	Points float64 `gorm:"column:points;type:double;default:100" json:"points"`
+	// CHECK 约束：DB 层兜底防积分变负（应用层各扣除路径都有 WHERE points >= ? / GREATEST(..., 0)
+	// 守卫，此约束是最后一道防线——防绕过应用层的直连 SQL 写入、或未来新增代码忘记加守卫）
+	Points float64 `gorm:"column:points;type:double;default:100;check:points_min,points >= 0" json:"points"`
 	// 阶段一百三十五：账号状态（后台账号管理：锁定封禁/注销）——AutoMigrate 自动加列，存量用户默认 0 正常
 	Status int8 `gorm:"column:status;type:tinyint;default:0" json:"status"`
 	// LockReason 锁定封禁原因（管理员填写，登录拒绝与在线踢出时提示给用户；解锁/注销时清空）
