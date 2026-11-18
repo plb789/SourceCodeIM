@@ -568,6 +568,15 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 		return
 	}
 
+	// 阶段二百九十八：登录防刷 IP + username 限流（必须在扫码登录判定之前——扫码登录
+	// 是免密码通道，不应该被密码维度的限流挡掉；限流只作用于密码登录）
+	// 注意：username 可能是空字符串（msg.FromUser 为空），空 username 自动跳过 per-user 锁定
+	if rerr := checkLoginRateLimit(c.ip, username, &s.cfg.LoginRateLimit); rerr != nil {
+		logger.Warn("登录被限流：ip=%s username=%s err=%v", c.ip, username, rerr)
+		c.SendErrorAndClose(rerr.Error())
+		return
+	}
+
 	// 阶段二百四十：扫码登录通道判定（content 前缀 qrc: → 一次性登录码换账号，免密码登录；
 	// 登录码由手机端扫码确认后签发，归口 qrlogin.go）——命中后按绑定账号走收尾登录链路
 	if strings.HasPrefix(password, QRLoginCodePrefix) {
@@ -607,6 +616,11 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 		}
 	}
 	if err != nil {
+		// 阶段二百九十八：仅密码真正错误（ErrInvalidLogin）才累加登录失败计数
+		// 其他错误（账号不存在自动注册、注册限流、注册业务错误等）不算"密码爆破尝试"
+		if err == ErrInvalidLogin {
+			markLoginFail(c.ip, username, &s.cfg.LoginRateLimit)
+		}
 		// 登录失败提示修复：原实现 sendError 走发送队列异步写出后立即 Close，
 		// 错误消息常因竞态来不及送达客户端，导致密码错误等场景无任何提示
 		// 现改为同步写错误消息送达后再关闭连接
@@ -628,7 +642,7 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 }
 
 // finishLogin 阶段二百四十：登录收尾链路归口（密码验证通过 / 扫码凭码通过 共用同一链路）
-// 职责：账号状态拦截 → 会话绑定 → hub 注册 → Redis 在线缓存 → 登录响应下发 → 10 项并行推送 →
+// 职责：账号状态拦截 → 登录成功清失败计数 → 会话绑定 → hub 注册 → Redis 在线缓存 → 登录响应下发 → 10 项并行推送 →
 // 通话/会议/协助宽限取消。原 handleLogin 尾段原样抽取，行为时序不变
 func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User) {
 	// 阶段一百三十五：账号状态拦截（锁定封禁/已注销）——仅凭据校验通过的存量账号命中
@@ -637,6 +651,10 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 		c.SendErrorAndClose(rejectMsg)
 		return
 	}
+
+	// 阶段二百九十八：登录成功且账号状态正常——清 IP 和 username 的失败计数（下次登录重新计数）
+	// 放在状态拦截通过之后，避免被拦截的异常账号也清了计数
+	markLoginSuccess(c.ip, user.Username)
 
 	c.username = user.Username
 	c.loginTime = time.Now() // 记录登录时间，用于好友申请去重

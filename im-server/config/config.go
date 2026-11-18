@@ -16,6 +16,17 @@ type RegisterRateLimitConfig struct {
 	FailLockMins int  `yaml:"fail_lock_mins"` // 锁定时长（分钟；默认 10）
 }
 
+// LoginRateLimitConfig 阶段二百九十八：登录防刷（IP 限流 + 用户名锁定）配置
+// 与注册防刷分桶隔离：登录需要 per-username 锁定（防定向爆破热门账号），注册不需要
+type LoginRateLimitConfig struct {
+	Enabled             bool `yaml:"enabled"`               // 总开关，默认 true（开启）
+	MaxPer30s           int  `yaml:"max_per_30s"`           // 同 IP 30s 内登录请求上限（默认 10，比注册宽松——正常用户输错密码很正常）
+	FailLock            int  `yaml:"fail_lock"`             // 同 IP 连续失败次数阈值（默认 5）
+	FailLockMins        int  `yaml:"fail_lock_mins"`        // 同 IP 锁定时长（分钟；默认 5，比注册短——登录体验优先）
+	PerUserFailLock     int  `yaml:"per_user_fail_lock"`    // 同用户名连续失败阈值（默认 5，防定向爆破热门账号）
+	PerUserFailLockMins int  `yaml:"per_user_fail_lock_mins"` // 同用户名锁定时长（分钟；默认 10）
+}
+
 // Config 服务端全局配置
 type Config struct {
 	// WebSocket 监听地址
@@ -74,6 +85,7 @@ type Config struct {
 	//  ③ fail_lock：注册连续失败 N 次后锁定 fail_lock_mins 分钟（防爆破/穷举）
 	//  Redis 不可用时自动降级跳过限流（仅记日志），不阻塞正常注册流程
 	RegisterRateLimit RegisterRateLimitConfig `yaml:"register_rate_limit"`
+	LoginRateLimit    LoginRateLimitConfig    `yaml:"login_rate_limit"`
 	// 全局一键清空积分开关（allow_points_clear）：控制后台"一键清空所有账号积分"功能是否允许执行。
 	// true  = 允许（默认，与新增功能零回归），管理员通过密码二次验证后可执行全局清零
 	// false = 禁止，即便管理员权限+密码正确，接口也会拒绝并返回"功能已禁用"提示。修改后需重启生效
@@ -796,6 +808,16 @@ func Default() *Config {
 			FailLock:     5,
 			FailLockMins: 10,
 		},
+		// 阶段二百九十八：登录防刷默认开启。登录 IP 限流阈值比注册宽松（正常用户输错密码不应轻易锁）；
+		// 新增 per-username 锁定（防针对热门账号的定向爆破，注册场景无此需求）
+		LoginRateLimit: LoginRateLimitConfig{
+			Enabled:             true,
+			MaxPer30s:           10,
+			FailLock:            5,
+			FailLockMins:        5,
+			PerUserFailLock:     5,
+			PerUserFailLockMins: 10,
+		},
 		// 原实现：UploadDir: "../im-client/web/static/upload"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
 		// 现改为留空，由 Load 基于 WebDir 推导（锚定 exe 所在目录，任意目录启动均正确）
 		UploadDir:   "",
@@ -952,6 +974,28 @@ func Load() *Config {
 	}
 	if rl.FailLockMins <= 0 {
 		rl.FailLockMins = 10
+	}
+	// 阶段二百九十八：登录防刷配置兜底（与注册防刷同一策略：Enabled 尊重用户显式，空块/零值回退 Default）
+	ll := &cfg.LoginRateLimit
+	if !ll.Enabled {
+		if ll.MaxPer30s == 0 && ll.FailLock == 0 && ll.FailLockMins == 0 && ll.PerUserFailLock == 0 && ll.PerUserFailLockMins == 0 {
+			*ll = Default().LoginRateLimit
+		}
+	}
+	if ll.MaxPer30s <= 0 {
+		ll.MaxPer30s = 10
+	}
+	if ll.FailLock <= 0 {
+		ll.FailLock = 5
+	}
+	if ll.FailLockMins <= 0 {
+		ll.FailLockMins = 5
+	}
+	if ll.PerUserFailLock <= 0 {
+		ll.PerUserFailLock = 5
+	}
+	if ll.PerUserFailLockMins <= 0 {
+		ll.PerUserFailLockMins = 10
 	}
 	if cfg.RecallWindow <= 0 {
 		cfg.RecallWindow = 120

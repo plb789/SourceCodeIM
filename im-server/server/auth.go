@@ -54,6 +54,12 @@ var ErrRegisterIPExceeded = errors.New("该 IP 今日注册账号数已达上限
 // ErrRegisterBot 阶段二百九十八：前端行为检测（蜜罐/停留时间）命中
 var ErrRegisterBot = errors.New("注册请求异常，请稍后重试")
 
+// ErrLoginRateLimited 阶段二百九十八：登录请求频率超限（IP 30s 内请求过多）
+var ErrLoginRateLimited = errors.New("登录请求过于频繁，请稍后再试")
+
+// ErrLoginFailLocked 阶段二百九十八：登录连续失败锁定（IP 或 用户名 维度）
+var ErrLoginFailLocked = errors.New("登录失败次数过多，请稍后再试")
+
 // reservedUsernameRe 保留字用户名规则：g 开头跟纯数字（如 g1、g123），与群会话 target 编码 'g'+群ID 同形
 var reservedUsernameRe = regexp.MustCompile(`^g[0-9]+$`)
 
@@ -64,7 +70,8 @@ func isAuthBusinessError(err error) bool {
 	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword || err == ErrReservedUsername || err == ErrNeedRegister ||
 		err == ErrQRLoginExpired || err == ErrQRLoginInvalid || // 阶段二百四十：扫码登录业务错误原样下发
 		err == ErrRegisterRateLimited || err == ErrRegisterFailLocked || err == ErrRegisterIPExceeded || // 阶段二百九十八：注册防刷业务错误
-		err == ErrRegisterBot // 阶段二百九十八：前端蜜罐/停留时间命中（对外统一模糊提示）
+		err == ErrRegisterBot || // 阶段二百九十八：前端蜜罐/停留时间命中
+		err == ErrLoginRateLimited || err == ErrLoginFailLocked // 阶段二百九十八：登录防刷业务错误
 }
 
 // hashPassword 密码加密（阶段二百六十四：升级 bcrypt 自描述哈希）。
@@ -324,4 +331,96 @@ func checkRegisterBotSignals(ip, hp string, pageOpenMs int64) error {
 		return ErrRegisterBot
 	}
 	return nil
+}
+
+// ===== 阶段二百九十八：登录防刷（IP 限流 + per-username 锁定） =====
+
+// 登录防刷 Redis key 前缀（与注册防刷分桶隔离）
+const (
+	loginKeyReqIP   = "im:login:req:"    // 请求频率（IP 维度，30s 窗口）
+	loginKeyFailIP  = "im:login:fail:"   // 连续失败（IP 维度，锁定窗口）
+	loginKeyFailUsr = "im:login:failu:"  // 连续失败（username 维度，防定向爆破热门账号）
+)
+
+// checkLoginRateLimit 阶段二百九十八：登录前检查两层限流
+//   ① IP 维度：频率 + 连续失败锁定
+//   ② username 维度：连续失败锁定（独立于 IP——攻击者换 IP 但专打 admin 也会被锁）
+// 返回 nil 放行，返回业务错误则立即拒绝；Redis 不可用时降级放行
+func checkLoginRateLimit(ip, username string, cfg *config.LoginRateLimitConfig) error {
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	if !store.RedisAvailable() {
+		logger.Warn("登录防刷跳过：Redis 不可用（降级放行） ip=%s", ip)
+		return nil
+	}
+	ctx := context.Background()
+
+	// ① username 维度锁定检查（最高优先级——锁定的是账号本身，比 IP 锁更精确）
+	if cfg.PerUserFailLock > 0 && username != "" {
+		if count, err := store.RDB.Get(ctx, loginKeyFailUsr+username).Int(); err == nil && count >= cfg.PerUserFailLock {
+			return ErrLoginFailLocked
+		}
+	}
+
+	// ② IP 维度锁定检查
+	if cfg.FailLock > 0 && ip != "" {
+		if count, err := store.RDB.Get(ctx, loginKeyFailIP+ip).Int(); err == nil && count >= cfg.FailLock {
+			return ErrLoginFailLocked
+		}
+	}
+
+	// ③ IP 维度频率检查（30s 窗口）
+	if cfg.MaxPer30s > 0 && ip != "" {
+		cnt, err := store.RDB.Incr(ctx, loginKeyReqIP+ip).Result()
+		if err != nil {
+			logger.Warn("登录防刷请求频率 INCR 降级（Redis 异常）：ip=%s err=%v", ip, err)
+		} else {
+			if cnt == 1 {
+				store.RDB.Expire(ctx, loginKeyReqIP+ip, 30*time.Second)
+			}
+			if cnt > int64(cfg.MaxPer30s) {
+				return ErrLoginRateLimited
+			}
+		}
+	}
+
+	return nil
+}
+
+// markLoginSuccess 阶段二百九十八：登录成功后调用——清该 IP 和该 username 的失败计数（成功即重置）
+func markLoginSuccess(ip, username string) {
+	if !store.RedisAvailable() {
+		return
+	}
+	ctx := context.Background()
+	if ip != "" {
+		store.RDB.Del(ctx, loginKeyFailIP+ip)
+	}
+	if username != "" {
+		store.RDB.Del(ctx, loginKeyFailUsr+username)
+	}
+}
+
+// markLoginFail 阶段二百九十八：登录密码错误后调用——累加该 IP 和该 username 的失败计数
+// 任意一个维度达阈值都会在下次请求被 checkLoginRateLimit 拒绝
+func markLoginFail(ip, username string, cfg *config.LoginRateLimitConfig) {
+	if cfg == nil || !cfg.Enabled || !store.RedisAvailable() {
+		return
+	}
+	ctx := context.Background()
+	// IP 维度失败计数
+	if cfg.FailLock > 0 && ip != "" {
+		cnt, err := store.RDB.Incr(ctx, loginKeyFailIP+ip).Result()
+		if err == nil && cnt == 1 {
+			store.RDB.Expire(ctx, loginKeyFailIP+ip, time.Duration(cfg.FailLockMins)*time.Minute)
+		}
+	}
+	// username 维度失败计数（专门防定向爆破热门账号，与 IP 维度独立计数、独立锁定时长）
+	if cfg.PerUserFailLock > 0 && username != "" {
+		cnt, err := store.RDB.Incr(ctx, loginKeyFailUsr+username).Result()
+		if err == nil && cnt == 1 {
+			store.RDB.Expire(ctx, loginKeyFailUsr+username, time.Duration(cfg.PerUserFailLockMins)*time.Minute)
+		}
+	}
 }
