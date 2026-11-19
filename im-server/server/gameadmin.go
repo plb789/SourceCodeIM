@@ -3564,15 +3564,16 @@ func (s *Server) handleAdminGameNoticeDelete(w http.ResponseWriter, r *http.Requ
 	adminJSON(w, map[string]interface{}{"ok": true})
 }
 
-// handleAdminGameConfigGet 商店布局配置读取（返回与公开接口同构：layout/sections/featured_games）
+// handleAdminGameConfigGet 商店布局配置读取（返回与公开接口同构：layout/sections/featured_games/card_buy_url）
 // 顺带返回上传相关全局限制参数（管理端前端预检用）：max_files_per_version / max_file_size / chunk_size
 func (s *Server) handleAdminGameConfigGet(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
 	}
-	layout, sections, featured := gameStoreConfig("")
+	layout, sections, featured, cardBuyURL := gameStoreConfig("")
 	adminJSON(w, map[string]interface{}{
 		"layout": layout, "sections": sections, "featured_games": featured,
+		"card_buy_url":          cardBuyURL,
 		"max_files_per_version": s.cfg.Game.MaxFilesPerVersion,
 		"max_file_size":         s.cfg.Game.MaxFileSize,
 		"chunk_size":            s.cfg.Game.ChunkSize,
@@ -3588,9 +3589,10 @@ func (s *Server) handleAdminGameConfigPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
-		Layout   string          `json:"layout"`
-		Sections map[string]bool `json:"sections"`
-		Featured []uint          `json:"featured"`
+		Layout     string          `json:"layout"`
+		Sections   map[string]bool `json:"sections"`
+		Featured   []uint          `json:"featured"`
+		CardBuyURL string          `json:"card_buy_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "参数错误")
@@ -3598,6 +3600,15 @@ func (s *Server) handleAdminGameConfigPut(w http.ResponseWriter, r *http.Request
 	}
 	if req.Layout != "steam" && req.Layout != "grid" {
 		adminFail(w, http.StatusBadRequest, "layout 须为 steam 或 grid")
+		return
+	}
+	cardBuyURL := strings.TrimSpace(req.CardBuyURL)
+	if len(cardBuyURL) > 512 {
+		adminFail(w, http.StatusBadRequest, "购卡链接过长（≤512）")
+		return
+	}
+	if cardBuyURL != "" && !strings.HasPrefix(strings.ToLower(cardBuyURL), "http") {
+		adminFail(w, http.StatusBadRequest, "购卡链接须以 http:// 或 https:// 开头")
 		return
 	}
 	sec := map[string]bool{"carousel": true, "featured": true, "tagbar": true}
@@ -3638,15 +3649,19 @@ func (s *Server) handleAdminGameConfigPut(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if err := store.DB.Model(&cfg).Updates(map[string]interface{}{
-		"layout": req.Layout, "sections": string(secJSON), "featured": string(featJSON),
+		"layout":      req.Layout,
+		"sections":    string(secJSON),
+		"featured":    string(featJSON),
+		"card_buy_url": cardBuyURL,
 	}).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "配置保存失败")
 		return
 	}
-	logger.Info("商店布局配置更新: layout=%s, 操作人=%s", req.Layout, adminUserFromCtx(r))
-	layout, sections, featured := gameStoreConfig("")
+	logger.Info("商店布局配置更新: layout=%s, 购卡链接=%q, 操作人=%s", req.Layout, cardBuyURL, adminUserFromCtx(r))
+	layout, sections, featured, finalCardURL := gameStoreConfig("")
 	adminJSON(w, map[string]interface{}{
 		"layout": layout, "sections": sections, "featured_games": featured,
+		"card_buy_url": finalCardURL,
 	})
 }
 

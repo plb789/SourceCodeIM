@@ -7543,6 +7543,17 @@
                 toast(T('打开商户后台失败'));
             }
         });
+        // 购卡按钮（链接由后台 /admin/api/game/config → card_buy_url 下发，留空则隐藏按钮）
+        $('gsCardBuy').addEventListener('click', function () {
+            var url = (state.cfg && state.cfg.card_buy_url) ? String(state.cfg.card_buy_url).trim() : '';
+            if (!url) return;
+            hide();
+            try {
+                window.open(url, '_blank', 'noopener,noreferrer');
+            } catch (e) {
+                toast(T('打开购卡页面失败'));
+            }
+        });
         $('gsCardProfile').addEventListener('click', function () {
             hide();
             openProfile(username);
@@ -11054,6 +11065,12 @@
             state.cfg = res.data;
             if (!state.cfg.sections) state.cfg.sections = { carousel: true, featured: true, tagbar: true };
             if (!Array.isArray(state.cfg.featured_games)) state.cfg.featured_games = [];
+            // 购卡按钮显隐：后台配置了 card_buy_url（非空、http 开头）则显示
+            var buyBtn = $('gsCardBuy');
+            if (buyBtn) {
+                var url = (state.cfg.card_buy_url || '').trim();
+                buyBtn.classList.toggle('hidden', !(url && /^https?:/i.test(url)));
+            }
         }
         loadStore(true);
     });

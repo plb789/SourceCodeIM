@@ -3622,8 +3622,14 @@
 
         .gs-user-card-btn:hover { background: var(--hover); color: var(--primary); }
 
+        /* 卡密充值 + 购卡按钮水平行：flex 等分，同高对齐，纯文本风格 */
+        .gs-user-card-btns-2 { display: flex; gap: 0; margin-top: 2px; margin-bottom: 2px; }
+        .gs-user-card-btns-2 .gs-user-card-btn { flex: 1; text-align: center; padding: 7px 6px; border: none; background: transparent; }
+
         /* 悬停卡账号信息区（账号ID + 当前游戏凭据；密码默认掩码，点击显示/复制——防截屏与旁人瞥见） */
         .gs-user-card-info { margin-top: 4px; padding: 6px 2px 0; border-top: 1px solid var(--border); }
+        /* 凭据提示文字下方分割线（与下方按钮菜单区视觉分隔） */
+        .gs-user-card-hint { padding: 2px 0 10px; margin-top: 6px; font-size: 11px; color: var(--text-light); border-bottom: 1px solid var(--border); }
         .gs-user-card-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }
         .gs-user-card-label { flex: 0 0 auto; color: var(--text-light); }
         .gs-user-card-val {
@@ -3636,7 +3642,6 @@
             background: transparent; color: var(--text-secondary); font-size: 11px; cursor: pointer;
         }
         .gs-user-card-mini:hover { color: var(--primary); border-color: var(--primary); }
-        .gs-user-card-hint { padding: 2px 0 0; font-size: 11px; color: var(--text-light); }
 
         /* 库左侧列表右键菜单（自绘，禁系统菜单；主题色） */
         .gs-ctxmenu {
@@ -5417,7 +5422,11 @@
             </div>
             <div class="gs-user-card-hint" id="gsCardPwHint"></div>
         </div>
-        <button class="gs-user-card-btn" id="gsCardRedeem">卡密充值</button>
+        <!-- 卡密充值 + 购卡：水平对齐一行；购卡按钮独立主题色区分 -->
+        <div class="gs-user-card-btns-2" id="gsCardRedeemRow">
+            <button class="gs-user-card-btn" id="gsCardRedeem">🎫 卡密充值</button>
+            <button class="gs-user-card-btn buy" id="gsCardBuy" hidden>🛒 购卡</button>
+        </div>
         <button class="gs-user-card-btn" id="gsCardMerchant">商户后台</button>
         <button class="gs-user-card-btn" id="gsCardProfile">个人资料</button>
         <button class="gs-user-card-btn" id="gsCardSettings">设置</button>

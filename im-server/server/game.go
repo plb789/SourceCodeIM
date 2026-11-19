@@ -173,13 +173,14 @@ func (s *Server) guardGame(h http.HandlerFunc) http.HandlerFunc {
 //   - layout/sections 缺失或字段非法时回退默认（steam 布局 + 全区块开），保证商店永远可渲染
 //   - featured 置顶推荐按下发顺序返回游戏摘要，且仅保留上架游戏（下架/已删除的置顶项静默剔除，
 //     商店不留死链——上架状态在管理端写入时校验，此处为运行期兜底）
-func gameStoreConfig(viewer string) (string, map[string]bool, []map[string]interface{}) {
+func gameStoreConfig(viewer string) (string, map[string]bool, []map[string]interface{}, string) {
 	layout := "steam"
 	sections := map[string]bool{"carousel": true, "featured": true, "tagbar": true}
 	featured := []map[string]interface{}{}
+	var cardBuyURL string
 	var cfg model.GameConfig
 	if err := store.DB.First(&cfg, 1).Error; err != nil {
-		return layout, sections, featured
+		return layout, sections, featured, cardBuyURL
 	}
 	if cfg.Layout == "grid" {
 		layout = "grid"
@@ -193,6 +194,9 @@ func gameStoreConfig(viewer string) (string, map[string]bool, []map[string]inter
 				}
 			}
 		}
+	}
+	if cfg.CardBuyURL != "" {
+		cardBuyURL = cfg.CardBuyURL
 	}
 	if cfg.Featured != "" {
 		var ids []uint
@@ -229,7 +233,7 @@ func gameStoreConfig(viewer string) (string, map[string]bool, []map[string]inter
 			}
 		}
 	}
-	return layout, sections, featured
+	return layout, sections, featured, cardBuyURL
 }
 
 // HandleGameStoreConfig 商店布局配置下发（公开接口：未登录概略浏览亦可取，无敏感字段；
@@ -239,11 +243,12 @@ func (s *Server) HandleGameStoreConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	viewer := strings.TrimSpace(r.URL.Query().Get("username"))
-	layout, sections, featured := gameStoreConfig(viewer)
+	layout, sections, featured, cardBuyURL := gameStoreConfig(viewer)
 	adminJSON(w, map[string]interface{}{
 		"layout":         layout,
 		"sections":       sections,
 		"featured_games": featured,
+		"card_buy_url":   cardBuyURL,
 		// 自定义推荐区块（Steam 首页多区块同构：标题+样式+有序游戏，管理端配置）
 		"store_sections": gameSectionList(viewer),
 	})

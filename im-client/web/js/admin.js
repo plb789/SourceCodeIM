@@ -8521,7 +8521,7 @@
     // ===== 商店布局设置（GET/PUT /admin/api/game/config，保存后用户下次打开商店热生效） =====
     // 设计归口：模板二选一（steam/grid）+ 三区块开关 + 置顶推荐有序列表（≤8，仅上架游戏，
     // 服务端保存时校验）；候选游戏分页拉全量（100/页，最多 3 页）供点击添加
-    var gmCfg = { layout: 'steam', sections: { carousel: true, featured: true, tagbar: true }, featured: [] };
+    var gmCfg = { layout: 'steam', sections: { carousel: true, featured: true, tagbar: true }, featured: [], cardBuyURL: '' };
     var gmCands = [];        // 可选游戏候选（仅上架，[{id,name,cover}]）
     var gmCfgLoaded = false; // 已加载过配置（radio/checkbox 默认值只在首次渲染前由 DOM checked 兜底）
 
@@ -8538,6 +8538,7 @@
             gmCfg.featured = (d.featured_games || []).map(function (g) {
                 return { id: g.id, name: g.name || ('游戏 #' + g.id), cover: g.cover || '' };
             });
+            gmCfg.cardBuyURL = (d.card_buy_url || '').trim();
             // 顺便更新上传相关全局限制（管理端前端预检用）
             if (typeof d.max_files_per_version === 'number' && d.max_files_per_version > 0) {
                 GM_MAX_FILES = d.max_files_per_version;
@@ -8574,6 +8575,7 @@
         $('gm-cfg-carousel').checked = !!gmCfg.sections.carousel;
         $('gm-cfg-featured').checked = !!gmCfg.sections.featured;
         $('gm-cfg-tagbar').checked = !!gmCfg.sections.tagbar;
+        $('gm-cfg-card-buy-url').value = gmCfg.cardBuyURL || '';
         gmRenderFeat();
         gmRenderCands();
     }
@@ -8671,7 +8673,8 @@
                 featured: $('gm-cfg-featured').checked,
                 tagbar: $('gm-cfg-tagbar').checked
             },
-            featured: gmCfg.featured.map(function (g) { return g.id; })
+            featured: gmCfg.featured.map(function (g) { return g.id; }),
+            card_buy_url: ($('gm-cfg-card-buy-url').value || '').trim()
         };
         var btn = this;
         btn.disabled = true;

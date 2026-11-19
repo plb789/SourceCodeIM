@@ -1539,7 +1539,10 @@ type GameConfig struct {
 	// Sections 区块开关 JSON：{"carousel":true,"featured":true,"tagbar":true}
 	Sections string `gorm:"column:sections;type:varchar(255);default:'{}'" json:"sections"`
 	// Featured 置顶推荐游戏 ID 有序列表 JSON：[3,1,5]（最多 8 个，超出截断）
-	Featured   string    `gorm:"column:featured;type:varchar(255);default:'[]'" json:"featured"`
+	Featured string `gorm:"column:featured;type:varchar(255);default:'[]'" json:"featured"`
+	// CardBuyURL 购卡链接：留空则前端隐藏购卡按钮；填了（如发卡平台/商户在线商城 URL）
+	// 则用户卡片"卡密充值"旁显示"购卡"按钮，点击新窗口打开。Admin 后台可编辑。
+	CardBuyURL string    `gorm:"column:card_buy_url;type:varchar(512);default:''" json:"card_buy_url"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
