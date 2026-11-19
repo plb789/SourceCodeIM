@@ -666,12 +666,18 @@ async function handleRequest(req) {
         // 同时页面加载的是旧版本。现改为 blob（内置加密快照，随构建打包一定最新）优先：
         //   blob 命中 → 直接返回最新内容，cacheDir 陈旧不影响正确性；
         //   blob 未命中（清单遗漏/工具链 zip 等大文件） → 查 cacheDir → 兜底透传。
-        // 代价：已跑过 sync 的 cacheDir 里有更新版本时（不太可能，因为 sync 也是从远端最新清单来）
-        // 会被 blob 覆盖——但这种"cacheDir 比 blob 新"的场景只在远端发了新资源但还没打包新 blob
-        // 时才出现，属罕见边缘。下次打包 blob 就追上了。
+        // 阶段三百一十二补充修复（2026-11-19 远端发版但 blob 未更新）：
+        //   HTML 入口页（*.html）跳过 blob 检查——blob 随构建打包固化，远端发版后新 HTML
+        //   无法被 blob 命中，导致客户端永远看到旧版。跳过 blob 后走 cacheDir（sync 增量
+        //   最新）→ 兜底透传网络，远端发布即时生效。
+        //   静态资源（js/css/lib 等）仍走 blob 优先，启动秒开不受影响。
         if (secureKey) {
-            var blobResp = await tryServeBlob(pathname, req);
-            if (blobResp) return blobResp;
+            var isHtmlEntry = pathname.toLowerCase().endsWith('.html');
+            // HTML 入口页：跳过 blob，直接 cacheDir → 透传（远端发布即时生效）
+            if (!isHtmlEntry) {
+                var blobResp = await tryServeBlob(pathname, req);
+                if (blobResp) return blobResp;
+            }
             var encPath = await resolveLocalEnc(pathname);
             if (encPath) {
                 var encResp = await tryServeEncrypted(encPath, mimeOf(pathname), req);
