@@ -7548,10 +7548,12 @@
             var url = (state.cfg && state.cfg.card_buy_url) ? String(state.cfg.card_buy_url).trim() : '';
             if (!url) return;
             hide();
-            try {
+            // PC 壳内走 DESKTOP.openAnnLink 独立 BrowserWindow（与 chat.js 评论外链同链路），
+            // Web 端兜底 window.open；不用 frame:false 父窗默认 action:allow 子窗会继承 frame:false 看不见
+            if (typeof DESKTOP !== 'undefined' && DESKTOP && typeof DESKTOP.openAnnLink === 'function') {
+                DESKTOP.openAnnLink(url).catch(function () { window.open(url, '_blank', 'noopener,noreferrer'); });
+            } else {
                 window.open(url, '_blank', 'noopener,noreferrer');
-            } catch (e) {
-                toast(T('打开购卡页面失败'));
             }
         });
         $('gsCardProfile').addEventListener('click', function () {

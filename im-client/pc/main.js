@@ -1973,7 +1973,16 @@ function gameDownloadSettingsSave(s) {
 })();
 
 function ensureGameStoreWindow() {
-    if (gameStoreWin) return gameStoreWin;
+    if (gameStoreWin && !gameStoreWin.isDestroyed()) {
+        // 窗口已存在：强制 reloadIgnoringCache → 后端 Cache-Control:no-cache 做 ETag/Last-Modified 校验，
+        // 文件没变返回 304（浏览器用内存缓存，零下载开销），文件变了才返回 200 拉新内容。
+        // 比每次 clearStorageData 干净得多，也比手动维护版本号/哈希表简单
+        try { gameStoreWin.webContents.reloadIgnoringCache(); } catch (e) {}
+        gameStoreWin.show();
+        gameStoreWin.focus();
+        return gameStoreWin;
+    }
+    gameStoreWin = null;
     gameStoreWin = new BrowserWindow({
         icon: WIN_ICON,
         width: 1280,
@@ -1990,9 +1999,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=32'); // v32: 背景横幅上传、经验记录、发表评测、卡片工坊等新功能
-    // 每次打开游戏中心强制清 HTTP 缓存，避免 v=31/v=80 这类版本号迭代后 WebView 仍持旧页面
-    try { gameStoreWin.webContents.session.clearCache(function () {}); } catch (e) {}
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=32');
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
