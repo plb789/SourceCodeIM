@@ -3552,7 +3552,7 @@
                 if (b.icon) {
                     var bi = document.createElement('img'); bi.src = assetUrl(b.icon); bd.appendChild(bi);
                 } else { bd.appendChild(el('span', 'gp-badge-ic', b.type === 'level' ? '⭐' : '🏅')); }
-                bd.title = b.name;
+                bd.title = b.name + (b.desc ? ' — ' + b.desc : '');
                 badges.appendChild(bd);
             });
             return badges.childNodes.length ? badges : null;

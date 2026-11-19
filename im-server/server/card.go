@@ -508,7 +508,7 @@ func (s *Server) HandleBadgeCraft(w http.ResponseWriter, r *http.Request) {
 				Username: username, Type: "level",
 				Code:     "lv" + strconv.Itoa(newLevel),
 				Name:     "等级 " + strconv.Itoa(newLevel),
-				Desc:     "Steam 同款个人等级徽章",
+				Desc:     "个人等级徽章",
 			}).Error; err != nil {
 				return err
 			}

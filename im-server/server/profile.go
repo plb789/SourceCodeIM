@@ -722,7 +722,7 @@ func (s *Server) HandleProfileGet(w http.ResponseWriter, r *http.Request) {
 	if !hasLevelBadge {
 		badges = append([]ProfileBadgeResp{{
 			Type: "level", Code: "lv" + strconv.Itoa(u.Level),
-			Name: "等级 " + strconv.Itoa(u.Level), Icon: "", Desc: "Steam 同款个人等级徽章",
+			Name: "等级 " + strconv.Itoa(u.Level), Icon: "", Desc: "个人等级徽章",
 		}}, badges...)
 	}
 
@@ -935,7 +935,7 @@ func achUnlockCore(username string, ach model.GameAchievement) (bool, int, int64
 				Username: username, Type: "level",
 				Code: "lv" + strconv.Itoa(newLevel),
 				Name: "等级 " + strconv.Itoa(newLevel),
-				Icon: "", Desc: "Steam 同款个人等级徽章",
+				Icon: "", Desc: "个人等级徽章",
 			})
 		}
 		if err := tx.Model(&user).Updates(updates).Error; err != nil {
@@ -1345,7 +1345,7 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 				Username: user.Username, Type: "level",
 				Code: "lv" + strconv.Itoa(newLevel),
 				Name: "等级 " + strconv.Itoa(newLevel),
-				Icon: "", Desc: "Steam 同款个人等级徽章",
+				Icon: "", Desc: "个人等级徽章",
 			}).Error; err != nil {
 				return err
 			}
@@ -1536,7 +1536,7 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 					Username: author.Username, Type: "level",
 					Code: "lv" + strconv.Itoa(newLevel),
 					Name: "等级 " + strconv.Itoa(newLevel),
-					Icon: "", Desc: "Steam 同款个人等级徽章",
+					Icon: "", Desc: "个人等级徽章",
 				})
 			}
 		} else {
@@ -2408,7 +2408,7 @@ func (s *Server) HandleProfileBadgesGet(w http.ResponseWriter, r *http.Request) 
 	if !hasLevelBadge {
 		badges = append([]ProfileBadgeResp{{
 			Type: "level", Code: "lv" + strconv.Itoa(u.Level),
-			Name: "等级 " + strconv.Itoa(u.Level), Icon: "", Desc: "Steam 同款个人等级徽章",
+			Name: "等级 " + strconv.Itoa(u.Level), Icon: "", Desc: "个人等级徽章",
 		}}, badges...)
 	}
 	profileOK(w, map[string]interface{}{

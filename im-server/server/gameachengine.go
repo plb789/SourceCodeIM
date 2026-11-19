@@ -387,7 +387,7 @@ func achDailyUnlockCore(username string, dach model.GameDailyAchievement, dateKe
 				Username: username, Type: "level",
 				Code: "lv" + strconv.Itoa(newLevel),
 				Name: "等级 " + strconv.Itoa(newLevel),
-				Icon: "", Desc: "Steam 同款个人等级徽章",
+				Icon: "", Desc: "个人等级徽章",
 			})
 		}
 		if err := tx.Model(&user).Updates(updates).Error; err != nil {

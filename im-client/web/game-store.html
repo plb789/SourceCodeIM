@@ -2681,13 +2681,13 @@
         /* 属性弹窗本地游戏可编辑行（名称/端口转发；商店游戏隐藏，仅本地游戏显示） */
         .gs-prop-name {
             flex: 1; min-width: 0; height: 32px; padding: 0 10px; box-sizing: border-box;
-            background: var(--bg-in); border: 1px solid var(--border-in); border-radius: 6px;
+            background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px;
             color: var(--text); font-size: 13px; outline: none;
         }
         .gs-prop-name:focus { border-color: var(--primary); }
         .gs-prop-pf-edit {
             flex: 1; min-width: 0; height: auto; padding: 8px 10px; box-sizing: border-box;
-            background: var(--bg-in); border: 1px solid var(--border-in); border-radius: 6px;
+            background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px;
             color: var(--text); font-size: 12.5px; font-family: var(--mono, monospace); line-height: 1.6;
             resize: vertical; outline: none;
         }
@@ -2701,15 +2701,17 @@
             box-sizing: border-box;
             padding: 8px 10px;
             border-radius: 6px;
-            border: 1px solid var(--border-in);
-            background: var(--bg-in);
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
             color: var(--text);
             font-size: 13px;
             line-height: 1.5;
             resize: vertical;
             outline: none;
+            transition: border-color .15s;
         }
         .gs-rev-input:focus { border-color: var(--primary); }
+        .gs-rev-input::placeholder { color: var(--text-light); opacity: .7; }
         .gs-prop-pf-hint { text-align: left; font-size: 11px; color: var(--text-light); opacity: .8; line-height: 1.6; }
 
         /* 本地游戏详情页说明行（库右侧主区底部提示） */
