@@ -625,7 +625,7 @@ func TestAdminGameToolRoute(t *testing.T) {
 	if err := store.DB.AutoMigrate(&model.User{}, &model.Merchant{}); err != nil {
 		t.Fatalf("测试表迁移失败：%v", err)
 	}
-	// admin（role=1）与 merchant（role=2）双账号 + 双 token（键前缀隔离，与守卫校验同键）
+	// admin（role=1）与 merchant（role=UserRoleMerchant/3）双账号 + 双 token（键前缀隔离，与守卫校验同键）
 	adm := "admtest_gametool"
 	if err := store.DB.Create(&model.User{Username: adm, Role: 1, Points: 0}).Error; err != nil {
 		t.Fatalf("admin 账号创建失败：%v", err)

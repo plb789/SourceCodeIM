@@ -67,6 +67,22 @@ const (
 	UserStatusDeleted int8 = 2 // 已注销（软删除：用户名继续占用防同名重新注册继承旧好友/消息数据，列表不再展示）
 )
 
+// 用户角色常量
+const (
+	UserRoleNormal   int8 = 0 // 普通用户
+	UserRoleAdmin    int8 = 1 // 管理员
+	UserRoleSystem   int8 = 2 // 系统保留账户（不可登录，仅用于积分中转/孤儿积分归属）
+	UserRoleMerchant int8 = 3 // 商户（可登录商户独立后台）
+)
+
+// 系统保留账户用户名常量
+const (
+	// StorePlatformPool 孤儿积分暂存池：当充值退/退款的目标用户已被删除（硬删或管理员注销）时，
+	// 无处可退的积分暂存到此账户。该账户 Role=UserRoleSystem、Status=UserStatusLocked，
+	// 不能登录、不能消费、只能被系统代码加分。
+	StorePlatformPool = "_platform_pool"
+)
+
 // PointsLog 阶段七十八：积分流水（AI 扣分/管理员调整/注册赠送全量审计，后台积分管理面板数据源）
 type PointsLog struct {
 	ID           int64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
@@ -1111,7 +1127,7 @@ type Game struct {
 	// RechargeDailyMax 单用户单日累计积分限额（0=不限；pending 也占额，防并发双下单绕过）
 	RechargeDailyMax float64 `gorm:"column:recharge_daily_max;type:double;default:0" json:"recharge_daily_max"`
 	// Status 0上架 1下架（下架后商店列表/详情不展示，已入库用户可继续下载已拥有版本）
-	// OwnerUsername 归属商户（=users.username role=2；空=官方游戏，管理端专属。商户侧全部接口
+	// OwnerUsername 归属商户（=users.username role=UserRoleMerchant(3)；空=官方游戏，管理端专属。商户侧全部接口
 	// 以本列做 SQL 层隔离归口：不匹配一律 404 不暴露存在性）。AutoMigrate 自动加列，存量零回归
 	OwnerUsername string `gorm:"column:owner_username;type:varchar(32);default:'';index" json:"owner_username"`
 	// AuditStatus 商户游戏审核状态（商户自助上架链路）：0=官方免审（默认，存量/管理员创建）/
@@ -1140,7 +1156,7 @@ const (
 )
 
 // Merchant 商户资料/配置表 im_merchant（商户独立后台）：
-// username 对应 users.username（role=2，账号由管理员后台创建）；commission_rate 为商户分成比例
+// username 对应 users.username（role=UserRoleMerchant(3)，账号由管理员后台创建）；commission_rate 为商户分成比例
 // （0~100，应结金额=成功充值总额×rate%，服务端计算商户只读）；停用仅禁登录，已过审游戏保留展示
 type Merchant struct {
 	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`

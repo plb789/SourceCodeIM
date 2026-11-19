@@ -137,6 +137,50 @@ func InitMySQL(cfg *config.Config) error {
 		fmt.Printf("[store] WARN 存量 exp_log detail 迁移失败（不影响主流程）: %v\n", r.Error)
 	}
 
+	// 系统保留账户 seed：platform_pool（孤儿积分暂存池）
+	// 充值退/退款时原用户被硬删或注销 → 无处可退的积分归入此账户
+	// Role=UserRoleSystem, Status=UserStatusLocked → 不能登录、不能消费，只能被系统代码加分
+	// 用 OnConflict DoNothing 幂等写入（唯一键 idx_username），已存在时不覆盖（保留已有 points 余额）
+	ppSeed := model.User{
+		Username:  model.StorePlatformPool,
+		Nickname:  "系统积分暂存池",
+		Role:      model.UserRoleSystem,
+		Status:    model.UserStatusLocked,
+		LockReason: "系统保留账户，不可登录",
+		Points:    0,
+	}
+	if r := db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "username"}},
+		DoNothing: true,
+	}).Create(&ppSeed); r.Error != nil {
+		fmt.Printf("[store] WARN platform_pool seed 失败（不影响主流程）: %v\n", r.Error)
+	}
+	// 二次校验：如果已存在但 role/status 不对（手工误改），强制修正
+	db.Model(&model.User{}).
+		Where("username = ? AND (role != ? OR status != ?)", model.StorePlatformPool, model.UserRoleSystem, model.UserStatusLocked).
+		Updates(map[string]interface{}{"role": model.UserRoleSystem, "status": model.UserStatusLocked, "lock_reason": "系统保留账户，不可登录"})
+
+	// 角色分离迁移（2026-11-19）：UserRoleSystem=2 与原商户 role=2 冲突
+	// 把所有 role=2 且在 im_merchant 表中有记录的商户账号迁移到 role=3（UserRoleMerchant）
+	// platform_pool 已在上面强制修正回 role=2，不会被误改
+	var migrateCnt int64
+	db.Model(&model.User{}).
+		Where("role = ? AND username IN (?)", model.UserRoleSystem,
+			db.Table("im_merchant").Select("username")).
+		UpdateColumn("role", model.UserRoleMerchant).
+		RowsAffected = migrateCnt
+	// 用子查询方式再做一次（兼容 GORM UpdateColumn RowsAffected 赋值问题）
+	db.Model(&model.User{}).
+		Where("role = ?", model.UserRoleSystem).
+		Where("username IN ?", db.Table("im_merchant").Select("username")).
+		Update("role", model.UserRoleMerchant)
+	db.Model(&model.User{}).
+		Where("role = ?", model.UserRoleSystem).
+		Where("username = ?", model.StorePlatformPool).
+		UpdateColumn("role", model.UserRoleSystem) // 兜底：platform_pool 保持 role=2
+	_ = migrateCnt
+	fmt.Printf("[store] 商户角色迁移完成（role=UserRoleMerchant 与 UserRoleSystem 分离）\n")
+
 	// A1 seed：等级配置表首次建表后自动 INSERT/UPDATE 文档附录 A 预设数据
 	// 必须用 Save 或 OnConflict UPDATE（不是 DoNothing）—— 保证 ShowcaseSlots/Title 等字段是最新值
 	// 否则旧表如果已经有 Lv1-Lv5 行，DoNothing 会跳过更新，seed 里 ShowcaseSlots=4 不会生效

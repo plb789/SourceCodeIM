@@ -16,6 +16,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -607,49 +608,84 @@ func rechargeRefund(o *model.RechargeOrder, reason string) bool {
 	if len(reason) > 250 {
 		reason = reason[:250]
 	}
-	now := time.Now()
-	// 幂等前置：先做状态机 CAS 抢占（成功即唯一赢家，失败直接 return 幂等忽略）
-	res := store.DB.Model(&model.RechargeOrder{}).
-		Where("id = ? AND status = ?", o.ID, model.RechargeOrderStatusPending).
-		Updates(map[string]interface{}{"status": model.RechargeOrderStatusFailed, "fail_reason": reason, "done_time": &now})
-	if res.Error != nil {
-		logger.Error("充值订单标失败失败（订单 %d）：%v", o.ID, res.Error)
-		return false
-	}
-	if res.RowsAffected == 0 {
-		return false // 已是终态（重复回执/并发扫描），幂等忽略
-	}
-	// 状态机 CAS 抢占成功 → 积分退回 + 流水 + 商家扣回 同事务原子提交
+	// 状态机 CAS + 积分退回 + 流水 + 商家扣回 同事务原子提交
+	// 关键：status=failed 必须和积分退回原子可见——如果 CAS 放在事务外，
+	// 存在竞态窗口：CAS 先提交（测试/其他查询看到 status=failed）但积分退回事务还没 commit。
 	var sponsorDeducted bool
+	var userGone bool
+	var didRefund bool
 	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
-		// 积分退回：FOR UPDATE 锁 User 行（与充值下单的 User 锁同顺序，与商家扣回的 Merchant 锁同顺序）
+		// ① 状态机 CAS（在事务内：pending→failed；已终态则 RowsAffected=0 → 幂等跳过）
+		now := time.Now()
+		res := tx.Model(&model.RechargeOrder{}).
+			Where("id = ? AND status = ?", o.ID, model.RechargeOrderStatusPending).
+			Updates(map[string]interface{}{"status": model.RechargeOrderStatusFailed, "fail_reason": reason, "done_time": &now})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil // 已是终态（重复回执/并发扫描），幂等忽略，整个事务空提交
+		}
+		didRefund = true
+		// ② 积分退回：FOR UPDATE 锁 User 行
 		var lockedUser model.User
 		if uerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("username = ?", o.Username).First(&lockedUser).Error; uerr != nil {
-			return fmt.Errorf("锁定用户失败: %w", uerr)
+			if errors.Is(uerr, gorm.ErrRecordNotFound) {
+				// 用户已注销/清理（管理员后台删用户但充值订单未同步删）——
+				// 积分无处可退 → 归入 platform_pool（系统孤儿积分暂存池）
+				userGone = true
+				logger.Warn("充值退分用户已不存在：订单 %d 用户 %s 积分 %.3f 转入 platform_pool（账号已清理），将继续执行商家扣回",
+					o.ID, o.Username, o.Points)
+				// FOR UPDATE 锁 platform_pool 行（锁顺序：同其他 User 行）
+				var pp model.User
+				if perr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("username = ?", model.StorePlatformPool).First(&pp).Error; perr != nil {
+					// 极端情况：platform_pool 被删了？那真没办法，只记日志
+					logger.Error("⚡platform_pool 账户也查不到！订单 %d 用户 %s 积分 %.3f 彻底丢失，请人工对账⚡",
+						o.ID, o.Username, o.Points)
+				} else {
+					if uerr2 := tx.Model(&model.User{}).Where("username = ?", model.StorePlatformPool).
+						Update("points", gorm.Expr("ROUND(points + ?, 3)", o.Points)).Error; uerr2 != nil {
+						return uerr2
+					}
+					var after float64
+					tx.Model(&model.User{}).Select("points").Where("username = ?", model.StorePlatformPool).Scan(&after)
+					if lerr := tx.Create(&model.PointsLog{
+						Username: model.StorePlatformPool, Change: o.Points, BalanceAfter: after,
+						Reason: "game_recharge_refund_orphan", Operator: "system",
+						Detail: fmt.Sprintf("充值失败但用户 %s 已注销（订单 %d），积分 %.3f 归入暂存池", o.Username, o.ID, o.Points),
+					}).Error; lerr != nil {
+						return lerr
+					}
+				}
+				// 不 return——继续往下走商家扣回
+			} else {
+				return fmt.Errorf("锁定用户失败: %w", uerr)
+			}
 		}
-		// 原子加分 + 事务内读真实余额供流水使用
-		if uerr := tx.Model(&model.User{}).Where("username = ?", o.Username).
-			Update("points", gorm.Expr("ROUND(points + ?, 3)", o.Points)).Error; uerr != nil {
-			return uerr
+		if !userGone {
+			// 用户存在：正常加分 + 写流水
+			if uerr := tx.Model(&model.User{}).Where("username = ?", o.Username).
+				Update("points", gorm.Expr("ROUND(points + ?, 3)", o.Points)).Error; uerr != nil {
+				return uerr
+			}
+			var after float64
+			tx.Model(&model.User{}).Select("points").Where("username = ?", o.Username).Scan(&after)
+			if lerr := tx.Create(&model.PointsLog{
+				Username: o.Username, Change: o.Points, BalanceAfter: after,
+				Reason: "game_recharge_refund", Operator: "system",
+				Detail: fmt.Sprintf("充值失败退还（订单 %d）: %s", o.ID, reason),
+			}).Error; lerr != nil {
+				return lerr
+			}
 		}
-		var after float64
-		tx.Model(&model.User{}).Select("points").Where("username = ?", o.Username).Scan(&after)
-		if lerr := tx.Create(&model.PointsLog{
-			Username: o.Username, Change: o.Points, BalanceAfter: after,
-			Reason: "game_recharge_refund", Operator: "system",
-			Detail: fmt.Sprintf("充值失败退还（订单 %d）: %s", o.ID, reason),
-		}).Error; lerr != nil {
-			return lerr
-		}
-		// 商家赞助充值扣回（type=5 反向）：事务内执行 sponsorRechargeRefund 的扣回逻辑
-		// —— 直接复用 sponsorRechargeRefund 内部的独立事务会导致嵌套事务（GORM 不支持，会变成同事务），
-		// 这里用同样的 FOR UPDATE Merchant + MerchantIncomeLog 条件 CAS 逻辑内联
+		// ③ 商家赞助充值扣回（无论用户存在与否都执行）
 		var purchaseLog model.MerchantIncomeLog
 		if cerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("purchase_id = ? AND type = 5 AND status != 3", o.ID).
 			Order("id DESC").First(&purchaseLog).Error; cerr != nil {
-			sponsorDeducted = false // 无对应 type=5 分账流水 → 无需扣回（开关中途关闭/未开过分账）
+			sponsorDeducted = false
 			return nil
 		}
 		sponsorDeducted = true
@@ -685,12 +721,18 @@ func rechargeRefund(o *model.RechargeOrder, reason string) bool {
 		}).Error
 	})
 	if errTx != nil {
-		// 状态机已标 failed，事务内积分退回/流水/商家扣回任一失败 → 必须暴露，人工对账
-		// 不能 silent return false 让状态机停在 failed 但积分没退
-		logger.Error("⚡充值退回事务失败（订单 %d 用户 %s）：状态机已标 failed 但积分/流水/商家扣回部分可能未生效 —— 请人工对账⚡：%v", o.ID, o.Username, errTx)
-		return true // RowsAffected=1 说明状态机 CAS 已成功，这次调用是赢家；虽然事务失败但订单已 failed，避免重复调用
+		logger.Error("⚡充值退回事务失败（订单 %d 用户 %s）：%v", o.ID, o.Username, errTx)
+		return true
 	}
-	logger.Info("充值订单退分：订单 %d 用户 %s 退 %.3f（%s），商家扣回=%v", o.ID, o.Username, o.Points, reason, sponsorDeducted)
+	if !didRefund {
+		// 幂等跳过：订单已是终态（重复回执/并发扫描的第二个赢家）
+		return false
+	}
+	orphanTag := ""
+	if userGone {
+		orphanTag = "（孤儿：用户已注销）"
+	}
+	logger.Info("充值订单退分：订单 %d 用户 %s 退 %.3f（%s），商家扣回=%v%s", o.ID, o.Username, o.Points, reason, sponsorDeducted, orphanTag)
 	return true
 }
 

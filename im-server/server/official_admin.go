@@ -187,11 +187,11 @@ func (s *Server) handleOfficialAdminAccountCreate(w http.ResponseWriter, r *http
 		adminFail(w, http.StatusBadRequest, "display_name 不能为空")
 		return
 	}
-	// Owner 归属校验：非空时校验对应用户存在且 role=2（商户）
+	// Owner 归属校验：非空时校验对应用户存在且 role=UserRoleMerchant(3)（商户）
 	owner := strings.TrimSpace(req.Owner)
 	if owner != "" {
 		var u model.User
-		if err := store.DB.Where("username = ? AND role = 2", owner).First(&u).Error; err != nil {
+		if err := store.DB.Where("username = ? AND role = ?", owner, model.UserRoleMerchant).First(&u).Error; err != nil {
 			adminFail(w, http.StatusBadRequest, "归属商户账号不存在或无权限")
 			return
 		}

@@ -165,6 +165,10 @@ func (s *Server) handleAdminUserPasswordPut(w http.ResponseWriter, r *http.Reque
 // userStatusRejectMsg 阶段一百三十五：账号状态登录拦截归口（IM 登录 handleLogin 与后台登录 handleAdminLogin 共用）
 // 返回给用户看的拒绝原因（封禁账号提示管理员填写的封禁原因）；空串=正常放行
 func userStatusRejectMsg(u *model.User) string {
+	// 系统保留账户绝对不能登录（platform_pool 孤儿积分暂存池等）
+	if u.Role == model.UserRoleSystem {
+		return "系统保留账户，不允许登录"
+	}
 	switch u.Status {
 	case model.UserStatusLocked:
 		if reason := strings.TrimSpace(u.LockReason); reason != "" {

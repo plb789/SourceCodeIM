@@ -70,6 +70,26 @@ func gameDescContentClean(content string) string {
 		return ""
 	}
 
+	// 危险标签整块吞掉（前置预处理，在白名单剥壳逻辑之前）：
+	// 这些标签本身就是代码/执行容器，内文不能保留——
+	// <script>alert(1)</script> → 整块删掉（不能只剥壳留 alert(1)）
+	// <style>...css...</style>、<iframe>、<svg>、<object>、<embed>、<form> 同理
+	// Go RE2 不支持 \1 反向引用，必须显式列出每一对开始/结束标签
+	dangerousBlockRe := regexp.MustCompile(`(?is)` +
+		`<\s*script\b[^>]*>.*?<\s*/\s*script\s*>|<\s*script\b[^>]*/\s*>` +
+		`|<\s*style\b[^>]*>.*?<\s*/\s*style\s*>|<\s*style\b[^>]*/\s*>` +
+		`|<\s*iframe\b[^>]*>.*?<\s*/\s*iframe\s*>|<\s*iframe\b[^>]*/\s*>` +
+		`|<\s*svg\b[^>]*>.*?<\s*/\s*svg\s*>|<\s*svg\b[^>]*/\s*>` +
+		`|<\s*object\b[^>]*>.*?<\s*/\s*object\s*>|<\s*object\b[^>]*/\s*>` +
+		`|<\s*embed\b[^>]*>.*?<\s*/\s*embed\s*>|<\s*embed\b[^>]*/\s*>` +
+		`|<\s*form\b[^>]*>.*?<\s*/\s*form\s*>|<\s*form\b[^>]*/\s*>` +
+		`|<\s*input\b[^>]*/?\s*>` +
+		`|<\s*textarea\b[^>]*>.*?<\s*/\s*textarea\s*>|<\s*textarea\b[^>]*/\s*>` +
+		`|<\s*button\b[^>]*>.*?<\s*/\s*button\s*>|<\s*button\b[^>]*/\s*>` +
+		`|<\s*link\b[^>]*/?\s*>` +
+		`|<\s*meta\b[^>]*/?\s*>`)
+	content = dangerousBlockRe.ReplaceAllString(content, "")
+
 	// 白名单标签名集合（小写）
 	allowedTags := map[string]bool{
 		"p": true, "br": true, "hr": true,

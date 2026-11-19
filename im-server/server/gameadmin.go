@@ -1109,7 +1109,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	//（仅新版前端编辑表单保存时携带）——u.OwnerUsername 随 model.Game 嵌入解码，与库内值相等视为
 	// 未变更（表单全量回写零影响）：
 	//   目标空 = 转官方：清审核字段回官方免审，玩家端即时恢复可见；
-	//   目标非空 = 转商户：目标必须是 users.role=2 商户账号（不存在/非商户整单拒绝并提示），
+	//   目标非空 = 转商户：目标必须是 users.role=UserRoleMerchant(3) 商户账号（不存在/非商户整单拒绝并提示），
 	//   转移即回待审核 + 强制下架——玩家侧过滤墙只放行 audit IN (0,2)，官方转商户后游戏即时从玩家端隐藏，
 	//   商户管理「游戏审核」通过后仍保持下架，商户自主点"申请上架"才上线（与新商户游戏语义一致）
 	ownTarget := strings.TrimSpace(u.OwnerUsername)
@@ -1124,7 +1124,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 			logger.Info("游戏转官方: %s (%s), 原归属=%s, 操作人=%s", u.Name, g.Slug, g.OwnerUsername, adminUserFromCtx(r))
 		} else {
 			var mCnt int64
-			store.DB.Model(&model.User{}).Where("username = ? AND role = ?", ownTarget, 2).Count(&mCnt)
+			store.DB.Model(&model.User{}).Where("username = ? AND role = ?", ownTarget, model.UserRoleMerchant).Count(&mCnt)
 			if mCnt == 0 {
 				adminFail(w, http.StatusBadRequest, "归属目标账号不存在或不是商户账号（请在商户管理中先创建）")
 				return

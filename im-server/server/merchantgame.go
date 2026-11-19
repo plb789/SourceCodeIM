@@ -3,7 +3,7 @@ package server
 // ===== 商户独立后台·游戏/公告/版本自助管理（商户独立后台开发文档 §3.3） =====
 //
 // 与管理端共用清洗 helper 与版本合并链路（gameadmin.go 归口），差异仅在：
-//   1. 身份：merchantGuard（role=2 + 商户启用），归属 merchantOwnGame SQL 层隔离
+//   1. 身份：merchantGuard（role=UserRoleMerchant(3) + 商户启用），归属 merchantOwnGame SQL 层隔离
 //   2. 字段白名单：商户仅可改对外字段 + 汇率/档位/网关绑定；运营字段（联机/存档/种子/owner/audit）拒绝
 //   3. 审核状态机：新增/编辑对外字段 → audit=1 待审核；通过(audit=2)后可自主上架；下架随时
 

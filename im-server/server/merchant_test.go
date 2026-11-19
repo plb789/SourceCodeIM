@@ -1,7 +1,7 @@
 package server
 
 // 商户独立后台单测（真实 MySQL + Redis，TestMain 已锚定 bin/config.yaml）：
-// 鉴权（role=2/启用校验/防越权）、审核状态机（新增→待审→通过上架→编辑回审→驳回）、
+// 鉴权（role=UserRoleMerchant(3)/启用校验/防越权）、审核状态机（新增→待审→通过上架→编辑回审→驳回）、
 // 玩家侧过滤墙（audit IN (0,2)）、横向越权隔离、停用商户即时失效。
 // 测试数据 mtest_ 前缀用后即清。
 
@@ -26,13 +26,13 @@ import (
 	"im-server/store"
 )
 
-// merchantTestSeed 建商户账号（users.role=2 + im_merchant 行；Points 显式归零防 default:100 零值陷阱）
+// merchantTestSeed 建商户账号（users.role=UserRoleMerchant(3) + im_merchant 行；Points 显式归零防 default:100 零值陷阱）
 func merchantTestSeed(t *testing.T, username string, status int8, rate float64) {
 	t.Helper()
 	if err := store.DB.AutoMigrate(&model.Merchant{}, &model.User{}, &model.Game{}, &model.GameNotice{}, &model.RechargeOrder{}); err != nil {
 		t.Fatalf("测试表迁移失败：%v", err)
 	}
-	if err := store.DB.Create(&model.User{Username: username, Role: 2, Points: 0}).Error; err != nil {
+	if err := store.DB.Create(&model.User{Username: username, Role: model.UserRoleMerchant, Points: 0}).Error; err != nil {
 		t.Fatalf("商户账号创建失败：%v", err)
 	}
 	store.DB.Model(&model.User{}).Where("username = ?", username).Update("points", 0)

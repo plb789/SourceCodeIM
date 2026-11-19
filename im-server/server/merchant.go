@@ -3,8 +3,8 @@ package server
 // ===== 商户独立后台·鉴权与登录归口（商户独立后台开发文档 §3.2） =====
 //
 // 与 adminGuard 同范式、独立键前缀（im:merchant:token:）互不通用：
-//   登录 POST /api/merchant/login（username+password → verifyUser + role=2 + 商户启用校验 → 签发 Bearer）
-//   守卫 merchantGuard：每请求回查 users.role=2 与 im_merchant.status（防改角色/停用后旧 token 残留）
+//   登录 POST /api/merchant/login（username+password → verifyUser + role=UserRoleMerchant(3) + 商户启用校验 → 签发 Bearer）
+//   守卫 merchantGuard：每请求回查 users.role=UserRoleMerchant(3) 与 im_merchant.status（防改角色/停用后旧 token 残留）
 //   归属 merchantOwnGame：商户操作游戏的 SQL 层隔离归口（owner_username 不匹配一律 404 不暴露存在性）
 
 import (
@@ -77,13 +77,13 @@ func registerMerchantRoutes(s *Server) {
 }
 
 // merchantLoginStatus 商户登录前置状态（登录与守卫共用口径）：
-// 返回错误文案（空=可登录）。校验 role=2 + im_merchant 存在且启用
+// 返回错误文案（空=可登录）。校验 role=UserRoleMerchant(3) + im_merchant 存在且启用
 func merchantLoginStatus(username string) string {
 	var u model.User
 	if err := store.DB.Select("username", "role", "status").Where("username = ?", username).First(&u).Error; err != nil {
 		return "账号不存在"
 	}
-	if u.Role != 2 {
+	if u.Role != model.UserRoleMerchant {
 		return "该账号无商户后台权限"
 	}
 	var m model.Merchant
@@ -156,7 +156,7 @@ func (s *Server) handleMerchantLogout(w http.ResponseWriter, r *http.Request) {
 	adminJSON(w, map[string]interface{}{"logout": true})
 }
 
-// merchantGuard 商户接口鉴权中间件：Bearer → username → 实时复核 role=2 + 商户启用（防改角色/
+// merchantGuard 商户接口鉴权中间件：Bearer → username → 实时复核 role=UserRoleMerchant(3) + 商户启用（防改角色/
 // 停用后旧 token 残留续权），通过后注入商户身份上下文
 func (s *Server) merchantGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -1539,16 +1539,29 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 
 	var refunded bool
 	var refundExpired bool
+	var userGone bool
 	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
 		// ====== 锁顺序：User → GameLibrary → MerchantIncomeLog → Merchant ======
 		// 与 HandleGameLibraryJoin / rechargeRefund / card.go / redpacket.go / aipoints.go
 		// 所有积分操作路径的 User 首锁策略严格对齐，消除跨路径 ABBA 死锁。
 
 		// ① 显式 FOR UPDATE 锁 User 行（所有积分操作统一首锁）
+		//    边界保护：User 被硬删（运维/外部脚本）但 GameLibrary 行还在时 → 退积分给 platform_pool
 		var lockedUser model.User
 		if uerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("username = ?", username).First(&lockedUser).Error; uerr != nil {
-			return fmt.Errorf("锁定用户失败: %w", uerr)
+			if errors.Is(uerr, gorm.ErrRecordNotFound) {
+				userGone = true
+				logger.Warn("移出退款用户已不存在：用户 %s 游戏#%d，积分将转入 platform_pool", username, id)
+				// 首锁改为 platform_pool（锁顺序：User → User(platform_pool)，两者不同行互不反向等待）
+				var pp model.User
+				if perr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("username = ?", model.StorePlatformPool).First(&pp).Error; perr != nil {
+					return fmt.Errorf("用户 %s 和 platform_pool 均查不到，无法处理退款，请人工对账", username)
+				}
+			} else {
+				return fmt.Errorf("锁定用户失败: %w", uerr)
+			}
 		}
 
 		// ② FOR UPDATE 锁 GameLibrary + 状态机 CAS 抢占：
@@ -1585,17 +1598,25 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 
 		now := time.Now()
 		if pay > 0 && canRefund {
-			// ③ 退用户积分（User 行已 FOR UPDATE 锁住，UPDATE 安全）
-			res := tx.Model(&model.User{}).Where("username = ?", username).
+			// ③ 退积分：userGone 时退给 platform_pool（孤儿积分暂存池）
+			targetUser := username
+			reason := "game_refund"
+			detail := "移出游戏库退还: 游戏#" + strconv.FormatUint(id, 10)
+			if userGone {
+				targetUser = model.StorePlatformPool
+				reason = "game_refund_orphan"
+				detail = "移出退款但用户 " + username + " 已注销，积分归入暂存池: 游戏#" + strconv.FormatUint(id, 10)
+			}
+			res := tx.Model(&model.User{}).Where("username = ?", targetUser).
 				Update("points", gorm.Expr("ROUND(points + ?, 3)", pay))
 			if res.Error != nil {
 				return fmt.Errorf("积分退还失败: %w", res.Error)
 			}
 			var after float64
-			tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
+			tx.Model(&model.User{}).Select("points").Where("username = ?", targetUser).Scan(&after)
 			if err := tx.Create(&model.PointsLog{
-				Username: username, Change: pay, BalanceAfter: after,
-				Reason: "game_refund", Operator: "system", Detail: "移出游戏库退还: 游戏#" + strconv.FormatUint(id, 10),
+				Username: targetUser, Change: pay, BalanceAfter: after,
+				Reason: reason, Operator: "system", Detail: detail,
 			}).Error; err != nil {
 				logger.Warn("退款流水写失败（将随事务回滚）：%v", err)
 			}

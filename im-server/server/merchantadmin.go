@@ -2,7 +2,7 @@ package server
 
 // ===== 商户独立后台·管理端增量（商户独立后台开发文档 §3.4，adminGuard 鉴权） =====
 //
-// 商户管理：建号（users.role=2 + im_merchant 行）/ 改显示名/分成比例 / 启停 / 重置密码
+// 商户管理：建号（users.role=UserRoleMerchant(3) + im_merchant 行）/ 改显示名/分成比例 / 启停 / 重置密码
 // 游戏审核：待审核队列 + 通过（audit=2，保持原上架状态，商户自主决定上架/下架）/ 驳回（audit=3 + 必填理由）
 
 import (
@@ -102,7 +102,7 @@ func (s *Server) handleAdminMerchantList(w http.ResponseWriter, r *http.Request)
 	adminJSON(w, map[string]interface{}{"list": items, "total": total, "page": page, "size": size})
 }
 
-// handleAdminMerchantCreate 创建商户（users.role=2 + im_merchant 行；账号=IM 账号体系）
+// handleAdminMerchantCreate 创建商户（users.role=UserRoleMerchant(3) + im_merchant 行；账号=IM 账号体系）
 // storage_quota_bytes 可选：0=跟随全局默认（缺省），-1=不限，>0=专属配额（字节）
 func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -155,7 +155,7 @@ func (s *Server) handleAdminMerchantCreate(w http.ResponseWriter, r *http.Reques
 	}
 	// 双行落库（users 行 + 商户资料行）；users.Points 显式赋值防 GORM 零值插 0 后走默认 100——
 	// 商户号不参与游戏充值/消费，赠送与否无意义，直接给 0 并显式归零（registerGiftPoints 语义不适用）
-	u := model.User{Username: req.Username, Password: hashPassword(req.Password), Role: 2, Points: 0}
+	u := model.User{Username: req.Username, Password: hashPassword(req.Password), Role: model.UserRoleMerchant, Points: 0}
 	if err := store.DB.Create(&u).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "账号创建失败")
 		return
