@@ -1242,9 +1242,17 @@
             background: var(--panel-bg);
             color: var(--text);
             font-size: 13px;
+            font-family: inherit;
+            line-height: normal;
             cursor: pointer;
             white-space: nowrap;
+            outline: none;
+            -webkit-appearance: none;
+            appearance: none;
+            transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
         }
+        .gs-btn:focus { outline: none; }
+        .gs-btn:focus-visible { outline: none; }
 
         .gs-btn:hover { background: var(--hover); }
 
@@ -1253,6 +1261,7 @@
         .gs-btn.primary:hover { background: var(--gs-btn); opacity: 0.9; }
 
         .gs-btn.danger { color: var(--text); border-color: var(--text-secondary); }
+        .gs-btn.danger:hover { background: rgba(229, 72, 77, 0.1); border-color: rgba(229, 72, 77, 0.5); color: #e5484d; }
 
         /* 运行中按钮：绿色描边＋绿色字（与填充绿的"启动"区分开，表明当前不可再启动） */
         .gs-btn.running {
