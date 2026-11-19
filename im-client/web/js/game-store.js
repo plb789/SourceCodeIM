@@ -2199,21 +2199,23 @@
                             success++;
                             gridUpdateStatus(idx, T('✓ 成功'));
                             slot.status = 'ok';
-                            // 上传成功 → 弹经验 toast（服务端返回 exp_gain / level_up / new_level）
+                            // 上传成功 → 弹经验 toast（服务端返回 exp_gain / level_up / new_level / exp_code）
                             if (res.data) {
                                 var expGain = parseInt(res.data.exp_gain, 10) || 0;
                                 var lvlUp = !!res.data.level_up;
                                 var newLv = res.data.new_level || 0;
+                                // exp_code 是服务端生成的唯一键（如 "upload_screenshot_123"），
+                                // 与 WS 推送帧的 code 相同，6秒去重窗口保证本地回调和 WS 推送只弹一次
                                 if (expGain > 0 && window.AchievementToast) {
                                     window.AchievementToast.show({
-                                        title: T('获得经验'),
-                                        name: T('上传截图'),
-                                        desc: f.file.name || T('截图上传成功'),
-                                        icon: '',
-                                        rarity: 0,
-                                        exp_reward: expGain,
-                                        level_up: lvlUp,
-                                        new_level: newLv,
+                                        code:        res.data.exp_code || ('upload_screenshot_local_' + Date.now() + '_' + idx),
+                                        name:        res.data.exp_name || T('上传截图'),
+                                        desc:        f.file.name || T('截图上传成功'),
+                                        icon:        '',
+                                        rarity:      0,
+                                        exp_reward:  expGain,
+                                        level_up:    lvlUp,
+                                        new_level:   newLv,
                                     });
                                 }
                             }

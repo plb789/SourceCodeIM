@@ -1367,10 +1367,39 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 		profileFail(w, "数据库写入失败: "+err.Error()); return
 	}
 
+	// WS 推送经验变动帧给该用户全部在线端（主窗口/游戏中心窗弹 toast + 桌面通知）
+	// code 使用 ss.ID 生成唯一键，前端 6秒去重窗口吞掉本地回调和 WS 推送的重复
+	expCode := fmt.Sprintf("upload_screenshot_%d", ss.ID)
+	expName := "上传截图"
+	if ssType == "artwork" {
+		expName = "上传艺术作品"
+	}
+	expDesc := name
+	if title != "" {
+		expDesc = title
+	}
+	expPayload, _ := json.Marshal(map[string]interface{}{
+		"reason":     "upload_screenshot",
+		"code":       expCode,
+		"name":       expName,
+		"desc":       expDesc,
+		"exp_reward": expGain,
+		"level_up":   levelUp,
+		"new_level":  newLevel,
+	})
+	wsData, _ := json.Marshal(&protocol.Message{
+		MsgType:   protocol.MsgTypeExpGainPush,
+		ToUser:    username,
+		Content:   string(expPayload),
+		Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(username, wsData)
+
 	resp := map[string]interface{}{
 		"id": ss.ID, "url": url,
 		"exp_gain": expGain,
 		"new_exp":  newExp,
+		"exp_code": expCode, // 供前端本地回调去重用
 	}
 	if levelUp {
 		resp["level_up"] = true

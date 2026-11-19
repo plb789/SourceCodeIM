@@ -327,7 +327,8 @@
         OFFICIAL_SEARCH: 119,    // 双向：上行关键词；下行搜索结果 JSON
         OFFICIAL_CARD: 120,      // 双向：聊天内服务号名片（类似联系人名片 107）
         OFFICIAL_RECALL: 121,    // 下行：服务号消息撤回通知（商户后台撤回后推给订阅用户；content: {msg_id, official_msg_id}）
-        ACHIEVEMENT_UNLOCK: 122  // 游戏成就解锁实时推送（下行 content 为 JSON {game_id,code,name,desc,icon,rarity,exp_reward,level_up,new_level}；右下角弹成就 toast，不落库仅实时帧）
+        ACHIEVEMENT_UNLOCK: 122, // 游戏成就解锁实时推送（下行 content 为 JSON {game_id,code,name,desc,icon,rarity,exp_reward,level_up,new_level}；右下角弹成就 toast，不落库仅实时帧）
+        EXP_GAIN_PUSH: 123       // Steam同款个人资料经验值变动实时推送（下行 content 为 JSON {reason,code,name,desc,exp_reward,level_up,new_level}；复用成就toast组件弹右下角提示，code 6秒去重窗口防本地回调+WS推送重复）
     };
 
     // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/
@@ -875,7 +876,7 @@
         // 9（通用错误帧）一并中继：游戏建房/加入/匹配的服务端拒绝一律以 9 回包（109 层无成功回执），
         // 不中继则游戏中心窗完全静默（实测"你已加入的房间过多"等拒绝无任何提示）；
         // 游戏中心窗仅在本端请求在途（busy.create/busy.join）时呈现，不与其他模块错误混淆。
-        if (msg.msg_type === 9 || msg.msg_type === 109 || msg.msg_type === 110 || msg.msg_type === 112 || msg.msg_type === 122) {
+        if (msg.msg_type === 9 || msg.msg_type === 109 || msg.msg_type === 110 || msg.msg_type === 112 || msg.msg_type === 122 || msg.msg_type === 123) {
             if (window.desktop && typeof window.desktop.gnSignalForward === 'function') {
                 window.desktop.gnSignalForward({ msg_type: msg.msg_type, from_user: msg.from_user || '', content: msg.content || '' });
             }

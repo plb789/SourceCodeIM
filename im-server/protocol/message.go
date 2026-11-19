@@ -281,6 +281,13 @@ const (
 	// content 为 JSON {game_id, code, name, desc, icon, rarity, exp_reward, level_up, new_level}
 	// 不落库不进离线队列/历史：历史成就走资料页成就列表，仅推实时解锁（防离线补推轰炸）
 	MsgTypeAchievementUnlock = 122
+
+	// Steam 同款个人资料经验值变动实时推送（下行）：上传截图/点赞/每日成就等 HTTP 归口获得经验后，
+	// 服务端经此帧推给该用户全部在线端（主窗口 + 游戏中心窗弹经验 toast + 桌面通知桥）；
+	// content 为 JSON {reason, code, name, desc, exp_reward, level_up, new_level}
+	// reason 取值同 ProfileExpLog.Reason：upload_screenshot / screenshot_like / daily_achievement 等；
+	// code 为去重用唯一键（如 "upload_screenshot_{screenshot_id}"），6秒窗口内同 code 仅弹一次
+	MsgTypeExpGainPush = 123
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

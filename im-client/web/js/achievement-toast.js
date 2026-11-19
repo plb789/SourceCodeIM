@@ -136,7 +136,8 @@
         body.className = 'ach-toast-body';
         var title = document.createElement('div');
         title.className = 'ach-toast-title';
-        title.textContent = p.title || t('成就解锁');
+        // 经验变动帧带 reason 字段 → "获得经验"；成就解锁帧 → "成就解锁"
+        title.textContent = p.title || (p.reason ? t('获得经验') : t('成就解锁'));
         var name = document.createElement('div');
         name.className = 'ach-toast-name';
         name.textContent = p.name || '';
@@ -244,7 +245,11 @@
         if (socketBound) return true;
         if (!window.IMSocket || !IMSocket.on || !IMSocket.MSG) return false;
         IMSocket.on(IMSocket.MSG.ACHIEVEMENT_UNLOCK, achFrameHandler);
-        console.debug('[ach-toast] WS 122 处理器已注册');
+        // 经验变动实时推送（上传截图/点赞等），复用同一 handler 和 toast 组件
+        if (IMSocket.MSG.EXP_GAIN_PUSH) {
+            IMSocket.on(IMSocket.MSG.EXP_GAIN_PUSH, achFrameHandler);
+        }
+        console.debug('[ach-toast] WS 122/123 处理器已注册');
         socketBound = true;
         return true;
     }
@@ -253,7 +258,8 @@
         if (gnBound) return true;
         if (!window.GNSignal || typeof GNSignal.on !== 'function') return false;
         GNSignal.on(122, achFrameHandler); // 与 socket.js MSG.ACHIEVEMENT_UNLOCK 同帧号（中继保真）
-        console.debug('[ach-toast] GNSignal 122 处理器已注册（游戏中心窗中继）');
+        GNSignal.on(123, achFrameHandler); // 经验变动实时推送（游戏中心窗中继）
+        console.debug('[ach-toast] GNSignal 122/123 处理器已注册（游戏中心窗中继）');
         gnBound = true;
         return true;
     }
