@@ -2687,6 +2687,24 @@
             resize: vertical; outline: none;
         }
         .gs-prop-pf-edit:focus { border-color: var(--primary); }
+        /* .gs-rev-input：属性弹窗启动参数/云存档 textarea + 充值卡 input 共用。
+           历史：200104a 重构评测弹窗（textarea→contenteditable）时把原评测专用的 .gs-rev-input
+           样式块一起删了，但属性弹窗和充值区还在用这个类名，导致退回浏览器默认白底黑框。
+           这里补回通用的表单输入样式，跟随主题变量。 */
+        .gs-rev-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border-in);
+            background: var(--bg-in);
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.5;
+            resize: vertical;
+            outline: none;
+        }
+        .gs-rev-input:focus { border-color: var(--primary); }
         .gs-prop-pf-hint { text-align: left; font-size: 11px; color: var(--text-light); opacity: .8; line-height: 1.6; }
 
         /* 本地游戏详情页说明行（库右侧主区底部提示） */
