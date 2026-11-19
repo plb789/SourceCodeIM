@@ -2619,6 +2619,12 @@ html.m .mobile-plus-panel:not(.hidden) {
     color: var(--text);
 }
 
+/* 首页顶部搜索框图标（与 .official-search-icon / .grp-search-icon / .cc-search-icon 同模式） */
+.search-icon {
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+
 .search-panel {
     position: absolute;
     /* 原实现：top: 92px;（搜索框在好友Tab内部），阶段二十三搜索框固定于列表栏顶部 */
@@ -3344,6 +3350,14 @@ html.m .mobile-plus-panel:not(.hidden) {
 .modal-title {
     font-size: 16px;
     font-weight: bold;
+    margin-bottom: 10px;
+}
+
+/* 弹窗正文容器（与 .modal-title / .modal-btns 同属 admin.html 弹窗骨架） */
+.modal-body {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.6;
     margin-bottom: 10px;
 }
 
@@ -13842,6 +13856,13 @@ html.m #message-input {
     cursor: default;
 }
 
+.agent-mcp-test-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+
 .agent-mcp-test-out {
     flex: 1;
     min-width: 0;
@@ -23832,6 +23853,7 @@ html.m .rc-visit-meta { max-width: 40vw; overflow: hidden; text-overflow: ellips
 .loc-title { font-size: 16px; font-weight: 600; color: var(--text, #333); }
 /* 搜索行 */
 .loc-search-row { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; padding: 0 10px; height: 34px; border-radius: 8px; background: var(--bg-hover, rgba(0,0,0,0.05)); color: var(--text-light); }
+.loc-search-icon { color: var(--text-light); flex-shrink: 0; }
 .loc-search-input { flex: 1; border: none; outline: none; background: transparent; font-size: 13px; color: var(--text, #333); }
 .loc-search-input::placeholder { color: var(--text-light); }
 /* 地图容器（选点/共享共用，高德实例挂载点） */
@@ -24726,6 +24748,7 @@ html.m .cc-item { padding: 10px 8px; }
     cursor: pointer;
     text-align: left;
 }
+.moments-pub-vis-label { color: var(--text); }
 .moments-pub-vis-text {
     margin-left: auto;
     color: var(--text-light);

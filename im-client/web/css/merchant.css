@@ -32,6 +32,22 @@
 .m-head h2 { margin: 0; font-size: 20px; color: var(--text, #eee); }
 .m-head-tip { font-size: 12px; color: var(--text-light); }
 .m-sub-title { font-size: 14px; color: var(--text-light); margin: 20px 0 8px; }
+/* section header 容器：sub-title + 右侧 filter/按钮同排。
+   设计时 m-sub-title 原本有 margin:20px 0 8px，但 flex 容器内 margin 不折叠，
+   会导致上间距叠加（上兄弟 margin-bottom + h3 margin-top）。
+   所以 m-sub-row 自己承担 section 间距，内部 h3 的 margin 归零，避免叠加。 */
+.m-sub-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+    margin-bottom: 6px;
+}
+.m-sub-row > .m-sub-title {
+    margin: 0;
+}
 
 /* 存储配额卡（安全加固）：已用/总量/占比 + 主题色进度条，≥80% 转警示色 */
 .m-quota-card { background: var(--panel-bg); border: 1px solid var(--border-color, rgba(255,255,255,.06)); border-radius: 10px; padding: 12px 16px; margin-bottom: 14px; }
@@ -84,6 +100,11 @@
 /* ===== 表格与空态 ===== */
 .m-table-wrap { background: var(--panel-bg); border: 1px solid var(--border-color, rgba(255,255,255,.06)); border-radius: 12px; padding: 6px 12px; min-height: 42px; max-height: 420px; overflow-y: auto; position: relative; }
 table.m-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* 复用 admin.html 风格的通用表格（merchant.html 历史引入，与 .m-table 并存） */
+table.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-table th { text-align: left; color: var(--text-light); font-weight: 500; padding: 8px 10px; border-bottom: 1px solid var(--border-color, rgba(255,255,255,.08)); white-space: nowrap; }
+.admin-table td { padding: 8px 10px; color: var(--text, #ddd); border-bottom: 1px solid rgba(255,255,255,.04); word-break: break-all; }
+.admin-table tr:last-child td { border-bottom: 0; }
 .m-table th { text-align: left; color: var(--text-light); font-weight: 500; padding: 8px 10px; border-bottom: 1px solid var(--border-color, rgba(255,255,255,.08)); white-space: nowrap; }
 .m-table td { padding: 8px 10px; color: var(--text, #ddd); border-bottom: 1px solid rgba(255,255,255,.04); word-break: break-all; }
 .m-table tr:last-child td { border-bottom: 0; }
@@ -111,6 +132,8 @@ table.m-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .m-modal-title { margin: 0 0 14px; font-size: 17px; color: var(--text, #eee); }
 .m-modal-text { color: var(--text, #ccc); font-size: 14px; line-height: 1.7; }
 .m-modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+/* 弹窗底部按钮区（merchant.html 历史引入，与 .m-modal-btns 同用途） */
+.m-modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color, rgba(255,255,255,.08)); }
 
 /* 表单 */
 .m-form .m-row { margin-bottom: 12px; }

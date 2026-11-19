@@ -1,4 +1,4 @@
-:root {
+﻿:root {
     --bg: #f5f5f5;
     --sidebar-bg: #e8e8e8;
     --chat-bg: #f5f5f5;
@@ -2181,6 +2181,12 @@ html.m .mobile-plus-panel:not(.hidden) {
     color: var(--text);
 }
 
+/* top search icon */
+.search-icon {
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+
 .search-panel {
     position: absolute;
     /* 原实现：top: 92px;（搜索框在好友Tab内部），阶段二十三搜索框固定于列表栏顶部 */
@@ -2544,6 +2550,9 @@ html.m .mobile-plus-panel:not(.hidden) {
     font-weight: bold;
     margin-bottom: 10px;
 }
+
+/* modal body container */
+.modal-body { font-size: 14px; color: var(--text); line-height: 1.6; margin-bottom: 10px; }
 
 .modal-text {
     font-size: 14px;
@@ -10579,6 +10588,13 @@ html.m #message-input {
 .agent-mcp-test-btn:disabled {
     opacity: 0.55;
     cursor: default;
+}
+
+.agent-mcp-test-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
 }
 
 .agent-mcp-test-out {

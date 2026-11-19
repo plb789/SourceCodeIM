@@ -1257,8 +1257,13 @@
         .gs-btn:hover { background: var(--hover); }
 
         .gs-btn.primary { background: var(--gs-btn); border-color: transparent; color: var(--gs-btn-text); }
-
         .gs-btn.primary:hover { background: var(--gs-btn); opacity: 0.9; }
+
+        /* gs-btn 语义化变体（与 .gs-btn.primary/.gs-btn.ghost 等价，供 class="gs-btn gs-btn-primary" 等写法） */
+        .gs-btn.gs-btn-primary { background: var(--gs-btn); border-color: transparent; color: var(--gs-btn-text); }
+        .gs-btn.gs-btn-primary:hover { background: var(--gs-btn); opacity: 0.9; }
+        .gs-btn.gs-btn-ghost { background: transparent; border-color: var(--border); color: var(--text-secondary); }
+        .gs-btn.gs-btn-ghost:hover { background: var(--hover); color: var(--text); }
 
         .gs-btn.danger { color: var(--text); border-color: var(--text-secondary); }
         .gs-btn.danger:hover { background: rgba(229, 72, 77, 0.1); border-color: rgba(229, 72, 77, 0.5); color: #e5484d; }
@@ -3790,6 +3795,7 @@
         .gs-save-badge.err { color: var(--text); }
         .gs-save-badge.conflict { color: var(--primary); }
         .gs-save-badge.sync { color: var(--primary); animation: gs-save-spin 1s linear infinite; }
+        .gs-save-badge.idle { color: var(--text-light); }
         @keyframes gs-save-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
         /* 存档槽位行（当前槽位按钮，点开槽位管理弹窗） */
         .gs-save-slotrow { display: flex; align-items: center; gap: 8px; margin-top: 10px; }

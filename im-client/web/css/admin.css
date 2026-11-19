@@ -395,6 +395,21 @@ td .skel-line {
 .admin-view.active {
     display: block;
 }
+/* 页面标题 + 副标题（服务号管理等视图顶部标题行） */
+.admin-page-title {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 14px;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+}
+.admin-page-sub {
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--text-light);
+}
 .admin-view-head {
     display: flex;
     align-items: center;
@@ -2801,6 +2816,24 @@ td .skel-line {
 .gn-f-game-sel {
     width: 200px;
     flex: none;
+}
+/* 工具栏（服务号列表/审核队列 Tab 顶部筛选条：搜索 + 下拉 + 按钮同排） */
+.admin-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    background: var(--panel-bg, rgba(255,255,255,.02));
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 6px;
+}
+/* 列表容器（服务号/审核队列表格外层包裹） */
+.admin-list-wrap {
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 6px;
+    overflow: auto;
 }
 /* ===== 服务号审核面板 Tab / Segmented Control（P5） ===== */
 .admin-tabs {

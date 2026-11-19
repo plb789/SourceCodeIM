@@ -1,4 +1,4 @@
-/* ===== 阶段四十九：后台管理界面样式 =====
+﻿/* ===== 阶段四十九：后台管理界面样式 =====
    主题色归口：全部复用 style.css 的 CSS 变量体系（--primary/--panel-bg/--border 等），
    浅色/深色/跟随系统三态自动跟随聊天端主题设定，不在本文件新增任何独立主题色 */
 
@@ -297,6 +297,9 @@ td .skel-line {
 .admin-view.active {
     display: block;
 }
+/* page title + sub */
+.admin-page-title { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; font-size: 18px; font-weight: 700; color: var(--text); }
+.admin-page-sub { font-size: 12.5px; font-weight: 400; color: var(--text-light); }
 .admin-view-head {
     display: flex;
     align-items: center;
