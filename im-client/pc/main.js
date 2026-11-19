@@ -2435,6 +2435,76 @@ ipcMain.handle('game:prepare-install-dir', function (event, diskRoot) {
     }
 });
 
+// —— 本地文件系统校验（跨设备登录修复：install_path 是上一台机器的路径，本地不存在时需要校验）
+// 客户端以本地文件系统存在性为金标准判断安装状态，服务端 install_path 仅作为参考
+// 入参 { path, checkType? } checkType: 'dir'(默认目录) | 'file'(文件)
+// 返回 { ok, exists, error? }
+ipcMain.handle('game:path-exists', function (event, data) {
+    try {
+        var p = String((data && data.path) || '').trim();
+        if (!p) return { ok: false, exists: false };
+        if (!fs.existsSync(p)) return { ok: true, exists: false };
+        var stat = fs.statSync(p);
+        var checkType = String((data && data.checkType) || 'dir').toLowerCase();
+        if (checkType === 'file') return { ok: true, exists: stat.isFile() };
+        return { ok: true, exists: stat.isDirectory() };
+    } catch (e) {
+        return { ok: false, exists: false, error: (e && e.message) || String(e) };
+    }
+});
+// 批量检查多个路径 → { ok, results: { [path]: exists }, error? }
+ipcMain.handle('game:paths-exist', function (event, data) {
+    try {
+        var paths = Array.isArray(data) ? data : [];
+        var results = {};
+        for (var i = 0; i < paths.length; i++) {
+            var p = String(paths[i] || '').trim();
+            if (!p) { results[p] = false; continue; }
+            try { results[p] = fs.existsSync(p); } catch (e) { results[p] = false; }
+        }
+        return { ok: true, results: results };
+    } catch (e) {
+        return { ok: false, results: {}, error: (e && e.message) || String(e) };
+    }
+});
+
+// —— 游戏启动注册表校验（game-launch.json）——
+// 跨设备登录修复的第二步：当服务端 install_path 无效（另一台机器的路径）时，
+// 检查本地注册表（game-launch.json）是否有本地有效的 exe → 说明游戏其实还在本地
+// 入参可选 gameIds: string[] —— 只检查指定 gameId；不传则返回全部
+// 返回 { ok, registry: { [gameId]: { exe, installDir, exeExists, dirExists, source } } }
+ipcMain.handle('game:launch-reg-check', function (event, data) {
+    try {
+        var reg = gameLaunchRegLoad() || {};
+        var want = {};
+        if (Array.isArray(data && data.gameIds)) {
+            for (var i = 0; i < data.gameIds.length; i++) want[String(data.gameIds[i])] = true;
+        }
+        var out = {};
+        var keys = Object.keys(reg);
+        for (var j = 0; j < keys.length; j++) {
+            var gid = keys[j];
+            if (Object.keys(want).length && !want[gid]) continue;
+            var item = reg[gid] || {};
+            var exe = String(item.exe || '').trim();
+            var dir = String(item.installDir || '').trim();
+            var r = {
+                exe: exe,
+                installDir: dir,
+                source: item.source || '',
+                exeExists: false,
+                dirExists: false
+            };
+            try { if (exe && fs.existsSync(exe)) r.exeExists = true; } catch (e) { }
+            try { if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) r.dirExists = true; } catch (e) { }
+            out[gid] = r;
+        }
+        return { ok: true, registry: out };
+    } catch (e) {
+        return { ok: false, registry: {}, error: (e && e.message) || String(e) };
+    }
+});
+
 // 选择游戏主程序 exe（needExe 分支：注册表无记录/记录失效时由用户手动指定）
 ipcMain.handle('game:choose-game-exe', async function (event) {
     var win = BrowserWindow.fromWebContents(event.sender);

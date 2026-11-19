@@ -5150,8 +5150,119 @@
             renderLibrary();
             updateBadges();
             if (state.detailId) updateInstallBox();
+            // —— 跨设备登录修复：服务端下发的 install_path 可能来自另一台机器（文件本地不存在）
+            // 客户端以本地文件系统存在性为金标准，异步校验 install_path 有效性。
+            //   无效路径 → 清空 install_path + 降级 state=0（未安装）+ 静默重绘
+            // 先渲染再校验（避免用户等白屏），校验完静默修正（用户感知：错误的"启动"变"安装"）
+            verifyLocalInstallPaths();
             return true;
         }).catch(function () { return false; });
+    }
+
+    // 本地安装状态校验：以本地文件系统为金标准，修正服务端下发的跨设备/跨账号状态。
+    // 参考 Steam 核心设计原则：
+    //   所有权（你有哪些游戏）——账号级，服务端 GameLibrary 表存储（username + game_id 唯一）
+    //   安装状态（装在哪、装了没有）——设备级，客户端本地扫描文件系统判断
+    //   下载中/暂停（瞬时状态）——设备级，换设备后自然清零
+    //
+    // 服务端 GameLibrary.state / install_path 仅为"该账号最后一次上报值"，不代表当前设备。
+    // 本函数在 loadLibrary 完成后异步修正（先渲染再校验，不阻塞 UI）。
+    //
+    // 修正规则：
+    //   state 3/4（已安装/待更新） → 校验 install_path 本地目录是否存在
+    //     ✅ 存在 → 保持不变
+    //     ❌ 不存在 → 降级 state=0，清空 install_path 和 installed_version
+    //   state 1/2（下载中/暂停） → 换机器后不可能还在下载，直接降级 state=0
+    //   state 0（未安装）         → 不动
+    function verifyLocalInstallPaths() {
+        if (!IN_ELECTRON || !DESKTOP || !DESKTOP.pathsExist) return;
+        // 收集需要校验的游戏：state 1-4 都需要检查（设备级状态换设备必不准）
+        var pathMap = {};   // path → [gid]（同路径去重，一次 statSync 多个游戏共用）
+        var state12Gids = []; // 纯 state=1/2 的游戏（没有 install_path 也要清零）
+        var needCheckCount = 0;
+        for (var gid in state.lib) {
+            var lib = state.lib[gid] && state.lib[gid].lib;
+            if (!lib) continue;
+            var s = parseInt(lib.state, 10);
+            // state 0 不需要校验（本来就是未安装）
+            if (s === 0) continue;
+            // state 1/2/3/4 都要看：1/2 是下载瞬时态、3/4 是安装状态
+            var p = String(lib.install_path || '').trim();
+            if (p && (s === 3 || s === 4)) {
+                // 有 install_path + 已安装/待更新 → 校验路径是否存在
+                if (!pathMap[p]) pathMap[p] = [];
+                pathMap[p].push({ gid: gid, state: s });
+                needCheckCount++;
+            } else if (!p && (s === 3 || s === 4)) {
+                // 没有 install_path 但 state=3/4 → 不可能（服务端应该下发路径），直接降级
+                if (!pathMap['__NO_PATH__']) pathMap['__NO_PATH__'] = [];
+                pathMap['__NO_PATH__'].push({ gid: gid, state: s });
+                needCheckCount++;
+            } else if (s === 1 || s === 2) {
+                // state=1/2 下载中/暂停 → 换设备后直接清零（不管 install_path 有没有）
+                state12Gids.push(gid);
+            }
+        }
+        // 没有需要处理的？直接返回
+        if (!needCheckCount && !state12Gids.length) return;
+
+        // 第一步：处理 state=1/2 下载瞬时态（不需要文件系统校验）
+        var changed = false;
+        var changedGids = [];
+        for (var i = 0; i < state12Gids.length; i++) {
+            var g = state12Gids[i];
+            var lib = state.lib[g] && state.lib[g].lib;
+            if (!lib) continue;
+            lib.state = 0;
+            lib.install_path = '';
+            lib.installed_version = '';
+            changed = true;
+            changedGids.push(g);
+        }
+
+        // 第二步：处理 state=3/4 安装状态（需要文件系统校验）
+        var uniquePaths = Object.keys(pathMap);
+        if (uniquePaths.length) {
+            DESKTOP.pathsExist(uniquePaths).then(function (ret) {
+                if (!ret || !ret.ok || !ret.results) return; // IPC 失败 → 保留现状，不误判
+                for (var j = 0; j < uniquePaths.length; j++) {
+                    var p = uniquePaths[j];
+                    var entries = pathMap[p];
+                    var pathOK = (p === '__NO_PATH__') ? false : !!ret.results[p];
+                    for (var k = 0; k < entries.length; k++) {
+                        var gid = entries[k].gid;
+                        var lib2 = state.lib[gid] && state.lib[gid].lib;
+                        if (!lib2) continue;
+                        if (!pathOK) {
+                            // 路径在本地不存在 → 降级为未安装
+                            lib2.install_path = '';
+                            lib2.state = 0;
+                            lib2.installed_version = '';
+                            changed = true;
+                            changedGids.push(gid);
+                        }
+                        // pathOK=true → 什么都不动（服务端路径和本地文件系统一致，可信）
+                    }
+                }
+                // 统一重绘（state=1/2 和 state=3/4 的修正一起刷）
+                if (changed) {
+                    renderLibrary();
+                    updateBadges();
+                    // 详情页也需要刷新（按钮态 + 安装目录显示）
+                    var curDetail = String(state.detailId || '');
+                    for (var m = 0; m < changedGids.length; m++) {
+                        if (String(changedGids[m]) === curDetail) {
+                            if (typeof updateInstallBox === 'function') updateInstallBox();
+                            break;
+                        }
+                    }
+                }
+            }).catch(function () { /* 路径校验失败静默忽略，不阻断主流程 */ });
+        } else if (changed) {
+            // 只有 state=1/2 被改，不需要等 IPC
+            renderLibrary();
+            updateBadges();
+        }
     }
 
     // 启动前静默刷新单游戏元数据：短超时（默认 800ms）+ 每 gid 防重入 + 失败不阻断。
@@ -5186,10 +5297,10 @@
                 if (window.ImGameSDK && d.session_sign_key) ImGameSDK.setSession(gid, d.session_sign_key);
                 if (state.lib[gid]) {
                     state.lib[gid].game = d;
-                    // 同步 install_path（详情接口 item.lib.install_path 可能比库接口更新）
-                    if (d.lib && d.lib.install_path) {
-                        state.lib[gid].lib.install_path = d.lib.install_path;
-                    }
+                    // —— 跨设备登录修复：不再从服务端详情覆盖 install_path 和 state。
+                    // install_path 是本地概念（参考 Steam），只有下载/安装完成时客户端主动上报的才可信。
+                    // 服务端下发的 install_path 可能来自另一台机器，不能覆盖本地校验后的值。
+                    // state 的正确性已由 verifyLocalInstallPaths 校验保障，详情接口也不再覆盖它。
                 } else if (d.lib) {
                     state.lib[gid] = { lib: d.lib, game: d };
                 }

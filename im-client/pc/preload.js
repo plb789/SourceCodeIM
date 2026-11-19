@@ -1132,6 +1132,22 @@ contextBridge.exposeInMainWorld('desktop', {
     gameChooseGameExe: function () {
         return ipcRenderer.invoke('game:choose-game-exe');
     },
+    // 校验本地路径是否存在（跨设备登录修复：服务端 install_path 是上一台机器的路径，需本地校验）
+    // pathExists(payload) → Promise<{ok, exists, error?}> payload={path, checkType?}
+    pathExists: function (payload) {
+        return ipcRenderer.invoke('game:path-exists', payload);
+    },
+    // 批量校验路径存在性（一次 IPC 覆盖全库游戏，避免逐游戏串行往返）
+    // pathsExist(paths) → Promise<{ok, results: {[path]: boolean}, error?}>
+    pathsExist: function (paths) {
+        return ipcRenderer.invoke('game:paths-exist', paths);
+    },
+    // 检查主进程游戏启动注册表（game-launch.json）中有效的本地 exe 路径
+    // 入参可选 { gameIds: string[] } —— 只检查指定 gameId，不传返回全部
+    // 返回 { ok, registry: { [gameId]: { exe, installDir, exeExists, dirExists, source } } }
+    launchRegCheck: function (payload) {
+        return ipcRenderer.invoke('game:launch-reg-check', payload || {});
+    },
     // ===== 本地游戏（用户手动添加的非商店游戏，存储在渲染层 localStorage）=====
     // 启动本地游戏：{id, exe, args?} → Promise<{ok, startedAt?/error?}>
     localGameLaunch: function (payload) {
