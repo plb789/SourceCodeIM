@@ -825,7 +825,20 @@ func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
 	if lockDays <= 0 {
 		lockDays = 7
 	}
-	settleTime := time.Now().AddDate(0, 0, lockDays)
+	// 补偿场景：订单可能在 merchant_revenue_enabled=false 时漏分账，后来被补偿扫到。
+	// 如果订单创建时间 + lockDays 已过期，直接进 balance_points 并标记已解锁；否则正常进 pending_points
+	orderSettleTime := o.CreateTime.AddDate(0, 0, lockDays)
+	now := time.Now()
+	isExpired := !orderSettleTime.After(now) // 锁定期已过
+	var settleTime time.Time
+	var logStatus int8 = 1 // 默认锁定中
+	if isExpired {
+		settleTime = orderSettleTime // 用实际应解锁时间，追溯准确
+		logStatus = 2                 // 直接已解锁
+	} else {
+		settleTime = orderSettleTime
+		logStatus = 1
+	}
 
 	// ===== 指数退避重试（3 次）：防瞬时 DB 抖动 / FOR UPDATE 锁超时 =====
 	const maxAttempts = 3
@@ -845,12 +858,24 @@ func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
 				Where("username = ?", merchant.Username).First(&lockedMerchant).Error; merr != nil {
 				return merr
 			}
-			res := tx.Model(&lockedMerchant).Updates(map[string]interface{}{
-				"pending_points": gorm.Expr("ROUND(pending_points + ?, 3)", merchantEarn),
-				"total_earned":    gorm.Expr("ROUND(total_earned + ?, 3)", merchantEarn),
-			})
-			if res.Error != nil {
-				return res.Error
+			if isExpired {
+				// 已过期：直接加到 balance_points（可提现）
+				res := tx.Model(&lockedMerchant).Updates(map[string]interface{}{
+					"balance_points": gorm.Expr("ROUND(balance_points + ?, 3)", merchantEarn),
+					"total_earned":   gorm.Expr("ROUND(total_earned + ?, 3)", merchantEarn),
+				})
+				if res.Error != nil {
+					return res.Error
+				}
+			} else {
+				// 未过期：加到 pending_points（锁定期中）
+				res := tx.Model(&lockedMerchant).Updates(map[string]interface{}{
+					"pending_points": gorm.Expr("ROUND(pending_points + ?, 3)", merchantEarn),
+					"total_earned":   gorm.Expr("ROUND(total_earned + ?, 3)", merchantEarn),
+				})
+				if res.Error != nil {
+					return res.Error
+				}
 			}
 			logEntry := &model.MerchantIncomeLog{
 				Merchant:     merchant.Username,
@@ -861,7 +886,7 @@ func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
 				Commission:   commission,
 				MerchantEarn: merchantEarn,
 				Type:         5,
-				Status:       1,
+				Status:       logStatus,
 				SettleTime:   &settleTime,
 			}
 			if err := tx.Create(logEntry).Error; err != nil {
@@ -870,8 +895,13 @@ func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
 			return nil
 		})
 		if errTx == nil {
-			logger.Info("赞助充值分账：订单 %d 用户 %s 游戏#%d 付 %.3f → 商户 %s 应得 %.3f（commission=%.2f, attempt=%d）",
-				o.ID, o.Username, o.GameID, o.Points, merchant.Username, merchantEarn, commission, attempt)
+			if isExpired {
+				logger.Info("赞助充值分账（已过期直接解锁）：订单 %d 用户 %s 游戏#%d 付 %.3f → 商户 %s 应得 %.3f（commission=%.2f, 已过 %d 天锁定期, attempt=%d）",
+					o.ID, o.Username, o.GameID, o.Points, merchant.Username, merchantEarn, commission, lockDays, attempt)
+			} else {
+				logger.Info("赞助充值分账：订单 %d 用户 %s 游戏#%d 付 %.3f → 商户 %s 应得 %.3f（commission=%.2f, attempt=%d）",
+					o.ID, o.Username, o.GameID, o.Points, merchant.Username, merchantEarn, commission, attempt)
+			}
 			return // ✅ 成功退出
 		}
 		lastErr = errTx
@@ -887,12 +917,26 @@ func sponsorRechargeSettle(cfg *config.Config, o *model.RechargeOrder) {
 }
 
 // sponsorRechargeCompensateSweep 赞助充值分账补偿单轮（包级，供 InitGame 定时任务 + 单测直接调用）：
-// 扫 success 但没有产生 type=5 分账流水的订单（进程 OOM kill / sponsorRechargeSettle goroutine 还没跑到就被回收等极端场景），
+// 扫 success 但没有产生 type=5 分账流水的订单（进程 OOM kill / sponsorRechargeSettle goroutine 还没跑到就被回收 /
+// sponsorRechargeSettle 在 MerchantRevenueEnabled=false 时跳过等场景），
 // 逐单调 sponsorRechargeSettle（幂等前置 COUNT 保证安全，不会重复加分账）。
-// 只扫最近 24h 内的订单（更早的已经跑过很多轮了、或游戏已被下架无 owner 了）
+//
+// 扫描窗口 = max(RefundDays * 2, 24h)：默认约 14 天（RefundDays=7×2），
+// 语义上至少覆盖完整锁定期的两倍，适配配置短暂关闭再打开的场景；
+// 同时有 LIMIT 50 限制单轮行数，配合 (status, create_time) 索引保证性能。
+// 更早的漏单（窗口外）属于极端场景，可通过 admin 后台手动补账接口处理
 func sponsorRechargeCompensateSweep(cfg *config.Config) int {
 	if cfg == nil || !cfg.Game.MerchantRevenueEnabled {
 		return 0
+	}
+	refundDays := cfg.Game.RefundDays
+	if refundDays <= 0 {
+		refundDays = 7
+	}
+	// 窗口 = max(RefundDays*2, 1) — 至少 1 天（24h），跟配置联动
+	windowDays := refundDays * 2
+	if windowDays < 1 {
+		windowDays = 1
 	}
 	// LEFT JOIN 找 success 但没有 type=5 分账的订单（GORM 原生写法避免子查询）；
 	// 额外 LEFT JOIN im_game 过滤掉已下架/无 owner 的游戏——它们本来就不会产生商家分账，
@@ -904,10 +948,10 @@ func sponsorRechargeCompensateSweep(cfg *config.Config) int {
 			ON mil.purchase_id = ro.id AND mil.type = 5
 		INNER JOIN im_game g ON g.id = ro.game_id
 		WHERE ro.status = 1 AND mil.id IS NULL
-		  AND ro.create_time > NOW() - INTERVAL 24 HOUR
+		  AND ro.create_time > NOW() - INTERVAL ? DAY
 		  AND g.owner_username != ''
 		ORDER BY ro.id ASC LIMIT 50
-	`).Scan(&missed).Error; err != nil {
+	`, windowDays).Scan(&missed).Error; err != nil {
 		logger.Warn("赞助充值补偿查询失败：%v", err)
 		return 0
 	}
