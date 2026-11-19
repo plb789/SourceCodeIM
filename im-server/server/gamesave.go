@@ -29,10 +29,14 @@ import (
 	"sync"
 	"time"
 
+	"errors"
+	"im-server/logger"
 	"im-server/model"
 	"im-server/store"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -404,23 +408,57 @@ func (s *Server) gameSaveAccess(w http.ResponseWriter, r *http.Request) (string,
 	var cnt int64
 	store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND removed_at IS NULL", username, gid).Count(&cnt)
 	if cnt == 0 {
-		// 阶段二百九十九：兜底隐式入库——HandleGameLibraryState 已优先处理下载态，
-		// 这里给云存档接口直接命中（用户跳过下载直接进属性页）也能通。
-		// Steam 同款软删除模型：先查是否有历史所有权记录（未退款则免费恢复）
-		var existing model.GameLibrary
-		if eerr := store.DB.Where("username = ? AND game_id = ?", username, gid).First(&existing).Error; eerr == nil {
-			if existing.RemovedAt != nil && !existing.PayRefunded {
-				// 软删除但未退款 → 恢复所有权
-				store.DB.Model(&existing).Update("removed_at", nil)
+		// 兜底隐式入库——用户跳过下载直接进云存档属性页也能通。
+		// 与 HandleGameLibraryState 同设计：免费游戏允许隐式入库，付费游戏强制 POST join。
+		errOp := store.DB.Transaction(func(tx *gorm.DB) error {
+			// FOR UPDATE 锁 GameLibrary：与 State/Join/Leave 全部串行化
+			var existing model.GameLibrary
+			if cerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("username = ? AND game_id = ?", username, gid).First(&existing).Error; cerr == nil {
+				// ① 已在库：竞态下其他路径刚入库（State/Join）
+				if existing.RemovedAt == nil && !existing.PayRefunded {
+					return nil
+				}
+				// ② 已退款：禁止隐式恢复，强制 POST join 重新购买
+				if existing.PayRefunded {
+					return fmt.Errorf("该游戏已退款，需重新加入游戏库")
+				}
+				// ③ 软删除但未退款：免费恢复
+				if existing.RemovedAt != nil {
+					return tx.Model(&existing).Update("removed_at", nil).Error
+				}
+				return nil
+			} else if !errors.Is(cerr, gorm.ErrRecordNotFound) {
+				return cerr
 			}
-		} else {
+			// 真·全新用户：检查是否免费游戏
 			var g model.Game
-			if store.DB.Where("id = ? AND status = 0", gid).First(&g).Error == nil {
-				store.DB.Create(&model.GameLibrary{Username: username, GameID: uint(gid), State: 0})
+			if gerr := tx.Where("id = ? AND status = 0", gid).First(&g).Error; gerr != nil {
+				return fmt.Errorf("游戏不存在")
+			}
+			if g.Price > 0 {
+				return fmt.Errorf("付费游戏需先加入游戏库")
+			}
+			// 免费游戏：Create
+			lib := model.GameLibrary{Username: username, GameID: uint(gid), State: 0}
+			if cerr := tx.Create(&lib).Error; cerr != nil {
+				var mysqlErr *mysqldriver.MySQLError
+				if errors.As(cerr, &mysqlErr) && mysqlErr.Number == 1062 {
+					logger.Warn("gameSaveAccess 隐式入库 Create 撞唯一索引（并发兜底）：%v", cerr)
+					return nil // 幂等
+				}
+				return cerr
+			}
+			return nil
+		})
+		if errOp != nil {
+			msg := errOp.Error()
+			if strings.Contains(msg, "已退款") || strings.Contains(msg, "需先加入游戏库") {
+				adminFail(w, http.StatusForbidden, msg)
 			} else {
 				adminFail(w, http.StatusForbidden, "请先将游戏加入库")
-				return "", 0, false
 			}
+			return "", 0, false
 		}
 	}
 	return username, uint(gid), true

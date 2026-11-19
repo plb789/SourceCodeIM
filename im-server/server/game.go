@@ -37,6 +37,7 @@ import (
 	"im-server/model"
 	"im-server/store"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -1147,8 +1148,157 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 		pay := aiPointsRound3(g.Price)
 		var lib model.GameLibrary
 		errTx := store.DB.Transaction(func(tx *gorm.DB) error {
+			// ====== 锁顺序：User → GameLibrary → Merchant ======
+			// 与 HandleGameLibraryLeave / redpacket.go / gamerecharge.go / card.go / aipoints.go
+			// 所有扣/退积分路径的 FOR UPDATE User 首锁策略对齐，消除跨路径 ABBA 死锁。
+			// Leave 在 User 锁之后依次锁 purchaseLog→Merchant→GameLibrary；Join 在 User 锁之后
+			// 依次锁 GameLibrary→Merchant。两端都先抓 User 行，拿到 User 后 GameLibrary/Merchant
+			// 加锁方向不同但不会反向等待——因为 User 是同一行互斥，两边不可能同时持有 User。
+
+			// ① 显式 FOR UPDATE 锁 User 行（所有积分操作统一首锁）
+			var lockedUser model.User
+			if uerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("username = ?", username).First(&lockedUser).Error; uerr != nil {
+				return fmt.Errorf("锁定用户失败: %w", uerr)
+			}
+
+			// ② FOR UPDATE GameLibrary（existing 查询）—— 放在 User 之后，顺序 User→GameLibrary→Merchant
+			// 解决两个问题：
+			//   A. 已退款用户（pay_refunded=true, removed_at!=NULL）预检查 hadHistory=false 但
+			//      DB 里老记录还在，直接 Create 撞唯一索引。事务内加锁查到 existing 改为 Update。
+			//   B. 并发竞态——用户双击/前端重试，两个请求预检查都没查到记录，后到达的 Create 撞唯一索引。
+			var existing model.GameLibrary
+			findErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("username = ? AND game_id = ?", username, g.ID).First(&existing).Error
+
+			// 商家分账 helper：仅付费 + 有 owner + 开关开时触发。PurchaseID 由调用方传入
+			// （新入库走 lib.ID；已退款重新购买走 existing.ID，复用老行主键）
+			merchantShare := func(payNow float64, purchaseID uint) error {
+				if payNow <= 0 || g.OwnerUsername == "" || !s.cfg.Game.MerchantRevenueEnabled {
+					return nil
+				}
+				// ③ FOR UPDATE 锁 Merchant 行（第三把锁）——与 Leave 的 Merchant 锁同行互斥
+				var merchant model.Merchant
+				if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("username = ?", g.OwnerUsername).First(&merchant).Error; merr == nil && merchant.Status == 0 {
+					commission := merchant.CommissionRate / 100.0
+					if commission < 0 {
+						commission = 0
+					}
+					if commission > 1 {
+						commission = 1
+					}
+					merchantEarn := aiPointsRound3(payNow * commission)
+					if merchantEarn > 0 {
+						lockDays := s.cfg.Game.RefundDays
+						if lockDays <= 0 {
+							lockDays = 7
+						}
+						settleTime := time.Now().AddDate(0, 0, lockDays)
+						res := tx.Model(&merchant).
+							Updates(map[string]interface{}{
+								"pending_points": gorm.Expr("ROUND(pending_points + ?, 3)", merchantEarn),
+								"total_earned":    gorm.Expr("ROUND(total_earned + ?, 3)", merchantEarn),
+							})
+						if res.Error != nil {
+							logger.Error("商家分账余额更新失败（商户 %s，应得 %.3f）：%v", merchant.Username, merchantEarn, res.Error)
+							return res.Error
+						}
+						logEntry := &model.MerchantIncomeLog{
+							Merchant: merchant.Username, GameID: g.ID, Username: username,
+							PurchaseID: purchaseID, UserPay: payNow, Commission: commission,
+							MerchantEarn: merchantEarn, Type: 1, Status: 1,
+							SettleTime: &settleTime,
+						}
+						if err := tx.Create(logEntry).Error; err != nil {
+							logger.Error("商家收益流水写失败（商户 %s）：%v", merchant.Username, err)
+							return err
+						}
+					}
+				} else if merr != nil {
+					logger.Warn("商家分账跳过：游戏#%d owner=%s 对应商户不存在或已停用", g.ID, g.OwnerUsername)
+				}
+				return nil
+			}
+
+			// === 分支 1：DB 里已经有记录 ===
+			if findErr == nil {
+				if existing.RemovedAt == nil && !existing.PayRefunded {
+					// 场景 B（并发竞态）：别人刚买完，已经在库且未退款 → 幂等返回，不扣分
+					logger.Info("并发入库幂等：用户 %s 游戏#%d 已被其他请求入库，直接返回", username, g.ID)
+					lib = existing
+					return nil
+				}
+				// 下面两类：都要激活（清 removed_at + 重置状态），但 PayRefunded=true 需要重新付费
+				isRefunded := existing.PayRefunded
+				var payNow float64
+				if isRefunded {
+					// 已退款：失去所有权，需重新付费
+					payNow = pay
+				} else {
+					// RemovedAt != nil && !PayRefunded（竞态下别人刚移出）：免费激活
+					payNow = 0
+				}
+				if payNow > 0 {
+					// User 行已 FOR UPDATE 锁住，UPDATE points 安全
+					res := tx.Model(&model.User{}).
+						Where("username = ? AND points >= ?", username, payNow).
+						Update("points", gorm.Expr("ROUND(points - ?, 3)", payNow))
+					if res.Error != nil {
+						return fmt.Errorf("积分扣除失败: %w", res.Error)
+					}
+					if res.RowsAffected == 0 {
+						return fmt.Errorf("积分不足，请联系管理员发放")
+					}
+					var after float64
+					tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
+					if err := tx.Create(&model.PointsLog{
+						Username: username, Change: -payNow, BalanceAfter: after,
+						Reason: "game_purchase", Operator: "system", Detail: "获取游戏(重新激活): " + g.Name,
+					}).Error; err != nil {
+						logger.Warn("入库流水写失败（将随事务回滚）：%v", err)
+					}
+				}
+				// Update 老记录而非 Create——修复 1062 的核心
+				empty := ""
+				now := time.Now()
+				updates := map[string]interface{}{
+					"removed_at":        nil,
+					"state":             0,
+					"installed_version": &empty,
+					"install_path":      &empty,
+					"update_time":       now,
+				}
+				if isRefunded {
+					// 已退款用户重新付费：清退款标记 + 更新实付快照
+					updates["pay_refunded"] = false
+					updates["pay_price"] = payNow
+					logger.Info("已退款用户重新购买：用户 %s 游戏#%d 付 %.3f 积分，复用老库行(id=%d)", username, g.ID, payNow, existing.ID)
+				} else {
+					logger.Info("免费重新激活(事务内竞态兜底)：用户 %s 游戏#%d 复用老库行(id=%d)", username, g.ID, existing.ID)
+				}
+				if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+					return fmt.Errorf("库记录激活失败: %w", err)
+				}
+				existing.RemovedAt = nil
+				existing.State = 0
+				lib = existing
+				// 商家分账（已退款重新付费才触发，免费激活不触发）
+				if isRefunded {
+					if err := merchantShare(payNow, existing.ID); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+
+			if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("查询库记录失败: %w", findErr)
+			}
+
+			// === 分支 2：真·全新用户，无任何历史记录 ===
 			if pay > 0 {
-				// 严格原子扣分：WHERE points >= pay 保证并发下不透支（失败即余额不足）
+				// User 行已 FOR UPDATE 锁住，UPDATE points 安全
 				res := tx.Model(&model.User{}).
 					Where("username = ? AND points >= ?", username, pay).
 					Update("points", gorm.Expr("ROUND(points - ?, 3)", pay))
@@ -1158,7 +1308,6 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 				if res.RowsAffected == 0 {
 					return fmt.Errorf("积分不足，请联系管理员发放")
 				}
-				// 事务内读扣后余额 + 写 PointsLog（与扣分同 tx，保证回滚对称）
 				var after float64
 				tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
 				if err := tx.Create(&model.PointsLog{
@@ -1170,63 +1319,22 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 			}
 			lib = model.GameLibrary{Username: username, GameID: g.ID, State: 0, PayPrice: pay}
 			if err := tx.Create(&lib).Error; err != nil {
+				// 1062 极端兜底：FOR UPDATE 锁后仍可能有其他未走本锁路径的写入绕过
+				// （比如 HandleGameLibraryState 隐式入库），捕获唯一键冲突查 existing 幂等返回
+				var mysqlErr *mysqldriver.MySQLError
+				if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+					logger.Warn("入库 Create 撞唯一索引（极端竞态兜底），改为查 existing 幂等返回：%v", err)
+					qerr := tx.Where("username = ? AND game_id = ?", username, g.ID).First(&existing).Error
+					if qerr == nil {
+						lib = existing
+						return nil
+					}
+					return fmt.Errorf("入库失败且兜底查询也失败: %w", qerr)
+				}
 				return fmt.Errorf("入库失败: %w", err)
 			}
-			// ===== 商家销售分账（2026-11-18 新增；仅付费 + 有 owner + 开关开） =====
-			if pay > 0 && g.OwnerUsername != "" && s.cfg.Game.MerchantRevenueEnabled {
-				// FOR UPDATE 锁 Merchant 行：与退款扣回（refund/ sweep）同一互斥行，
-				// 三者并发串行不会 lost update。锁顺序：已隐式锁 User 行（UPDATE points）后，
-				// 再锁 Merchant——与退款路径（User → Merchant）顺序完全一致，无死锁
-				var merchant model.Merchant
-				if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-					Where("username = ?", g.OwnerUsername).First(&merchant).Error; merr == nil && merchant.Status == 0 {
-					// commission_rate 是百分比（0~100），转小数
-					commission := merchant.CommissionRate / 100.0
-					if commission < 0 {
-						commission = 0
-					}
-					if commission > 1 {
-						commission = 1
-					}
-					merchantEarn := aiPointsRound3(pay * commission)
-					if merchantEarn > 0 {
-						// 锁定期：复用 refund_days（推荐方案 D9）
-						lockDays := s.cfg.Game.RefundDays
-						if lockDays <= 0 {
-							lockDays = 7 // 兜底
-						}
-						settleTime := time.Now().AddDate(0, 0, lockDays)
-						// 更新商家 pending + total_earned
-						res := tx.Model(&merchant).
-							Updates(map[string]interface{}{
-								"pending_points": gorm.Expr("ROUND(pending_points + ?, 3)", merchantEarn),
-								"total_earned":    gorm.Expr("ROUND(total_earned + ?, 3)", merchantEarn),
-							})
-						if res.Error != nil {
-							logger.Error("商家分账余额更新失败（商户 %s，应得 %.3f）：%v", merchant.Username, merchantEarn, res.Error)
-							return res.Error // 事务回滚
-						}
-						// 写收益流水
-						logEntry := &model.MerchantIncomeLog{
-							Merchant:     merchant.Username,
-							GameID:       g.ID,
-							Username:     username,
-							PurchaseID:   lib.ID,
-							UserPay:      pay,
-							Commission:   commission,
-							MerchantEarn: merchantEarn,
-							Type:         1, // 入库分账
-							Status:       1, // pending 锁定中
-							SettleTime:   &settleTime,
-						}
-						if err := tx.Create(logEntry).Error; err != nil {
-							logger.Error("商家收益流水写失败（商户 %s）：%v", merchant.Username, err)
-							return err
-						}
-					}
-				} else if merr != nil {
-					logger.Warn("商家分账跳过：游戏#%d owner=%s 对应商户不存在或已停用", g.ID, g.OwnerUsername)
-				}
+			if err := merchantShare(pay, lib.ID); err != nil {
+				return err
 			}
 			return nil
 		})
@@ -1301,65 +1409,96 @@ func (s *Server) HandleGameLibraryState(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var lib model.GameLibrary
-	// 不带 removed_at 条件：要查到软删除记录
-	q := store.DB.Where("username = ? AND game_id = ?", username, id)
-	if err := q.First(&lib).Error; err != nil {
-		// 阶段二百九十九：隐式入库——客户端下载时只调 PUT state，不先调 POST join。
-		// 没库记录时检查游戏是否存在且已上架，是则自动创建一条，避免 404 导致
-		// 后续云存档接口（gameSaveAccess）找不到归属记录。
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	var reactivated bool
+	// ====== 三条写路径全部统一为「事务 + FOR UPDATE GameLibrary」 ======
+	// 锁顺序：直接 FOR UPDATE GameLibrary（State 不碰 User/积分/Merchant，无需锁 User）。
+	// 与 Join/Leave 的 User→GameLibrary 方向永远不会反向等待：
+	//   Join/Leave 先抓 User 再抓 GameLibrary → 拿到 GameLibrary 时 State 不可能同时持有 User
+	//   State 直接抓 GameLibrary → 拿到后 Join/Leave 会等这个锁释放（它们要 User→GameLibrary）
+	// 全部串行化，彻底消除隐式 UPDATE 行锁的竞态窗口。
+	errOp := store.DB.Transaction(func(tx *gorm.DB) error {
+		q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("username = ? AND game_id = ?", username, id)
+		if err := q.First(&lib).Error; err != nil {
+			// 隐式入库——客户端下载时只调 PUT state，不先调 POST join。
+			// 安全门槛：非免费游戏禁止隐式入库，必须先 POST join 付费。
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("库查询失败: %w", err)
+			}
 			var g model.Game
-			if gerr := store.DB.Where("id = ? AND status = 0", id).First(&g).Error; gerr != nil {
-				adminFail(w, http.StatusNotFound, "游戏不存在或未上架")
-				return
+			if gerr := tx.Where("id = ? AND status = 0", id).First(&g).Error; gerr != nil {
+				return fmt.Errorf("游戏不存在或未上架")
 			}
-			lib = model.GameLibrary{
-				Username: username,
-				GameID:   uint(id),
-				State:    0,
+			if g.Price > 0 {
+				return fmt.Errorf("付费游戏需先加入游戏库")
 			}
-			if cerr := store.DB.Create(&lib).Error; cerr != nil {
-				adminFail(w, http.StatusInternalServerError, "隐式入库失败")
-				return
+			// 免费游戏：事务内 FOR UPDATE 已命中不存在 → 无锁冲突 → 直接 Create
+			lib = model.GameLibrary{Username: username, GameID: uint(id), State: req.State}
+			if cerr := tx.Create(&lib).Error; cerr != nil {
+				var mysqlErr *mysqldriver.MySQLError
+				if errors.As(cerr, &mysqlErr) && mysqlErr.Number == 1062 {
+					logger.Warn("隐式入库 Create 撞唯一索引（并发兜底）：%v", cerr)
+					var exist model.GameLibrary
+					if tx.Where("username = ? AND game_id = ?", username, uint(id)).First(&exist).Error != nil {
+						return cerr
+					}
+					lib = exist
+					return nil
+				}
+				return cerr
 			}
-		} else {
-			adminFail(w, http.StatusInternalServerError, "库查询失败")
-			return
+			return nil
 		}
-	} else if lib.RemovedAt != nil {
-		// 找到了软删除记录：判断是否可隐式恢复
-		if lib.PayRefunded {
-			// 已退款：失去所有权，需先调 POST join 重新购买
-			adminFail(w, http.StatusForbidden, "该游戏已从你的库中移除并退款，需重新加入游戏库")
-			return
+		// FOR UPDATE 锁已拿到，以下都在事务内串行化
+
+		// ① 已退款：禁止隐式恢复
+		if lib.RemovedAt != nil && lib.PayRefunded {
+			return fmt.Errorf("该游戏已退款，需重新加入游戏库")
 		}
-		// 软删除但未退款：隐式恢复（免费重新激活，清空 removed_at + 重置安装状态）
-		upd := map[string]interface{}{"removed_at": nil, "state": req.State}
+
+		// ② 软删除但未退款：隐式恢复（免费重新激活）
+		if lib.RemovedAt != nil {
+			upd := map[string]interface{}{"removed_at": nil, "state": req.State}
+			if req.InstalledVersion != "" {
+				upd["installed_version"] = req.InstalledVersion
+			}
+			if req.InstallPath != "" {
+				upd["install_path"] = req.InstallPath
+			}
+			if err := tx.Model(&lib).Updates(upd).Error; err != nil {
+				return err
+			}
+			lib.RemovedAt = nil
+			reactivated = true
+			return nil
+		}
+
+		// ③ 正常状态更新
+		updates := map[string]interface{}{"state": req.State}
 		if req.InstalledVersion != "" {
-			upd["installed_version"] = req.InstalledVersion
+			updates["installed_version"] = req.InstalledVersion
 		}
 		if req.InstallPath != "" {
-			upd["install_path"] = req.InstallPath
+			updates["install_path"] = req.InstallPath
 		}
-		if err := store.DB.Model(&lib).Updates(upd).Error; err != nil {
+		return tx.Model(&lib).Updates(updates).Error
+	})
+	if errOp != nil {
+		msg := errOp.Error()
+		if strings.Contains(msg, "付费游戏需先加入游戏库") || strings.Contains(msg, "该游戏已退款") {
+			adminFail(w, http.StatusForbidden, msg)
+		} else if strings.Contains(msg, "游戏不存在") {
+			adminFail(w, http.StatusNotFound, msg)
+		} else {
+			logger.Error("库状态保存事务失败：%v", errOp)
 			adminFail(w, http.StatusInternalServerError, "状态保存失败")
-			return
 		}
-		adminJSON(w, map[string]interface{}{"ok": true, "reactivated": true})
 		return
 	}
-	updates := map[string]interface{}{"state": req.State}
-	if req.InstalledVersion != "" {
-		updates["installed_version"] = req.InstalledVersion
+	resp := map[string]interface{}{"ok": true}
+	if reactivated {
+		resp["reactivated"] = true
 	}
-	if req.InstallPath != "" {
-		updates["install_path"] = req.InstallPath
-	}
-	if err := store.DB.Model(&lib).Updates(updates).Error; err != nil {
-		adminFail(w, http.StatusInternalServerError, "状态保存失败")
-		return
-	}
-	adminJSON(w, map[string]interface{}{"ok": true})
+	adminJSON(w, resp)
 }
 
 // HandleGameLibraryLeave 移出游戏库（本地安装目录清理由客户端负责，服务端改软删除保留所有权）：
@@ -1368,6 +1507,14 @@ func (s *Server) HandleGameLibraryState(w http.ResponseWriter, r *http.Request) 
 //   - 收费游戏超期移出        → 不退积分 + pay_refunded=false（所有权保留，下次加入免费激活）
 //   - 免费游戏移出            → 不退积分 + pay_refunded=false（同上）
 // 返回 refunded 告知前端是否实际退还；reactivated 告知未来重新加入免费激活
+//
+// 并发安全三重防护（2026-11-19 加固）：
+//  ① 状态机 CAS 抢占：事务内 FOR UPDATE GameLibrary + WHERE removed_at IS NULL 条件更新，
+//     RowsAffected=0 即唯一赢家判定——彻底杜绝双击/超时重试/前端连点导致的双重退款
+//  ② 统一锁顺序：User → GameLibrary → MerchantIncomeLog → Merchant，与 Join/充值退分/抽奖/发红包
+//     所有积分操作路径的 User 首锁策略对齐，消除跨路径 ABBA 死锁
+//  ③ 事务内重算 canRefund：在 FOR UPDATE GameLibrary 拿到最新行后计算 pay / canRefund，
+//     避免预查阶段与真正执行之间 sweep/Join 抢先修改导致的过期判断
 func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
@@ -1377,8 +1524,9 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	id, _ := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	// 预查只是为了快速返回"不在库"的友好错误，真正的在库判定由事务内 CAS 抢占决定
+	// （两个并发 Leave 可能都查到 removed_at IS NULL，但只有一个 CAS 成功）
 	var lib model.GameLibrary
-	// 必须是当前在库的才能移出（removed_at IS NULL）
 	if err := store.DB.Where("username = ? AND game_id = ? AND removed_at IS NULL", username, id).First(&lib).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			adminFail(w, http.StatusNotFound, "该游戏不在你的库中")
@@ -1387,38 +1535,62 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	pay := aiPointsRound3(lib.PayPrice)
 	refundDays := s.cfg.Game.RefundDays
-	// 是否可以退积分：pay_price > 0 且（退款期限未开启 或 入库时间在期限内）
-	canRefund := pay > 0
-	if canRefund && refundDays > 0 {
-		deadline := lib.CreateTime.AddDate(0, 0, refundDays)
-		canRefund = time.Now().Before(deadline)
-	}
-	now := time.Now()
-	// 事务：软删除 + 用户退款 + 商家扣回，原子性保证
-	// 锁顺序：User 行（先）→ Merchant / RedPacket 行（后）——与入库事务 HandleGameLibraryJoin
-	// 的 FOR UPDATE User → 扣积分锁顺序完全一致，避免不同路径间反向锁等待产生死锁
+
 	var refunded bool
 	var refundExpired bool
 	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
-		// 显式 FOR UPDATE 锁 User 行：退款方向是"加分"，当前 UPDATE points = ROUND(points + pay, 3)
-		// InnoDB 隐式也会加行锁，但显式锁住意图更清晰，且统一了锁顺序（先 User 再 Merchant），
-		// 与 AI 问答扣分（aipoints.go FOR UPDATE User）、游戏入库（game.go HandleGameLibraryJoin
-		// FOR UPDATE User）的锁策略对齐，消除多路径间锁顺序不一致带来的死锁风险
+		// ====== 锁顺序：User → GameLibrary → MerchantIncomeLog → Merchant ======
+		// 与 HandleGameLibraryJoin / rechargeRefund / card.go / redpacket.go / aipoints.go
+		// 所有积分操作路径的 User 首锁策略严格对齐，消除跨路径 ABBA 死锁。
+
+		// ① 显式 FOR UPDATE 锁 User 行（所有积分操作统一首锁）
 		var lockedUser model.User
 		if uerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("username = ?", username).First(&lockedUser).Error; uerr != nil {
 			return fmt.Errorf("锁定用户失败: %w", uerr)
 		}
-		// 需要退款（退款期内 + 付费游戏）：先退用户积分，再扣商家
+
+		// ② FOR UPDATE 锁 GameLibrary + 状态机 CAS 抢占：
+		//    WHERE removed_at IS NULL AND pay_refunded=false 是状态机"我是当前在库且可操作"的判定
+		//    两个并发 Leave 预查都看到 removed_at IS NULL 进来，但只有一个 CAS 成功（拿到行锁 + 条件满足）
+		//    另一个会返回 ErrRecordNotFound → 说明已被对方移出，幂等返回
+		var txLib model.GameLibrary
+		if cerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("username = ? AND game_id = ? AND removed_at IS NULL AND pay_refunded = ?", username, id, false).
+			First(&txLib).Error; cerr != nil {
+			if errors.Is(cerr, gorm.ErrRecordNotFound) {
+				// 已被并发请求移出/退款 → 幂等返回，不扣分不报错
+				logger.Info("移出游戏幂等跳过：用户 %s 游戏#%d 已被其他请求移出或退款", username, id)
+				// 查一下最终状态是 refunded 还是只是 removed
+				var finalLib model.GameLibrary
+				if store.DB.Where("username = ? AND game_id = ?", username, id).First(&finalLib).Error == nil {
+					if finalLib.RemovedAt != nil && finalLib.PayRefunded {
+						refunded = true // 说明对方事务里真的退了款，返回给前端让它知道
+					}
+				}
+				return nil
+			}
+			return fmt.Errorf("锁定库记录失败: %w", cerr)
+		}
+		lib = txLib // 用事务内最新值覆盖预查值
+
+		// 事务内重新计算 pay / canRefund（用最新 CreateTime / PayPrice，防预查与执行间过期）
+		pay := aiPointsRound3(lib.PayPrice)
+		canRefund := pay > 0
+		if canRefund && refundDays > 0 {
+			deadline := lib.CreateTime.AddDate(0, 0, refundDays)
+			canRefund = time.Now().Before(deadline)
+		}
+
+		now := time.Now()
 		if pay > 0 && canRefund {
+			// ③ 退用户积分（User 行已 FOR UPDATE 锁住，UPDATE 安全）
 			res := tx.Model(&model.User{}).Where("username = ?", username).
 				Update("points", gorm.Expr("ROUND(points + ?, 3)", pay))
 			if res.Error != nil {
 				return fmt.Errorf("积分退还失败: %w", res.Error)
 			}
-			// 事务内读退款后余额 + 写 PointsLog（同 tx，回滚对称）
 			var after float64
 			tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
 			if err := tx.Create(&model.PointsLog{
@@ -1430,17 +1602,16 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 			refunded = true
 			// ===== 商家扣回（2026-11-18 新增；对应入库分账的反向流水） =====
 			if s.cfg.Game.MerchantRevenueEnabled {
-				// 先用 ROW 锁 purchaseLog，保证不会与 unlock sweep 并发改同一条
+				// ④ FOR UPDATE 锁 purchaseLog（第三个锁）——与 sweep 同锁同一行，两者互斥串行
 				var purchaseLog model.MerchantIncomeLog
 				if cerr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Where("purchase_id = ? AND type IN (1, 5) AND status != 3", lib.ID).
 					Order("id DESC").First(&purchaseLog).Error; cerr == nil {
 					merchantEarn := purchaseLog.MerchantEarn
-					// FOR UPDATE 锁 merchant 行后重新 SELECT，拿到最新 pending/balance
+					// ⑤ FOR UPDATE 锁 merchant 行（第四个锁）——与 sweep 同锁同行
 					var merchant model.Merchant
 					if merr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 						Where("username = ?", purchaseLog.Merchant).First(&merchant).Error; merr == nil {
-						// 按当前最新状态算扣回量（sweep 可能已把 pending 转 balance）
 						var deductPending, deductBalance float64
 						if merchant.PendingPoints >= merchantEarn {
 							deductPending = merchantEarn
@@ -1448,7 +1619,6 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 							deductPending = merchant.PendingPoints
 							deductBalance = aiPointsRound3(merchantEarn - merchant.PendingPoints)
 						}
-						// 合并成一条 SQL 表达式，一次 UPDATE 原子性完成三字段
 						uerr := tx.Model(&model.Merchant{}).Where("username = ?", merchant.Username).Updates(map[string]interface{}{
 							"pending_points": gorm.Expr("ROUND(GREATEST(pending_points - ?, 0), 3)", deductPending),
 							"balance_points":  gorm.Expr("ROUND(GREATEST(balance_points - ?, 0), 3)", deductBalance),
@@ -1457,12 +1627,10 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 						if uerr != nil {
 							return fmt.Errorf("商家扣回更新失败: %w", uerr)
 						}
-						// 原分账流水标记 refunded，必须加 CAS 条件（防 unlock sweep 已先改 status=2）
 						res2 := tx.Model(&purchaseLog).Where("id = ? AND status != 3", purchaseLog.ID).Update("status", 3)
 						if res2.Error != nil {
 							return fmt.Errorf("原分账流水状态更新失败: %w", res2.Error)
 						}
-						// 写退款扣回流水（type=2）
 						if err := tx.Create(&model.MerchantIncomeLog{
 							Merchant:     merchant.Username, GameID: purchaseLog.GameID,
 							Username: username, PurchaseID: lib.ID,
@@ -1485,7 +1653,7 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 			logger.Info("移出库超期不退：用户 %s 游戏#%d 入库 %v 超 %d 天期限，应退 %.3f 未退",
 				username, id, lib.CreateTime, refundDays, pay)
 		}
-		// 软删除库条目
+		// 软删除库条目（GameLibrary 已 FOR UPDATE 锁住，直接 UPDATE 安全）
 		updates := map[string]interface{}{
 			"removed_at": now,
 			"state":      0,
