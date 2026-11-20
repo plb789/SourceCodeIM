@@ -14,6 +14,7 @@ import (
 // FriendInfo 好友信息（用于好友列表同步）
 type FriendInfo struct {
 	Username string `json:"username"`
+	Nickname string `json:"nickname"` // 好友自己设置的昵称（空则前端显示账号）
 	Remark   string `json:"remark"`
 	Group    string `json:"group"`
 	Online   bool   `json:"online"`
@@ -318,7 +319,7 @@ func (s *Server) refreshFriendList(username string) {
 	s.sendToUser(username, s.buildFriendListData(username))
 }
 
-// buildFriendListData 构造 22 好友列表帧（含备注、分组、在线状态、头像；按用户名构建一次，多端复用）
+// buildFriendListData 构造 22 好友列表帧（含备注、昵称、分组、在线状态、头像；按用户名构建一次，多端复用）
 func (s *Server) buildFriendListData(username string) []byte {
 	var friends []model.Friend
 	store.DB.Where("user_id = ?", username).Find(&friends)
@@ -330,6 +331,7 @@ func (s *Server) buildFriendListData(username string) []byte {
 		// 并发改造 A4：在线状态改全局判定（好友列表在线态跨实例准确）
 		infos = append(infos, FriendInfo{
 			Username: f.FriendID,
+			Nickname: u.Nickname,
 			Remark:   f.Remark,
 			Group:    f.GroupName,
 			Online:   s.isOnlineFast(f.FriendID),

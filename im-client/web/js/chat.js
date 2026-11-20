@@ -2,7 +2,7 @@
 (function () {
     var MSG = IMSocket.MSG;
     var currentChatUser = ''; // 空字符串表示群聊
-    var friendList = []; // 好友列表 [{username, remark, group, online, avatar}]
+    var friendList = []; // 好友列表 [{username, nickname, remark, group, online, avatar}]
     // 阶段八十五：群聊发送者昵称缓存（服务端归口：群聊帧 from_name / 历史帧 names 合并填充，逐条覆盖保持最新）
     var nickCache = {};
     // 群聊发送者展示名解析（微信式，与资料卡主名称规则一致）：好友备注 → 昵称 → 账号
@@ -13,6 +13,8 @@
             if (friendList[i].username === u) {
                 var rk = (friendList[i].remark || '').trim();
                 if (rk) return rk;
+                var nk = (friendList[i].nickname || '').trim();
+                if (nk) return nk;
                 break;
             }
         }
@@ -3712,7 +3714,7 @@
         }
         var f = null;
         for (var i = 0; i < friendList.length; i++) { if (friendList[i].username === t) { f = friendList[i]; break; } }
-        return { name: f ? ((f.remark || '').trim() || (nickCache[t] || '').trim() || t) : t, sub: t, avatar: f ? f.avatar : null, ph: t };
+        return { name: f ? ((f.remark || '').trim() || (f.nickname || '').trim() || (nickCache[t] || '').trim() || t) : t, sub: t, avatar: f ? f.avatar : null, ph: t };
     }
 
     // 右栏已选目标渲染：横向头像网格（头像 + 名字 + 右上角 × 移除）；空态显示引导文案
@@ -3851,7 +3853,7 @@
         for (var i = 0; i < friendList.length; i++) {
             var f = friendList[i];
             if (isAIAgent(f.username)) continue; // AI 智能体会话不作为转发目标（微信无此语义）
-            var disp = (f.remark || '').trim() || (nickCache[f.username] || '').trim() || f.username;
+            var disp = (f.remark || '').trim() || (f.nickname || '').trim() || (nickCache[f.username] || '').trim() || f.username;
             if (kw && disp.toLowerCase().indexOf(kw) < 0 && f.username.toLowerCase().indexOf(kw) < 0) continue;
             items.push({ target: f.username, name: disp, sub: f.username + (f.online ? I18N.t(' · 在线') : ''), avatar: f.avatar, online: f.online });
         }
@@ -21691,7 +21693,7 @@
             } else {
                 convName = cv.target;
                 var convFriend = friendList.find(function (x) { return x.username === cv.target; });
-                if (convFriend && convFriend.remark) convName = convFriend.remark;
+                if (convFriend) convName = convFriend.remark || convFriend.nickname || cv.target;
             }
             var li = document.createElement('li');
             li.className = 'conv-item' + (cv.pinned ? ' pinned' : '');
@@ -22570,7 +22572,7 @@
         grpSelOrder.forEach(function (u) {
             var f = null;
             for (var i = 0; i < friendList.length; i++) { if (friendList[i].username === u) { f = friendList[i]; break; } }
-            var disp = f ? ((f.remark || '').trim() || (nickCache[u] || '').trim() || u) : u;
+            var disp = f ? ((f.remark || '').trim() || (f.nickname || '').trim() || (nickCache[u] || '').trim() || u) : u;
             var avUrl = (f && f.avatar) || '';
             if (grpMode === 'transfer') {
                 // 阶段二百六十四：转让模式候选来自群成员（可能非好友），显示名/头像以 73 members 归口
@@ -22656,7 +22658,7 @@
             friendList.forEach(function (f) {
                 if (isAIAgent(f.username)) return;
                 if (inGroup[f.username]) return;
-                var disp = (f.remark || '').trim() || (nickCache[f.username] || '').trim() || f.username;
+                var disp = (f.remark || '').trim() || (f.nickname || '').trim() || (nickCache[f.username] || '').trim() || f.username;
                 if (kw && disp.toLowerCase().indexOf(kw) < 0 && f.username.toLowerCase().indexOf(kw) < 0) return;
                 cands.push({ f: f, disp: disp });
             });
@@ -24501,7 +24503,7 @@
     function buildContactItem(f) {
         var item = document.createElement('div');
         item.className = 'search-contact';
-        var displayName = f.remark || f.username;
+        var displayName = f.remark || f.nickname || f.username;
         var avatar = document.createElement('div');
         avatar.className = 'search-contact-avatar';
         var avatarUrl = f.username ? getAvatarUrl(f.username) : '';
@@ -24722,12 +24724,15 @@
             return (b.online ? 1 : 0) - (a.online ? 1 : 0);
         });
         sorted.forEach(function (f) {
-            var displayName = f.remark || f.username;
+            var displayName = f.remark || f.nickname || f.username;
+            // HTML 转义防 XSS（昵称/备注/签名都可被用户任意设置）
+            var safeName = escapeHtml(displayName);
+            var safeUser = escapeHtml(f.username);
             // 头像降级统一：有头像显示图片，无头像显示首字母占位（原为空白方块）
             // 原实现：var avatarHtml = f.avatar ? '<img class="avatar" src="' + f.avatar + '" alt="">' : '<div class="avatar placeholder"></div>';
             var avatarHtml = f.avatar
                 ? '<img class="avatar" src="' + f.avatar + '" alt="">'
-                : '<div class="avatar placeholder">' + displayName.charAt(0).toUpperCase() + '</div>';
+                : '<div class="avatar placeholder">' + safeName.charAt(0).toUpperCase() + '</div>';
             // 原实现：var badge = unreadCount[f.username] ? ... 本地计数，与服务端会话角标双源不一致
             // 未读数服务端归口：好友列表角标从服务端推送的会话列表读取未读数（与会话列表角标同源）
             var funread = 0;
@@ -24738,8 +24743,8 @@
                 ? '<span class="unread-badge">' + (funread > 99 ? '99+' : funread) + '</span>'
                 : '';
             var dot = f.online ? '<span class="online-dot"></span>' : '';
-            html += '<li class="user-item' + (currentChatUser === f.username ? ' active' : '') + '" data-user="' + f.username + '">'
-                + avatarHtml + '<span class="user-name">' + displayName + '</span>' + dot + badge + '</li>';
+            html += '<li class="user-item' + (currentChatUser === f.username ? ' active' : '') + '" data-user="' + safeUser + '">'
+                + avatarHtml + '<span class="user-name">' + safeName + '</span>' + dot + badge + '</li>';
         });
         userListEl.innerHTML = html;
 
@@ -30620,7 +30625,7 @@
         friendList.forEach(function (f) {
             list.push({
                 username: f.username,
-                display: ((f.remark || '').trim()) || f.username,
+                display: ((f.remark || '').trim()) || ((f.nickname || '').trim()) || f.username,
                 avatar: f.avatar || '',
                 self: false
             });

@@ -1508,7 +1508,7 @@
         var friends = (window.IMContacts ? window.IMContacts.friends() : []) || [];
         var fs = [];
         friends.forEach(function (f) {
-            var disp = (f.remark || '').trim() || f.username || '';
+            var disp = (f.remark || '').trim() || (f.nickname || '').trim() || f.username || '';
             if (kw && disp.toLowerCase().indexOf(kw) < 0 && String(f.username || '').toLowerCase().indexOf(kw) < 0) return;
             fs.push({ u: f.username, disp: disp, avatar: f.avatar || '', online: !!f.online });
         });

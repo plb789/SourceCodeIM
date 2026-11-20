@@ -1778,7 +1778,7 @@
             if (!f || !f.username || f.username === me) return;
             out.push({
                 username: f.username,
-                display: ((f.name || f.remark || '').trim()) || f.username,
+                display: ((f.remark || f.nickname || '').trim()) || f.username,
                 avatar: f.avatar || ''
             });
         });

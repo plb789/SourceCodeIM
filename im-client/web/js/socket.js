@@ -1036,7 +1036,7 @@
                     // 游戏内 Overlay 一期：附带 online 在线态（friendList 条目的 .online 由 chat.js
                     // USER_LIST/USER_LIST_DELTA 处理器维护）——悬浮窗好友列表在线点数据源
                     list = fs.map(function (f) {
-                        return { username: f.username, name: ((f.remark || f.name || '').trim()) || f.username, avatar: f.avatar || '', online: !!f.online };
+                        return { username: f.username, name: ((f.remark || f.nickname || '').trim()) || f.username, avatar: f.avatar || '', online: !!f.online };
                     });
                 } catch (e) { list = []; }
                 // 二期 M2：顺带捎回本端账号（IMSocket.getUsername 兜底 im_auth 解码）——

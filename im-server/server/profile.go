@@ -30,6 +30,11 @@ import (
 	"im-server/store"
 )
 
+// profileStripHTML 资料短文本（昵称/地区/签名）HTML 标签剥离：
+// 存储型 XSS 防线——资料字段最终会经 innerHTML 渲染给所有好友，
+// 入库前剥离所有 <tag>，保留纯文本；< 不闭合的情况（如 "5 > 3"）自然留下
+var profileStripHTMLRe = regexp.MustCompile(`<[^>]*>`)
+
 // ============= E1：成就解锁防刷 - 内存降级结构（Redis 不可用时兜底） =============
 // 单进程内 Redis 不可用时，用内存做简易 nonce 去重 + 限流（进程级，集群多进程各自独立；
 // 正常 Redis 模式下这两个 map 不会被用到）。
@@ -444,10 +449,10 @@ func (s *Server) handleProfileUpdate(c *Client, msg *protocol.Message) {
 	}
 
 	updates := map[string]interface{}{
-		"nickname":  req.Nickname,
+		"nickname":  profileStripHTMLRe.ReplaceAllString(req.Nickname, ""),
 		"gender":    req.Gender,
-		"region":    req.Region,
-		"signature": req.Signature,
+		"region":    profileStripHTMLRe.ReplaceAllString(req.Region, ""),
+		"signature": profileStripHTMLRe.ReplaceAllString(req.Signature, ""),
 	}
 	if err := store.DB.Model(&model.User{}).Where("username = ?", c.username).Updates(updates).Error; err != nil {
 		s.sendError(c, "资料保存失败")
@@ -456,6 +461,18 @@ func (s *Server) handleProfileUpdate(c *Client, msg *protocol.Message) {
 	// 阶段八十五：昵称缓存失效（群聊帧/历史帧下发用），下次读取回源取新昵称
 	// 集群模式：总线广播失效其他实例的昵称缓存（无 TTL 进程缓存，跨实例必须显式失效）
 	s.invalidateNickname(c.username)
+
+	// 用户资料更新后，通知所有在线好友刷新好友列表（好友列表现在包含昵称字段，
+	// 需要让好友及时看到新的昵称显示；离线好友下次登录会自动获取最新好友列表）
+	// 性能优化：先过滤在线好友再推送，避免对离线好友执行 buildFriendListData（DB 查询密集）
+	// friend_id = c.username 表示"谁把 c.username 加为好友"（对方好友列表里有我）
+	var friendRefs []model.Friend
+	store.DB.Where("friend_id = ?", c.username).Find(&friendRefs)
+	for _, fr := range friendRefs {
+		if s.isOnlineFast(fr.UserID) {
+			s.refreshFriendList(fr.UserID)
+		}
+	}
 
 	// 回推本人全部在线连接（多端同步），is_friend/remark 对自己无意义固定零值
 	// 集群模式：sendToUser 归口（总线定向信封覆盖跨实例的多端连接；原本地 GetAll 循环跨实例漏推）
