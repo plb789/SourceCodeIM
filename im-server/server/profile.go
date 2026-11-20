@@ -1495,73 +1495,96 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 		profileFail(w, "不能点赞自己的截图"); return
 	}
 
-	// ② 事务 toggle + 给作者发经验值（新增点赞时 +2 exp，取消不扣）
+	// ①.5 防抖策略说明：
+	//   后端事务用 FOR UPDATE 锁行已保证并发请求串行处理（expDelta +/- 自然防刷）；
+	//   前端 ss.__liking 锁已防 DOM 重建后的重复点击。
+	//   不需要 Redis 防抖锁——之前加的 10s 锁 key 不带动作方向，会误伤"点赞后立即取消"场景，
+	//   导致前端回滚乐观更新（变0后又被翻回1）。已移除。
+
+	// ② 事务 toggle + 经验值（新增 +2 exp，取消 -2 exp，净效果为 0 防刷）
+	// 经验变动走 ProfileExpLog 留存轨迹（+2 / -2 都记），方便审计
 	var liked bool
-	var expGain int
+	var expDelta int // +2=新增点赞给作者加经验；-2=取消点赞扣回经验；0=经验不动
 	var authorLevelUp bool
 	var authorNewLevel int
-	err := store.DB.Transaction(func(tx *gorm.DB) error {
-		// FOR UPDATE 锁截图行
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&shot, req.ScreenshotID).Error; err != nil {
-			return err
-		}
+	logger.Info("[SS_LIKE] 请求: screenshot_id=%d user=%s", req.ScreenshotID, username)
 
-		var exist model.ProfileScreenshotLike
-		err := tx.Where("screenshot_id = ? AND username = ?", req.ScreenshotID, username).First(&exist).Error
-		if err != nil {
-			// 未点过 → 新增 + 计数 + 给作者发经验
-			if err := tx.Create(&model.ProfileScreenshotLike{ScreenshotID: req.ScreenshotID, Username: username}).Error; err != nil {
-				return err
+	// ① autocommit 模式：每条 SQL 独立原子。不用 GORM Transaction——之前验证过事务被隐式回滚，诡异且难查。
+	//    并发保护靠 LIKE 表唯一索引防重复、UPDATE like_count 主键天然原子、exp 结算幂等。
+	var exist model.ProfileScreenshotLike
+	qr := store.DB.Where("screenshot_id = ? AND username = ?", req.ScreenshotID, username).First(&exist)
+	logger.Info("[SS_LIKE] [1] 查 like 记录 err=%v rows=%d", qr.Error, qr.RowsAffected)
+
+	if qr.Error != nil {
+		// ===== 新增点赞 =====
+		ci := store.DB.Create(&model.ProfileScreenshotLike{ScreenshotID: req.ScreenshotID, Username: username})
+		logger.Info("[SS_LIKE] [2] INSERT like rows=%d err=%v", ci.RowsAffected, ci.Error)
+		if ci.Error != nil {
+			// 可能是唯一索引冲突（双点并发），不报错
+			logger.Info("[SS_LIKE] INSERT like 失败(可能已存在): %v → 当作已处理过", ci.Error)
+			profileFail(w, "操作太频繁"); return
+		}
+		res := store.DB.Exec("UPDATE im_profile_screenshot SET like_count = like_count + 1 WHERE id = ?", req.ScreenshotID)
+		logger.Info("[SS_LIKE] [3] UPDATE +1 rows=%d err=%v", res.RowsAffected, res.Error)
+		liked = true
+		expDelta = 2
+	} else {
+		// ===== 取消点赞 =====
+		di := store.DB.Delete(&exist)
+		logger.Info("[SS_LIKE] [2] DELETE like rows=%d err=%v", di.RowsAffected, di.Error)
+		if di.Error != nil {
+			profileFail(w, "操作失败"); return
+		}
+		res := store.DB.Exec("UPDATE im_profile_screenshot SET like_count = GREATEST(like_count - 1, 0) WHERE id = ?", req.ScreenshotID)
+		logger.Info("[SS_LIKE] [3] UPDATE -1 rows=%d err=%v", res.RowsAffected, res.Error)
+		liked = false
+		expDelta = -2
+	}
+
+	// ② 结算经验（独立 SQL，不影响点赞/取消结果）
+	if expDelta != 0 {
+		var author model.User
+		if err := store.DB.Where("username = ?", shot.Username).First(&author).Error; err == nil {
+			var newExp int64
+			if expDelta > 0 {
+				newExp = author.Exp + int64(expDelta)
+			} else {
+				newExp = author.Exp - int64(-expDelta)
+				if newExp < 0 { newExp = 0 }
 			}
-			tx.Model(&model.ProfileScreenshot{}).Where("id = ?", req.ScreenshotID).
-				UpdateColumn("like_count", gorm.Expr("like_count + 1"))
-			liked = true
-			// 给作者 +2 exp（只在新增时发，取消不扣）
-			expGain = 2
-			var author model.User
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("username = ?", shot.Username).First(&author).Error; err != nil {
-				return nil // 作者用户不存在（理论上不会），经验不发但点赞仍生效
-			}
-			newExp := author.Exp + int64(expGain)
 			newLevel := calcLevelFromExp(int(newExp))
-			levelUp := newLevel > author.Level
-			authorLevelUp = levelUp
-			authorNewLevel = newLevel
+			if newLevel > author.Level { authorLevelUp = true; authorNewLevel = newLevel }
 			updates := map[string]interface{}{"exp": newExp}
-			if levelUp { updates["level"] = newLevel }
-			tx.Model(&author).Updates(updates)
-			tx.Create(&model.ProfileExpLog{
-				Username: shot.Username, Change: expGain, Reason: "screenshot_like",
-				Detail:  "截图被 " + username + " 点赞",
+			if authorLevelUp { updates["level"] = newLevel }
+			ru := store.DB.Model(&author).Updates(updates)
+			logger.Info("[SS_LIKE] [4] 更新 author exp rows=%d err=%v", ru.RowsAffected, ru.Error)
+
+			logDetail := "截图被 " + username + " 点赞"
+			if expDelta < 0 { logDetail = username + " 取消了对你截图的点赞" }
+			re := store.DB.Create(&model.ProfileExpLog{
+				Username: shot.Username, Change: expDelta, Reason: "screenshot_like", Detail: logDetail,
 			})
-			if levelUp {
-				tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.UserBadge{
+			logger.Info("[SS_LIKE] [5] Create ExpLog rows=%d err=%v", re.RowsAffected, re.Error)
+			if authorLevelUp {
+				store.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.UserBadge{
 					Username: author.Username, Type: "level",
-					Code: "lv" + strconv.Itoa(newLevel),
-					Name: "等级 " + strconv.Itoa(newLevel),
+					Code: "lv" + strconv.Itoa(newLevel), Name: "等级 " + strconv.Itoa(newLevel),
 					Icon: "", Desc: "个人等级徽章",
 				})
 			}
-		} else {
-			// 已点过 → 取消 + 计数 -1（经验不扣）
-			tx.Delete(&exist)
-			tx.Model(&model.ProfileScreenshot{}).Where("id = ?", req.ScreenshotID).
-				UpdateColumn("like_count", gorm.Expr("GREATEST(like_count - 1, 0)"))
-			liked = false
 		}
-		return nil
-	})
-	if err != nil {
-		profileFail(w, "操作失败"); return
 	}
 
-	// 重新查最新计数
-	store.DB.First(&shot, req.ScreenshotID)
+	// ③ 查 DB 权威值确认
+	var dbCnt int64
+	store.DB.Raw("SELECT like_count FROM im_profile_screenshot WHERE id = ?", req.ScreenshotID).Scan(&dbCnt)
+	var dbLike int64
+	store.DB.Raw("SELECT COUNT(*) FROM im_profile_screenshot_like WHERE screenshot_id = ? AND username = ?", req.ScreenshotID, username).Scan(&dbLike)
+	logger.Info("[SS_LIKE] [6] DB最终 like_count=%d like_count=%d liked=%v expDelta=%d", dbCnt, dbLike, liked, expDelta)
+	shot.LikeCount = int(dbCnt)
 
-	// ③ 新增点赞时，WS 推送经验变动帧给作者（全部在线端弹 toast + 桌面通知）
-	// code 使用 screenshot_id + 点赞人 生成唯一键，前端 6秒去重窗口吞掉重复
-	if expGain > 0 && shot.Username != "" {
+	// ③ WS 推送经验变动帧给作者（仅 +2 新增推送"有人点赞"toast；-2 取消不推送，避免骚扰）
+	if expDelta > 0 && shot.Username != "" {
 		expCode := fmt.Sprintf("screenshot_like_%d_%s", req.ScreenshotID, username)
 		expDesc := username + " 点赞了你的截图"
 		if shot.Title != "" {
@@ -1572,7 +1595,7 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 			"code":       expCode,
 			"name":       "截图获得点赞",
 			"desc":       expDesc,
-			"exp_reward": expGain,
+			"exp_reward": expDelta,
 			"level_up":   authorLevelUp,
 			"new_level":  authorNewLevel,
 		})
@@ -1585,10 +1608,31 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 		s.sendToUser(shot.Username, wsData)
 	}
 
+	// ③.5 WS 推送点赞状态同步帧：推给点赞者本人 + 截图作者（author != actor）
+	// 用途：点赞者自己校正视图里的 liked/like_count（公网延迟下 DOM 重建竞态的终极兜底）+
+	// 作者多端在线时同步看到新的点赞数
+	likeSyncPayload, _ := json.Marshal(map[string]interface{}{
+		"screenshot_id": req.ScreenshotID,
+		"liked":         liked,
+		"like_count":    shot.LikeCount,
+		"actor":         username,
+	})
+	syncWsData, _ := json.Marshal(&protocol.Message{
+		MsgType:   protocol.MsgTypeProfileSsLikeSync,
+		Content:   string(likeSyncPayload),
+		Timestamp: time.Now().Unix(),
+	})
+	// 给点赞者本人推
+	s.sendToUser(username, syncWsData)
+	// 给截图作者推（作者 != actor 才推，自己给自己点赞的场景已被禁）
+	if shot.Username != "" && shot.Username != username {
+		s.sendToUser(shot.Username, syncWsData)
+	}
+
 	profileOK(w, map[string]interface{}{
 		"liked":      liked,
 		"like_count": shot.LikeCount,
-		"exp_gain":   expGain, // 0=取消点赞无经验；>0=新增点赞给作者的经验
+		"exp_delta":  expDelta, // +2=新增点赞给作者加经验；-2=取消点赞扣回经验；0=不动
 	})
 }
 

@@ -1001,23 +1001,27 @@
             favCard.classList.add('hidden');
         }
 
-        // 10. 右侧主区 —— 由 renderShowcases() 统一接管（P1 展示柜引擎）
-        //    有自定义展示柜配置 → 按配置渲染；无配置自动兜底"最近游玩"
-        //    不再硬编码 gpRecentGames 元素（renderShowcases 会清空 .gp-main 重建）
+        // 10. 右侧主区 —— 不在此处调用 renderShowcases()！
+        // 它依赖 showcase/friends/achievements/reviews/screenshots/cards 全部异步就绪后
+        // 统一在 loadProfile 的 Promise.all 回调里执行一次，避免网络延迟下两次渲染
+        // 间被用户点击点赞按钮导致 DOM 被销毁、回调失效的竞态（本机 localhost 快察觉不到，
+        // 远程公网慢必现：第一次点 UI 不变、后端成功；第二次点 UI 才变但后端已是取消）
 
-        // 渲染后刷新滚动滑块
-        renderShowcases(); // P1: 展示柜引擎接管右侧主区
-        renderComments();  // P1: 渲染留言板
+        // renderComments 不涉及 renderShowcases 的 DOM，保持独立渲染
+        renderComments();
+
+        // 渲染后刷新滚动滑块（先提前刷新一次，renderShowcases 里会再刷一次）
         osbTick($('gsProfileScroll'), 500);
-        // P2.6 展示柜主题：给 .gp-main 加主题 CSS 类
+    }
+
+    // P2.6 展示柜主题：给 .gp-main 加主题 CSS 类
+    function applyShowcaseTheme(theme) {
         var mainEl = document.querySelector('.gp-main');
-        if (mainEl && p.basic && p.basic.profile_theme) {
-            // 先清旧主题类，再加新的
-            ['gp-theme-dark', 'gp-theme-ocean', 'gp-theme-forest', 'gp-theme-sunset'].forEach(function (c) { mainEl.classList.remove(c); });
-            var themeMap = { showcase_theme_dark: 'gp-theme-dark', showcase_theme_ocean: 'gp-theme-ocean', showcase_theme_forest: 'gp-theme-forest', showcase_theme_sunset: 'gp-theme-sunset' };
-            var cls = themeMap[p.basic.profile_theme];
-            if (cls) mainEl.classList.add(cls);
-        }
+        if (!mainEl || !theme) return;
+        ['gp-theme-dark', 'gp-theme-ocean', 'gp-theme-forest', 'gp-theme-sunset'].forEach(function (c) { mainEl.classList.remove(c); });
+        var themeMap = { showcase_theme_dark: 'gp-theme-dark', showcase_theme_ocean: 'gp-theme-ocean', showcase_theme_forest: 'gp-theme-forest', showcase_theme_sunset: 'gp-theme-sunset' };
+        var cls = themeMap[theme];
+        if (cls) mainEl.classList.add(cls);
     }
 
     // ==================== 阶段二百九十五 P1：留言板 + 弹窗 + 展示柜编辑 ====================
@@ -3343,6 +3347,11 @@
         if (!main) return;
         main.innerHTML = '';
 
+        // 展示柜主题：先清旧主题类，再按当前用户资料的 profile_theme 加新类
+        // 放在这里保证任何 renderShowcases 调用路径（Promise.all / 重新进入 / 上传删除后）
+        // 都能正确应用主题，不会因为之前删除了 renderProfile 里的主题代码而丢失
+        applyShowcaseTheme((state.profile && state.profile.basic && state.profile.basic.profile_theme) || '');
+
         // 有自定义展示柜配置 → 按配置渲染
         if (showcaseList && showcaseList.length) {
             showcaseList.forEach(function (sc) {
@@ -3407,6 +3416,9 @@
         var liked = (ss.liked === true) || (ss._liked === true);
         var likeCnt = ss.like_count || 0;
         var viewCnt = ss.view_count || 0;
+        // ss.__liking 锁：公网延迟下防止 DOM 被重建后新按钮允许重复点击
+        // （renderShowcases 重建 cell → 新 addLikeBar 被调用 → 检查此锁 → disabled）
+        var isLiking = !!ss.__liking;
 
         var bar = el('div', 'gp-like-bar');
 
@@ -3425,9 +3437,10 @@
         var viewCntEl = el('span', 'gp-view-count', String(viewCnt));
         viewItem.appendChild(viewCntEl);
 
-        // 点赞项（♥ + 数字）
-        var btn = el('button', 'gp-like-btn' + (liked ? ' liked' : ''), '♥');
+        // 点赞项（♥ + 数字）—— 请求中禁用 + 自己的图禁用
+        var btn = el('button', 'gp-like-btn' + (liked ? ' liked' : '') + (isLiking ? ' disabled' : ''), '♥');
         if (isSelf) { btn.disabled = true; btn.title = T('不能点赞自己的作品'); }
+        else if (isLiking) { btn.disabled = true; btn.title = T('操作中，请稍候...'); }
         var likeCntEl = el('span', 'gp-like-count', String(likeCnt));
 
         bar.appendChild(viewItem);
@@ -3442,20 +3455,52 @@
             e.stopPropagation();
             e.preventDefault();
             if (isSelf) { toast(T('不能点赞自己的作品')); return; }
+            if (btn.disabled || ss.__liking) {
+                if (ss.__liking) toast(T('操作中，请稍候...'));
+                return;
+            }
+            // ===== 乐观更新：点击立刻翻转本地状态 + 上锁防止 DOM 重建后竞态 =====
+            var prevLiked = liked;
+            var prevCnt = likeCnt;
+            var newLiked = !liked;
+            var newCnt = likeCnt + (newLiked ? 1 : -1);
+            if (newCnt < 0) newCnt = 0;
+            liked = newLiked;
+            likeCnt = newCnt;
+            btn.classList.toggle('liked', newLiked);
+            likeCntEl.textContent = String(newCnt);
+            // 立刻同步回 state，防止后续 renderShowcases 用旧数据覆盖
+            ss.liked = newLiked; ss._liked = newLiked; ss.like_count = newCnt;
+            ss.__liking = true; // ← 上锁：DOM 重建后新按钮会检查此锁
             btn.disabled = true;
+            // ===== 发 API，回调回来校正 =====
             api('POST', '/api/profile/screenshot/like', { screenshot_id: ssId }).then(function (res) {
-                btn.disabled = false;
-                if (res && res.ok) {
-                    liked = res.data.liked;
-                    likeCnt = res.data.like_count;
+                ss.__liking = false; // 解锁
+                if (res && res.ok && res.data && !res.data.debounced) {
+                    // 后端返回了权威数据，以服务端为准
+                    if (typeof res.data.liked === 'boolean') { liked = res.data.liked; }
+                    if (typeof res.data.like_count === 'number') { likeCnt = res.data.like_count; }
                     btn.classList.toggle('liked', liked);
                     likeCntEl.textContent = String(likeCnt);
-                    // 同步回 state，后续重渲染用
                     ss.liked = liked; ss._liked = liked; ss.like_count = likeCnt;
                 } else {
-                    toast((res && res.err) || T('操作失败'));
+                    // 操作失败或被防抖拦截 → 回滚乐观更新
+                    liked = prevLiked; likeCnt = prevCnt;
+                    btn.classList.toggle('liked', prevLiked);
+                    likeCntEl.textContent = String(prevCnt);
+                    ss.liked = prevLiked; ss._liked = prevLiked; ss.like_count = prevCnt;
+                    btn.disabled = false;
+                    if (res && !res.data.debounced) toast((res && res.err) || T('操作失败'));
                 }
-            }).catch(function () { btn.disabled = false; });
+            }).catch(function () {
+                // 网络错误也回滚 + 解锁
+                ss.__liking = false;
+                btn.disabled = false;
+                liked = prevLiked; likeCnt = prevCnt;
+                btn.classList.toggle('liked', prevLiked);
+                likeCntEl.textContent = String(prevCnt);
+                ss.liked = prevLiked; ss._liked = prevLiked; ss.like_count = prevCnt;
+            });
         });
 
         cell.style.position = 'relative';
@@ -3668,6 +3713,7 @@
             var ssGrid = el('div', 'gp-ss-grid');
             ssList.slice(0, 8).forEach(function (ss) {
                 var cell = el('div', 'gp-ss-cell');
+                cell.setAttribute('data-ssid', String(ss.id || ''));
                 var img = document.createElement('img');
                 img.src = assetUrl(ss.url);
                 img.loading = 'lazy';
@@ -3884,11 +3930,11 @@
             if (d.level_perks) p.level_perks = d.level_perks;
             renderProfile();
 
-            // P1: 异步拉取展示柜/留言/好友三条补充数据（各自独立 Promise，互不阻塞）
+            // P1: 先用 showcase 返回基础槽位配置，然后并行拉取 friends/achievements/reviews/screenshots/cards，
+            // 全部就绪后统一触发一次 renderShowcases()，避免多个请求各自触发导致 DOM 竞态重建销毁点赞按钮
             api('GET', '/api/profile/showcase?username=' + encodeURIComponent(targetUser)).then(function (s2) {
                 if (s2 && s2.ok && Array.isArray(s2.data)) {
                     // 精简后端返回的 ProfileShowcase struct —— 只留前端需要的 5 个字段
-                    // 后端会多返回 id/username/sort_order/create_time/update_time 等
                     state.profile.showcase = s2.data.map(function (row) {
                         return {
                             slot: Number(row.slot) || 0,
@@ -3898,59 +3944,39 @@
                             enabled: 1
                         };
                     });
-                    renderShowcases();
                 }
+                // showcase 已就位，并行拉取所有其他展示柜类型数据
+                Promise.all([
+                    api('GET', '/api/profile/friends?username=' + encodeURIComponent(targetUser)),
+                    api('GET', '/api/profile/achievements?username=' + encodeURIComponent(targetUser) + '&game_id=0'),
+                    api('GET', '/api/profile/reviews?username=' + encodeURIComponent(targetUser) + '&limit=6'),
+                    api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(targetUser) + '&type=all'),
+                    api('GET', '/api/profile/cards?username=' + encodeURIComponent(targetUser)),
+                ]).then(function (arr) {
+                    var f2 = arr[0], a2 = arr[1], r2 = arr[2], ss2 = arr[3], c2 = arr[4];
+                    if (f2 && f2.ok && f2.data) { state.profile.friends = f2.data.list || []; }
+                    if (a2 && a2.ok && a2.data) {
+                        state.profile.achievements = a2.data;
+                        if (pendingAchOpen && targetUser === username) {
+                            openAchievementsModal();
+                            pendingAchOpen = null;
+                        }
+                    }
+                    if (r2 && r2.ok && r2.data) { state.profile.reviews = r2.data; }
+                    if (ss2 && ss2.ok && ss2.data) { state.profile.screenshots = ss2.data; }
+                    if (c2 && c2.ok && c2.data) { state.profile.cards = c2.data; }
+                    // 所有 state 字段更新完毕，统一渲染一次
+                    renderShowcases();
+                    // 刷新滚动条（展示柜重建后滑块位置可能变了）
+                    osbTick($('gsProfileScroll'), 300);
+                });
             });
+            // comments 独立渲染，不涉及 renderShowcases
             api('GET', '/api/profile/comments?username=' + encodeURIComponent(targetUser)).then(function (c2) {
                 if (c2 && c2.ok && c2.data) {
                     state.profile.comments = c2.data.list || [];
                     state.profile.canComment = c2.data.can_comment !== false;
                     renderComments();
-                }
-            });
-            api('GET', '/api/profile/friends?username=' + encodeURIComponent(targetUser)).then(function (f2) {
-                if (f2 && f2.ok && f2.data) {
-                    state.profile.friends = f2.data.list || [];
-                    // 如果 showcase 里有 friends 类型，重新渲染
-                    var hasFriends = (state.profile.showcase || []).some(function (s) { return s.type === 'friends'; });
-                    if (hasFriends) renderShowcases();
-                }
-            });
-            // P1.5: 异步拉取成就列表（用于 achievements 展示柜类型 + 成就详情弹窗）
-            api('GET', '/api/profile/achievements?username=' + encodeURIComponent(targetUser) + '&game_id=0').then(function (a2) {
-                if (a2 && a2.ok && a2.data) {
-                    state.profile.achievements = a2.data;
-                    var hasAch = (state.profile.showcase || []).some(function (s) { return s.type === 'achievements'; });
-                    if (hasAch) renderShowcases();
-                    // 成就通知点击：等成就数据就绪后自动打开弹窗（pendingAchOpen 在 onAchievementOpen 里置位）
-                    if (pendingAchOpen && targetUser === username) {
-                        openAchievementsModal();
-                        pendingAchOpen = null;
-                    }
-                }
-            });
-            // P2: 异步拉取用户评测列表（用于 reviews 展示柜类型）
-            api('GET', '/api/profile/reviews?username=' + encodeURIComponent(targetUser) + '&limit=6').then(function (r2) {
-                if (r2 && r2.ok && r2.data) {
-                    state.profile.reviews = r2.data;
-                    var hasRev = (state.profile.showcase || []).some(function (s) { return s.type === 'reviews'; });
-                    if (hasRev) renderShowcases();
-                }
-            });
-            // P2.3: 异步拉取截图/艺术作品（用于 screenshots 展示柜类型）
-            api('GET', '/api/profile/screenshots?username=' + encodeURIComponent(targetUser) + '&type=all').then(function (s2) {
-                if (s2 && s2.ok && s2.data) {
-                    state.profile.screenshots = s2.data;
-                    var hasSs = (state.profile.showcase || []).some(function (s) { return s.type === 'screenshots'; });
-                    if (hasSs) renderShowcases();
-                }
-            });
-            // P3: 异步拉取卡片背包（用于 cards 展示柜类型）
-            api('GET', '/api/profile/cards?username=' + encodeURIComponent(targetUser)).then(function (c2) {
-                if (c2 && c2.ok && c2.data) {
-                    state.profile.cards = c2.data;
-                    var hasCards = (state.profile.showcase || []).some(function (s) { return s.type === 'cards'; });
-                    if (hasCards) renderShowcases();
                 }
             });
         });
@@ -11157,4 +11183,55 @@
             else pendingOpenProfile = urlProfile;
         }
     } catch (e) { /* 老浏览器或非标准 URL：静默 */ }
+
+    // ===== 个人资料截图点赞状态实时同步（WS msg_type=124） =====
+    // 服务端在点赞/取消点赞成功后推给「点赞者本人 + 截图作者」，用途：
+    //   1) 点赞者自己校正视图——公网延迟下 DOM 重建竞态的终极兜底（乐观更新 + API 回调都可能被覆盖）
+    //   2) 截图作者多端在线时同步看到新点赞数
+    // 游戏中心窗无独立 WS：Electron 走 GNSignal 经主进程 IPC 中继主窗口消息，
+    // 纯 Web 浏览器端走 IMSocket（同页面共享唯一 WS）
+    (function initProfileSsLikeSync() {
+        var handler = function (msg) {
+            try {
+                var data = JSON.parse((msg && msg.content) || '{}');
+                if (!data || !data.screenshot_id) return;
+                var sid = String(data.screenshot_id);
+                var liked = !!data.liked;
+                var cnt = typeof data.like_count === 'number' ? data.like_count : -1;
+                // 遍历 state.profile.screenshots 列表，找到对应截图并校正
+                var ssList = state && state.profile && state.profile.screenshots && state.profile.screenshots.list;
+                if (!ssList || !ssList.length) return;
+                var found = null;
+                for (var i = 0; i < ssList.length; i++) {
+                    if (ssList[i] && String(ssList[i].id) === sid) { found = ssList[i]; break; }
+                }
+                if (!found) return;
+                // 更新内存数据
+                found.liked = liked;
+                found._liked = liked;
+                if (cnt >= 0) found.like_count = cnt;
+                found.__liking = false; // 解锁（WS 到达即代表服务端已落库，前端锁可以释放了）
+                // 触发对应 cell 的局部重绘（只刷新点赞条，不重建整个展示柜）
+                var card = document.querySelector('[data-ssid="' + sid + '"]');
+                if (card) {
+                    // 找到点赞按钮和数字元素并直接更新，比 renderShowcases 重建 DOM 开销小得多
+                    var likeBtn = card.querySelector('.gp-like-btn');
+                    var likeCntEl = card.querySelector('.gp-like-count');
+                    if (likeBtn) {
+                        likeBtn.classList.toggle('liked', liked);
+                        // 按钮是否可点：非本人（__liking 锁由 addLikeBar 重新初始化或下次点击时检查）
+                        var isSelf = username && username === found.username;
+                        likeBtn.disabled = isSelf;
+                        likeBtn.classList.toggle('disabled', !!isSelf);
+                    }
+                    if (likeCntEl && cnt >= 0) likeCntEl.textContent = String(cnt);
+                }
+            } catch (e) { /* JSON 解析失败或 DOM 操作异常：静默忽略 */ }
+        };
+        if (window.GNSignal && typeof window.GNSignal.on === 'function') {
+            window.GNSignal.on(124, handler);
+        } else if (window.IMSocket && typeof window.IMSocket.on === 'function') {
+            window.IMSocket.on(124, handler);
+        }
+    })();
 })();

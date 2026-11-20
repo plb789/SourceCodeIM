@@ -140,6 +140,7 @@ func (c *Client) readPump() {
 		}
 		var msg protocol.Message
 		if err := c.conn.ReadJSON(&msg); err != nil {
+			logger.Info("[WS_READ] 用户 %s ReadJSON 退出: err=%v remote=%s", c.username, err, c.conn.RemoteAddr())
 			return
 		}
 
@@ -186,10 +187,8 @@ func packTextFrames(frames [][]byte) []byte {
 var wsSlowWrites atomic.Int64
 
 func (c *Client) writePump() {
+	consecutiveFail := 0 // 连续写失败计数：单帧失败不 Close，连续 3 帧失败才判定连接死亡
 	for data := range c.sendCh {
-		// 并发优化 E3：取首帧后非阻塞排干积压帧，多帧拼接一次底层 Write（N 次 syscall → 1 次）。
-		// 单帧/空闲路径保持原 WriteMessage 不变，零额外开销；与 gorilla 默认 pong 回写（读协程
-		// writeControl）的并发关系与原实现同级，本项目心跳为应用层 text 帧，WS 层 ping 场景实际不触发
 		batch := append(make([][]byte, 0, 64), data)
 	drain:
 		for len(batch) < 64 {
@@ -200,24 +199,29 @@ func (c *Client) writePump() {
 				break drain
 			}
 		}
-		wStart := time.Now()
-		var err error
-		c.writeMu.Lock()
-		c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if len(batch) == 1 {
-			err = c.conn.WriteMessage(websocket.TextMessage, batch[0])
-		} else {
-			_, err = c.conn.UnderlyingConn().Write(packTextFrames(batch))
-		}
-		c.writeMu.Unlock()
-		if cost := time.Since(wStart); cost > 200*time.Millisecond {
-			wsSlowWrites.Add(1) // 仪表盘观测：慢写累计（持续增长=网卡/对端拥塞信号）
-			logger.Warn("慢写观测（用户 %s 写耗时 %v 合并 %d 帧）", c.username, cost, len(batch))
-		}
-		if err != nil {
-			// 写失败即连接死亡：主动置位关闭标记并断开，加速读循环退出与离线补发等长循环中止
-			c.Close()
-			return
+		// 逐帧写：单帧失败只丢这帧不 Close，避免 tunnel/中间件瞬时卡顿导致整条连接断开
+		for i, frame := range batch {
+			wStart := time.Now()
+			c.writeMu.Lock()
+			c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			err := c.conn.WriteMessage(websocket.TextMessage, frame)
+			c.writeMu.Unlock()
+			if cost := time.Since(wStart); cost > 200*time.Millisecond {
+				wsSlowWrites.Add(1)
+				logger.Warn("慢写观测（用户 %s 第 %d/%d 帧耗时 %v）", c.username, i+1, len(batch), cost)
+			}
+			if err != nil {
+				consecutiveFail++
+				logger.Warn("[WS_WRITE] 用户 %s 第 %d/%d 帧写失败: err=%v 连续失败=%d",
+					c.username, i+1, len(batch), err, consecutiveFail)
+				if consecutiveFail >= 3 {
+					logger.Warn("[WS_WRITE] 用户 %s 连续 %d 帧写失败，判定连接死亡 → Close", c.username, consecutiveFail)
+					c.Close()
+					return
+				}
+				continue // 跳过这帧，继续写下一帧
+			}
+			consecutiveFail = 0 // 写成功 → 重置连续失败计数
 		}
 	}
 }

@@ -288,6 +288,12 @@ const (
 	// reason 取值同 ProfileExpLog.Reason：upload_screenshot / screenshot_like / daily_achievement 等；
 	// code 为去重用唯一键（如 "upload_screenshot_{screenshot_id}"），6秒窗口内同 code 仅弹一次
 	MsgTypeExpGainPush = 123
+
+	// 个人资料截图点赞/取消点赞实时同步（下行）：点赞 toggle 成功后，服务端经此帧推给
+	// 点赞者本人（校正自己视图里的 liked/like_count，防公网延迟下 DOM 重建竞态）+
+	// 截图作者（多端在线时同步看到新的点赞数）；content 为 JSON：
+	// {screenshot_id, liked, like_count, actor}  actor=点赞者 username
+	MsgTypeProfileSsLikeSync = 124
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
