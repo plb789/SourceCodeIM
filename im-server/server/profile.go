@@ -1330,8 +1330,17 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 	}
 	url := "/static/upload/screenshots/" + name
 
+	// 生成缩略图（失败不阻塞主流程，ThumbURL 为空时前端回退 url）
+	fullPath := filepath.Join(dir, name)
+	var thumbURL string
+	if t, err := generateScreenshotThumb(fullPath, dir); err == nil {
+		thumbURL = t
+	} else {
+		logger.Warn("截图缩略图生成失败: %v, path: %s", err, fullPath)
+	}
+
 	ss := model.ProfileScreenshot{
-		Username: username, Type: ssType, URL: url,
+		Username: username, Type: ssType, URL: url, ThumbURL: thumbURL,
 		Title: title, GameID: uint(gameID),
 	}
 
@@ -1413,7 +1422,9 @@ func (s *Server) HandleProfileScreenshotUpload(w http.ResponseWriter, r *http.Re
 	s.sendToUser(username, wsData)
 
 	resp := map[string]interface{}{
-		"id": ss.ID, "url": url,
+		"id":       ss.ID,
+		"url":      url,
+		"thumb_url": thumbURL,
 		"exp_gain": expGain,
 		"new_exp":  newExp,
 		"exp_code": expCode, // 供前端本地回调去重用
@@ -1458,6 +1469,11 @@ func (s *Server) HandleProfileScreenshotsGet(w http.ResponseWriter, r *http.Requ
 	}
 	var list []model.ProfileScreenshot
 	q.Order("create_time DESC").Find(&list)
+
+	// 对老数据做懒生成：ThumbURL 为空的首次请求时自动补缩略图（幂等）
+	for i := range list {
+		ensureThumbURL(&list[i], s.cfg.WebDir)
+	}
 
 	// 如果有 viewer（已登录），查询他对每张截图是否已点赞
 	likedMap := make(map[uint]bool)
@@ -1750,18 +1766,18 @@ func (s *Server) HandleProfileScreenshotDelete(w http.ResponseWriter, r *http.Re
 
 	// 2. 事务提交成功后再删物理文件（不可回滚，放在事务外）
 	// 安全：从 DB 的 URL 字段取，校验必须在 screenshots 目录下（防路径穿越）
-	if shot.URL != "" {
-		base := filepath.Join(s.cfg.WebDir, "static", "upload", "screenshots")
-		fname := filepath.Base(shot.URL) // 取最后一段文件名
-		// 二次校验：拒绝含 / \ .. 的恶意路径
-		if !strings.ContainsAny(fname, "/\\..") {
-			full := filepath.Join(base, fname)
-			// 确保 full 仍在 base 目录下
-			if strings.HasPrefix(filepath.Clean(full), filepath.Clean(base)) {
-				os.Remove(full) // 文件不存在也不报错
-			}
+	base := filepath.Join(s.cfg.WebDir, "static", "upload", "screenshots")
+	safeRemove := func(urlOrThumb string) {
+		if urlOrThumb == "" { return }
+		fname := filepath.Base(urlOrThumb)
+		if strings.ContainsAny(fname, "/\\..") { return }
+		full := filepath.Join(base, fname)
+		if strings.HasPrefix(filepath.Clean(full), filepath.Clean(base)) {
+			os.Remove(full)
 		}
 	}
+	safeRemove(shot.URL)       // 原图
+	safeRemove(shot.ThumbURL)  // 缩略图（可能为空，safeRemove 会跳过）
 
 	profileOK(w, map[string]interface{}{"id": shot.ID})
 }

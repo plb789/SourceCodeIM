@@ -3715,7 +3715,8 @@
                 var cell = el('div', 'gp-ss-cell');
                 cell.setAttribute('data-ssid', String(ss.id || ''));
                 var img = document.createElement('img');
-                img.src = assetUrl(ss.url);
+                // 优先用缩略图（省流量），无缩略图回退原图
+                img.src = assetUrl(ss.thumb_url || ss.url);
                 img.loading = 'lazy';
                 img.onerror = function () { cell.style.display = 'none'; };
                 cell.appendChild(img);
@@ -3783,7 +3784,8 @@
                 var cell = el('div', i === 0 ? 'gp-art-hero' : 'gp-art-cell');
                 cell.style.cursor = 'pointer';
                 var img = document.createElement('img');
-                img.src = assetUrl(ss.url);
+                // 优先用缩略图（省流量），无缩略图回退原图
+                img.src = assetUrl(ss.thumb_url || ss.url);
                 img.loading = 'lazy';
                 cell.appendChild(img);
                 if (ss.title) {
@@ -3803,7 +3805,8 @@
                     var tWrap = el('div', 'gp-art-more-cell');
                     tWrap.style.cursor = 'pointer';
                     var t = document.createElement('img');
-                    t.src = assetUrl(ss.url); t.loading = 'lazy';
+                    // 优先缩略图
+                    t.src = assetUrl(ss.thumb_url || ss.url); t.loading = 'lazy';
                     tWrap.appendChild(t);
                     if (awIsSelf) tWrap.appendChild(makeAwDelBtn(ss));
                     tWrap.addEventListener('click', function () { trackScreenshotView(ss.id); openImageViewer(assetUrl(ss.url), ss.title); });
@@ -4877,18 +4880,21 @@
             tiles++;
         }
         if ((g.videos || []).length) {
-            var vt = el('div', 'gs-lpv-tile');
+            var vt = el('div', 'gs-lpv-tile gs-lpv-video-tile');
             var v = document.createElement('video');
             v.src = assetUrl(g.videos[0]);
             v.muted = true;
             v.loop = true;
-            v.autoplay = true;
+            /* 取消 autoplay：首帧由 preload=metadata 自动渲染，节省首次加载流量 */
             v.preload = 'metadata'; // 只下元数据（几 KB）+ 浏览器自动渲染首帧，play() 时才下完整视频
             v.setAttribute('playsinline', '');
             v.onerror = function () { vt.remove(); tiles--; addImg(g.screenshots && g.screenshots[0]); };
             vt.appendChild(v);
             media.appendChild(vt);
             tiles++;
+            /* 悬停视频区域才播放，移出暂停（Steam 同款交互，省流量） */
+            vt.addEventListener('mouseenter', function () { try { v.play(); } catch (e) {} });
+            vt.addEventListener('mouseleave', function () { try { v.pause(); } catch (e) {} });
         }
         (g.screenshots || []).forEach(function (s) { addImg(s); });
         if (!tiles) {

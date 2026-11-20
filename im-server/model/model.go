@@ -1952,6 +1952,8 @@ type ProfileScreenshot struct {
 	// Type 类型：screenshot 游戏截图 / artwork 艺术作品
 	Type     string `gorm:"column:type;type:varchar(16);not null;default:'screenshot';index:idx_ss_user" json:"type"`
 	URL      string `gorm:"column:url;type:varchar(512);not null" json:"url"`
+	// ThumbURL 缩略图地址（上传时自动生成 300×300 WebP；空串=无缩略图，前端回退 url）
+	ThumbURL string `gorm:"column:thumb_url;type:varchar(512);default:''" json:"thumb_url"`
 	Title    string `gorm:"column:title;type:varchar(128);default:''" json:"title"`
 	// GameID 关联游戏（0=通用艺术作品不关联具体游戏）
 	GameID   uint   `gorm:"column:game_id;default:0;index" json:"game_id"`

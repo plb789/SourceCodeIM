@@ -163,23 +163,18 @@ func InitMySQL(cfg *config.Config) error {
 	// 角色分离迁移（2026-11-19）：UserRoleSystem=2 与原商户 role=2 冲突
 	// 把所有 role=2 且在 im_merchant 表中有记录的商户账号迁移到 role=3（UserRoleMerchant）
 	// platform_pool 已在上面强制修正回 role=2，不会被误改
-	var migrateCnt int64
+	// 用原生 SQL 避免 GORM 子查询 IN (?) 绑定丢失括号的 bug（实测生成 "IN SELECT" 而非 "IN (SELECT)"）
+	res := db.Exec("UPDATE im_user SET role = ?, update_time = NOW() WHERE role = ? AND username IN (SELECT username FROM im_merchant)",
+		model.UserRoleMerchant, model.UserRoleSystem)
+	if res.Error != nil {
+		fmt.Printf("[store] WARN 商户角色迁移失败（不影响主流程）: %v\n", res.Error)
+	} else {
+		fmt.Printf("[store] 商户角色迁移完成：%d 条记录从 role=2 迁移到 role=3\n", res.RowsAffected)
+	}
+	// 兜底：platform_pool 必须保持 role=2（不受上面子查询影响，因为它不在 im_merchant 表里）
 	db.Model(&model.User{}).
-		Where("role = ? AND username IN (?)", model.UserRoleSystem,
-			db.Table("im_merchant").Select("username")).
-		UpdateColumn("role", model.UserRoleMerchant).
-		RowsAffected = migrateCnt
-	// 用子查询方式再做一次（兼容 GORM UpdateColumn RowsAffected 赋值问题）
-	db.Model(&model.User{}).
-		Where("role = ?", model.UserRoleSystem).
-		Where("username IN ?", db.Table("im_merchant").Select("username")).
-		Update("role", model.UserRoleMerchant)
-	db.Model(&model.User{}).
-		Where("role = ?", model.UserRoleSystem).
 		Where("username = ?", model.StorePlatformPool).
-		UpdateColumn("role", model.UserRoleSystem) // 兜底：platform_pool 保持 role=2
-	_ = migrateCnt
-	fmt.Printf("[store] 商户角色迁移完成（role=UserRoleMerchant 与 UserRoleSystem 分离）\n")
+		UpdateColumn("role", model.UserRoleSystem)
 
 	// A1 seed：等级配置表首次建表后自动 INSERT/UPDATE 文档附录 A 预设数据
 	// 必须用 Save 或 OnConflict UPDATE（不是 DoNothing）—— 保证 ShowcaseSlots/Title 等字段是最新值

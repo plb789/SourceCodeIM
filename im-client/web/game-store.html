@@ -593,6 +593,7 @@
             position: relative;
             flex: 1;
             min-height: 0;
+            aspect-ratio: 16 / 9;
             border-radius: 6px;
             overflow: hidden;
             background: var(--placeholder-bg);
@@ -605,6 +606,27 @@
             object-fit: cover;
             display: block;
         }
+
+        /* 视频 tile 左上角播放角标：提示用户可悬停播放 */
+        .gs-lpv-video-tile::after {
+            content: '';
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.55);
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M8 5v14l11-7z'/%3E%3C/svg%3E");
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: 12px;
+            pointer-events: none;
+            opacity: 0.7;
+            z-index: 2;
+            transition: opacity 0.15s;
+        }
+        .gs-lpv-video-tile:hover::after { opacity: 0; }
 
         /* 单游戏横向大卡（Steam 精选胶囊同款）：整行宽，左信息区 + 右 2×2 媒体网格 */
         .gs-lpv-hero {
