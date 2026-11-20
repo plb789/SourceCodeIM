@@ -44,6 +44,18 @@
     // 阶段二百九十三：PC 端判定——仅 Electron 壳内显示网络中断提示，WEB 端/手机端跳过
     // 与 socket.js LOGIN_RESP 平台判定、扫码登录入口判定同口径
     var isPCDesktop = !!(window.desktop && !window.__webCallBridge);
+    // 阶段三百一十：手机 Capacitor 原生环境检测（与 mobile.js 同款判定口径）
+    var isCapacitorNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    // 阶段三百一十：纯 WEB 浏览器判定——仅真正的浏览器环境（排除 PC Electron 和手机 Capacitor APP）
+    // 用于 WEB 浏览器端隐藏游戏中心（PC 客户端和手机 APP 正常显示）
+    var isWebBrowser = !isPCDesktop && !isCapacitorNative;
+    // 阶段三百一十：统一导出到 window.__imEnv，供 hover-card.js 等后续脚本直接引用
+    // （chat.js 在所有业务模块中最先加载，挂一次全项目共享；game-store.js 是独立页面，保持自算）
+    window.__imEnv = {
+        isPCDesktop: isPCDesktop,
+        isCapacitorNative: isCapacitorNative,
+        isWebBrowser: isWebBrowser
+    };
     var logoutBtn = document.getElementById('logout-btn');
     var themeBtn = document.getElementById('theme-btn');
     var addFriendBtn = document.getElementById('add-friend-btn');
@@ -391,10 +403,10 @@
     var qrLoginTimer = null;   // 轮询定时器
     var qrLoginActive = false; // 扫码面板是否激活（切回密码面板即停止轮询）
     var qrLoginDone = false;   // 已进入凭码登录（停止轮询，防止登录页跳转期间误触刷新）
-    var isNativeApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    // 阶段三百一十：isNativeApp 已统一为顶部 isCapacitorNative（L48 定义，同时挂到 window.__imEnv）
 
     // 手机 APP 原生环境隐藏登录方式切换（扫码登录面向 PC/WEB 大屏；手机端只保留账号密码登录）
-    if (isNativeApp && loginTabQr && loginTabPass) {
+    if (isCapacitorNative && loginTabQr && loginTabPass) {
         var loginTabsBox = document.getElementById('login-mode-tabs');
         if (loginTabsBox) loginTabsBox.classList.add('hidden');
     }
@@ -650,7 +662,7 @@
     // 阶段三百零九：QQ同款登录视图刷新——根据账号数量动态决定显示账号选择还是密码登录
     // 可在页面加载时调用，也可在退出登录 / 登录失败后动态调用（不需要 reload）
     function refreshLoginView() {
-        if (isNativeApp) { setLoginMode('pass'); return; }
+        if (isCapacitorNative) { setLoginMode('pass'); return; }
         var accounts = loadAccounts();
         if (accounts.length >= 2) {
             // 多账号 → 账号选择面板（记住上次选中的账号，没有就选第一个）
@@ -972,8 +984,7 @@
         try { localStorage.removeItem('drive_token'); } catch (e) {}
         // 阶段二百二十五：退出/换号同步停止后台保活服务
         try {
-            var bg = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
-                && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+            var bg = isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
             if (bg) bg.stopKeepAlive();
             if (bg && bg.emasBindAccount) bg.emasBindAccount({ account: '' });
         } catch (e) {}
@@ -1304,7 +1315,7 @@
     // 后台通知点击跳转：原生通知携带深链 imapp://chat?to=<会话目标>，
     // 经 Capacitor App 插件 appUrlOpen（热启动）/getLaunchUrl（冷启动）送达此处打开会话
     (function initNativeDeepLink() {
-        if (!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) return;
+        if (!isCapacitorNative) return;
         var capApp = window.Capacitor.Plugins && window.Capacitor.Plugins.App;
         if (!capApp) return;
         var pendingTarget = null;
@@ -2381,8 +2392,7 @@
     // 状态持久化在主进程 userData/im_hwaccel.json（app ready 前读取才生效），切换后重启客户端生效
     var sHwAccel = document.getElementById('settings-hwaccel');
     var sHwAccelCard = document.getElementById('settings-hwaccel-card');
-    if (sHwAccel && sHwAccelCard && window.desktop && !window.__webCallBridge
-        && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
+    if (sHwAccel && sHwAccelCard && isPCDesktop) {
         sHwAccelCard.style.display = '';
         sHwAccel.disabled = true; // 读取 IPC 应答前置灰，防止闪现默认未勾选态误导
         if (window.desktop.hwAccelGet) {
@@ -2410,8 +2420,7 @@
     // 开启=提权静默安装、关闭=卸载（二次确认），均弹一次系统授权框（UAC），操作期间置灰防连点；
     // 主进程启动检测到未安装会推送 tap:prompt 引导，拒绝后 localStorage 记忆不再弹（设置里仍可手动开启）
     (function initTapDriver() {
-        var isPc = window.desktop && !window.__webCallBridge
-            && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        var isPc = isPCDesktop;
         if (!isPc || !window.desktop.tapGet) return;
         var sTap = document.getElementById('settings-tap-driver');
         var sTapCard = document.getElementById('settings-tap-card');
@@ -2490,7 +2499,7 @@
         // 避免竞态导致卡片永不显示（登录后的 startKeepAlive 时机更晚故一直正常）
         var kaTries = 0;
         (function tryInit() {
-        var isNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+        var isNative = isCapacitorNative;
         var bgPlugin = isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
         var kaCard = document.getElementById('settings-ka-card');
         if (!bgPlugin || !kaCard) {
@@ -3151,7 +3160,7 @@
         if (!_cf || typeof _cf !== 'object') {
             try { _cf = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { _cf = null; }
         }
-        var _cgOn = !(_cf && _cf.game_center === false); // 显式 false 才关，缺数据=默认开
+        var _cgOn = isWebBrowser ? false : !(_cf && _cf.game_center === false); // WEB 浏览器端强制隐藏游戏相关入口
         friendCardSteamBtn.style.display = _cgOn ? '' : 'none';
         friendCardMask.classList.remove('hidden');
         IMSocket.send({ msg_type: MSG.PROFILE_QUERY, to_user: username });
@@ -3194,7 +3203,7 @@
         if (!_ff || typeof _ff !== 'object') {
             try { _ff = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { _ff = null; }
         }
-        friendCardSteamBtn.style.display = (_ff && _ff.game_center === false) ? 'none' : '';
+        friendCardSteamBtn.style.display = (isWebBrowser || (_ff && _ff.game_center === false)) ? 'none' : '';
     }
 
     function closeFriendCard() {
@@ -3235,6 +3244,11 @@
     // 阶段二百九十五：资料卡「查看完整资料」——唤醒游戏中心窗 + 投递 openProfile(target)
     // Electron 走桥接 window.desktop.gameOpenWindow({profile: target})；浏览器回退 URL searchParams
     friendCardSteamBtn.addEventListener('click', function () {
+        // 阶段三百一十：WEB 浏览器端强制拦截（按钮正常已隐藏，此处防御）
+        if (isWebBrowser) {
+            if (window.imShowPrompt) window.imShowPrompt('游戏中心仅在 PC 客户端可用');
+            return;
+        }
         // 阶段三百：防御性开关拦截（按钮因任何原因未隐藏时兜底）
         var _df = window.__imUiFeatures;
         if (!_df || typeof _df !== 'object') {
@@ -9594,9 +9608,10 @@
         try {
             var p = JSON.parse(msg.content);
             if (p.status === 'approved') {
-                showToast('✅ 服务号「' + (p.account_name || p.app_id || '') + '」消息审核已通过');
+                showToast(I18N.t('✅ 服务号「{name}」消息审核已通过', { name: (p.account_name || p.app_id || '') }));
             } else if (p.status === 'rejected') {
-                showToast('❌ 服务号「' + (p.account_name || p.app_id || '') + '」消息被驳回' + (p.remark ? '：' + p.remark : ''));
+                var rejectRemark = p.remark ? '：' + p.remark : '';
+                showToast(I18N.t('❌ 服务号「{name}」消息被驳回{remark}', { name: (p.account_name || p.app_id || ''), remark: rejectRemark }));
             }
         } catch (e) { }
     });
@@ -9625,7 +9640,7 @@
         if (!el) return;
         var tip = document.createElement('div');
         tip.className = 'system-tip';
-        tip.textContent = '该消息已被服务号撤回';
+        tip.textContent = I18N.t('该消息已被服务号撤回');
         el.replaceWith(tip);
     });
 
@@ -9688,7 +9703,7 @@
         var listEl = document.getElementById('off-search-list');
         if (!listEl) return;
         if (!list || list.length === 0) {
-            if (hint) hint.textContent = '暂无服务号';
+            if (hint) hint.textContent = I18N.t('暂无服务号');
             listEl.innerHTML = '';
             return;
         }
@@ -9735,12 +9750,12 @@
         }
         var html = '';
         if (subscribed.length > 0) {
-            html += '<li class="official-section-title">已关注（' + subscribed.length + '）</li>';
+            html += '<li class="official-section-title">' + I18N.t('已关注（{n}）', { n: subscribed.length }) + '</li>';
             subscribed.forEach(function (off) { html += renderItem(off); });
         }
         if (notSubscribed.length > 0) {
             if (subscribed.length > 0) html += '<li class="official-section-divider"></li>';
-            html += '<li class="official-section-title">发现更多（' + notSubscribed.length + '）</li>';
+            html += '<li class="official-section-title">' + I18N.t('发现更多（{n}）', { n: notSubscribed.length }) + '</li>';
             notSubscribed.forEach(function (off) { html += renderItem(off); });
         }
         listEl.innerHTML = html;
@@ -10075,6 +10090,11 @@
     var gameCenterBtn = document.getElementById('game-center-btn');
     if (gameCenterBtn) {
         gameCenterBtn.addEventListener('click', function () {
+            // 阶段三百一十：WEB 浏览器端强制拦截（按钮正常已隐藏，此处防御）
+            if (isWebBrowser) {
+                if (window.imShowPrompt) window.imShowPrompt('游戏中心仅在 PC 客户端可用');
+                return;
+            }
             // 阶段三百：防御性开关拦截（按钮因任何原因未隐藏时兜底）
             var _gf = window.__imUiFeatures;
             if (!_gf || typeof _gf !== 'object') {
@@ -10088,6 +10108,316 @@
             else window.open('game-store.html', '_blank');
         });
     }
+
+    // ===== 阶段三百一十：响应式导航栏自适应（窗口高度不足时自动隐藏图标，提供"更多"入口） =====
+    // 手机端（html.m）有独立布局，不参与此逻辑
+    (function initNavResponsive() {
+        var navRail = document.querySelector('.nav-rail');
+        var navIcons = document.querySelector('.nav-icons');
+        var navMoreBtn = document.getElementById('nav-more-btn');
+        var navMorePanel = document.getElementById('nav-more-panel');
+        var navMoreList = document.getElementById('nav-more-list');
+        if (!navRail || !navIcons || !navMoreBtn || !navMorePanel) return;
+
+        // 被隐藏的导航项缓存（供"更多"面板渲染）
+        var _hiddenNavItems = [];
+        var _navResizeTimer = null;
+
+        // 核心始终显示的图标（前三个：聊天、AI、通讯录）
+        function getAlwaysVisibleIcons() {
+            return navIcons.querySelectorAll('.nav-icon.sidebar-tab[data-tab="chat"], .nav-icon.sidebar-tab[data-tab="ai"], .nav-icon.sidebar-tab[data-tab="friends"]');
+        }
+
+        // 可折叠的图标（核心三个 sidebar-tab + game-center-btn + 更多按钮 都被排除）
+        function getCollapsibleIcons() {
+            var all = navIcons.querySelectorAll('.nav-icon');
+            var result = [];
+            for (var i = 0; i < all.length; i++) {
+                var el = all[i];
+                // 1. 排除更多按钮（它自己不参与"藏"的逻辑，是用来藏别人的）
+                if (el.id === 'nav-more-btn' || el.classList.contains('nav-more-btn')) continue;
+                // 2. 排除核心三个（永远显示）
+                var tab = el.getAttribute('data-tab') || '';
+                if (tab === 'chat' || tab === 'ai' || tab === 'friends') continue;
+                // 3. 排除 game-center-btn 当它被 feature 开关或 WEB 浏览器藏掉时
+                if (el.id === 'game-center-btn' && el.style.display === 'none') continue;
+                // 4. 排除已被 CSS .hidden 或 .nav-rail-hidden 藏掉的
+                if (el.classList.contains('hidden')) continue;
+                // 5. 排除 game-center-btn（没 sidebar-tab class，但需要判断 display）
+                if (el.style.display === 'none') continue;
+                result.push(el);
+            }
+            return result;
+        }
+
+        function getVisibleNonCoreIcons() {
+            return getCollapsibleIcons().filter(function (el) {
+                return el.style.display !== 'none' && !el.classList.contains('nav-more-btn');
+            });
+        }
+
+        function getCoreIcons() {
+            var cores = [];
+            var chat = navIcons.querySelector('.nav-icon.sidebar-tab[data-tab="chat"]');
+            var ai = navIcons.querySelector('.nav-icon.sidebar-tab[data-tab="ai"]');
+            var friends = navIcons.querySelector('.nav-icon.sidebar-tab[data-tab="friends"]');
+            if (chat) cores.push(chat);
+            if (ai) cores.push(ai);
+            if (friends) cores.push(friends);
+            return cores;
+        }
+
+        // 重置所有图标为可见（保留 feature 开关和 WEB 浏览器强制隐藏的）
+        function resetAllIcons() {
+            var all = navIcons.querySelectorAll('.nav-icon');
+            all.forEach(function (el) {
+                // 跳过更多按钮
+                if (el.classList.contains('nav-more-btn')) return;
+                // 清除响应式临时隐藏（这个是我们自己加的 class，可以安全清掉）
+                el.classList.remove('nav-rail-hidden');
+                // 永久隐藏（feature 开关 / WEB 浏览器）用 style.display === 'none' 标记，跳过
+                if (el.style.display === 'none') return;
+            });
+            navMoreBtn.classList.add('hidden');
+            navMorePanel.classList.add('hidden');
+            _hiddenNavItems = [];
+        }
+
+        // 重新计算可用空间并自适应
+        function adjustNavRail() {
+            if (document.documentElement.classList.contains('m')) {
+                resetAllIcons();
+                return;
+            }
+
+            requestAnimationFrame(function () {
+                resetAllIcons();
+
+                // === 思路：完全用容器自身尺寸，不用 viewport 相对坐标 ===
+                // nav-rail 结构：nav-top → nav-icons → nav-bottom
+                // nav-bottom 有 margin-top:auto，所以 nav-icons 的可用高度就是
+                // nav-rail 总高度 - nav-top 占用 - nav-bottom 占用 - rail padding
+
+                var navTopEl = document.querySelector('.nav-top');
+                var navBottomEl = document.querySelector('.nav-bottom');
+                if (!navBottomEl) return;
+
+                var railStyle = window.getComputedStyle(navRail);
+                var railPaddingTop = parseFloat(railStyle.paddingTop) || 0;
+                var railPaddingBottom = parseFloat(railStyle.paddingBottom) || 0;
+
+                // nav-top 实际占用（pc-titlebar 下 display:none，offsetHeight = 0，正好跳过）
+                var topH = navTopEl ? navTopEl.offsetHeight : 0;
+
+                // nav-bottom 实际占用（它有 flex-shrink:0，高度稳定）
+                var bottomH = navBottomEl.offsetHeight;
+
+                // nav-icons 的 margin-top（pc-titlebar 下是 -8px，会影响起始位置）
+                var iconsStyle = window.getComputedStyle(navIcons);
+                var iconsMT = parseFloat(iconsStyle.marginTop) || 0;
+
+                // nav-rail 总高度 - padding - nav-top - nav-icons margin-top 偏移 - nav-bottom
+                // 就是 nav-icons 区域真正能放图标的高度
+                var availableForIcons = navRail.clientHeight
+                    - railPaddingTop - railPaddingBottom
+                    - topH
+                    - Math.abs(iconsMT) // margin-top 可能是负的
+                    - bottomH;
+
+                // 容错：窗口太小
+                if (availableForIcons < 60) {
+                    navMoreBtn.classList.remove('hidden');
+                    var _all1 = getCollapsibleIcons();
+                    _all1.forEach(function (el) { el.classList.add('nav-rail-hidden'); });
+                    _hiddenNavItems = _all1.slice();
+                    return;
+                }
+
+                var allCollapsible = getCollapsibleIcons();
+
+                // === 先试全部显示不显示更多按钮 ===
+                navMoreBtn.classList.add('hidden');
+                var needAll = navIcons.scrollHeight; // flex-shrink:0 后这个值准确
+
+                if (needAll <= availableForIcons) {
+                    _hiddenNavItems = [];
+                    return; // 全部能放下，结束
+                }
+
+                // === 放不下，显示更多按钮 + 从下往上藏图标 ===
+                navMoreBtn.classList.remove('hidden');
+                var hiddenCount = 0;
+                var maxCanHide = allCollapsible.length;
+
+                // 这里每次藏图标后，nav-bottom 的 offsetHeight 不变（flex-shrink:0）
+                // nav-icons 的 scrollHeight 会变小，availableForIcons 也不变
+                // 所以 while 的判断是稳定的
+                while (navIcons.scrollHeight > availableForIcons && hiddenCount < maxCanHide) {
+                    var _idx = maxCanHide - 1 - hiddenCount;
+                    if (_idx < 0) break;
+                    allCollapsible[_idx].classList.add('nav-rail-hidden');
+                    hiddenCount++;
+                }
+
+                // === 整理 hiddenNavItems ===
+                _hiddenNavItems = [];
+                if (hiddenCount > 0) {
+                    for (var h = 0; h < hiddenCount; h++) {
+                        _hiddenNavItems.push(allCollapsible[maxCanHide - 1 - h]);
+                    }
+                    _hiddenNavItems.reverse(); // 从上到下的顺序
+                }
+            });
+        }
+
+        // 点击更多按钮显示弹出面板
+        navMoreBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (_hiddenNavItems.length === 0) return;
+
+            // 切换显示/隐藏
+            if (navMorePanel.classList.contains('hidden')) {
+                renderMorePanel();
+                showMorePanel();
+            } else {
+                navMorePanel.classList.add('hidden');
+            }
+        });
+
+        function renderMorePanel() {
+            navMoreList.innerHTML = '';
+            _hiddenNavItems.forEach(function (item) {
+                var iconClone = item.querySelector('svg');
+                if (!iconClone) return;
+
+                var tab = item.getAttribute('data-tab');
+                var title = item.getAttribute('title') || '';
+                var isActive = item.classList.contains('active');
+                var isGameCenter = item.id === 'game-center-btn';
+
+                var div = document.createElement('div');
+                div.className = 'nav-more-item' + (isActive ? ' active' : '');
+                div.setAttribute('data-tab', tab || '');
+                div.setAttribute('title', title);
+
+                var iconDiv = document.createElement('div');
+                iconDiv.className = 'nav-more-icon';
+                iconDiv.innerHTML = iconClone.outerHTML;
+
+                var labelSpan = document.createElement('span');
+                labelSpan.className = 'nav-more-label';
+                labelSpan.textContent = title;
+
+                div.appendChild(iconDiv);
+                div.appendChild(labelSpan);
+
+                // 点击事件
+                div.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    navMorePanel.classList.add('hidden');
+
+                    if (isGameCenter) {
+                        // 游戏中心特殊处理
+                        var _gf = window.__imUiFeatures;
+                        if (!_gf || typeof _gf !== 'object') {
+                            try { _gf = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { _gf = null; }
+                        }
+                        if (_gf && _gf.game_center === false) {
+                            if (window.imShowPrompt) window.imShowPrompt('游戏中心已被管理员禁用');
+                            return;
+                        }
+                        if (window.desktop && window.desktop.gameOpenWindow) window.desktop.gameOpenWindow();
+                        else window.open('game-store.html', '_blank');
+                        return;
+                    }
+
+                    // sidebar-tab 标准切换
+                    if (tab) {
+                        var realTab = navIcons.querySelector('.nav-icon.sidebar-tab[data-tab="' + tab + '"]');
+                        if (realTab) realTab.click();
+                    }
+                });
+
+                navMoreList.appendChild(div);
+            });
+        }
+
+        function showMorePanel() {
+            // 获取更多按钮的位置
+            var rect = navMoreBtn.getBoundingClientRect();
+            var panelRect = navMorePanel.getBoundingClientRect();
+
+            navMorePanel.classList.remove('hidden');
+
+            // 动态设置位置：弹出面板在更多按钮右侧，垂直对齐
+            var panelHeight = navMorePanel.offsetHeight;
+            var topPos = rect.top + rect.height / 2 - panelHeight / 2;
+            // 边界检查
+            topPos = Math.max(8, Math.min(topPos, window.innerHeight - panelHeight - 8));
+            navMorePanel.style.top = topPos + 'px';
+
+            // 左箭头位置
+            var arrowEl = navMorePanel.querySelector('.nav-more-arrow');
+            if (arrowEl) {
+                var arrowTop = rect.top + rect.height / 2 - topPos - 5; // 5 = 箭头的一半
+                arrowEl.style.top = Math.max(6, Math.min(arrowTop, panelHeight - 12)) + 'px';
+            }
+        }
+
+        // 点击外部关闭更多面板
+        document.addEventListener('click', function (e) {
+            if (!navMorePanel.contains(e.target) && !navMoreBtn.contains(e.target)) {
+                navMorePanel.classList.add('hidden');
+            }
+        });
+
+        // 防抖resize
+        window.addEventListener('resize', function () {
+            if (_navResizeTimer) clearTimeout(_navResizeTimer);
+            _navResizeTimer = setTimeout(adjustNavRail, 100);
+        });
+
+        // 关键修复：监听 chat-view 的显示变化
+        // 登录页面 chat-view 是 hidden（display:none），此时 nav-rail 还没真正渲染
+        // 登录成功后 chat-view 去掉 hidden → nav-rail 有了真实高度 → 必须重跑 adjustNavRail
+        var chatView = document.getElementById('chat-view');
+        if (chatView) {
+            var mo = new MutationObserver(function () {
+                if (!chatView.classList.contains('hidden')) {
+                    // chat-view 从 hidden 变成显示——布局重算
+                    setTimeout(adjustNavRail, 300); // 给 layout 足够时间完成
+                }
+            });
+            mo.observe(chatView, { attributes: true, attributeFilter: ['class'] });
+        }
+
+        // 页面加载完成后执行（如果 chat-view 已经是可见的——比如刷新后已登录）
+        function tryInitialAdjust() {
+            // 等 chat-view 不 hidden 了才跑
+            var _cv = document.getElementById('chat-view');
+            if (_cv && !_cv.classList.contains('hidden')) {
+                setTimeout(adjustNavRail, 300);
+            } else {
+                // chat-view 还 hidden，等 MutationObserver 触发
+                // 但也加个兜底，5 秒后如果还没跑就强制跑一次
+                setTimeout(function () {
+                    var _cv2 = document.getElementById('chat-view');
+                    if (_cv2 && !_cv2.classList.contains('hidden')) {
+                        adjustNavRail();
+                    }
+                }, 5000);
+            }
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', tryInitialAdjust);
+        } else {
+            tryInitialAdjust();
+        }
+
+        // 导出到 window 供 applyUiFeatures 更新后调用（隐藏游戏中心后需要重新计算）
+        window.__adjustNavRail = adjustNavRail;
+    })();
 
     // ===== 阶段一百四十四：公告与动态（公司公告/新闻动态/红头文件） =====
     // 阶段一百四十四二期改版（微信通讯录式）：左侧 3 个分类卡牌（头像+名称+分类未读角标），
@@ -21293,7 +21623,7 @@
             // 阶段二百五十一：APP 端桌面图标未读角标（微信同款 +99）——会话未读总数经原生
             // 插件更新厂商桌面角标（vivo/华为/荣耀/三星等私有通道；无角标能力的桌面静默
             // 忽略）。登录/回前台由本归口以服务端未读精确校准后台服务的累加计数
-            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+            if (isCapacitorNative) {
                 try {
                     var bgpB = window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
                     if (bgpB && bgpB.setBadgeCount) bgpB.setBadgeCount({ count: navTotal });
@@ -21355,7 +21685,7 @@
             var convName;
             if (isOfficial) {
                 var off = officialMap[cv.target];
-                convName = off ? off.display_name : (cv.target.replace(/^o_/, '') || '服务号');
+                convName = off ? off.display_name : (cv.target.replace(/^o_/, '') || I18N.t('服务号'));
             } else if (isGroup) {
                 convName = groupNameOf(cv.target);
             } else {
@@ -23611,7 +23941,7 @@
             if (r.recalled === true || r.recalled === 1) {
                 var recalledTip = document.createElement('div');
                 recalledTip.className = 'system-tip';
-                recalledTip.textContent = '该服务号消息已被撤回';
+                recalledTip.textContent = I18N.t('该服务号消息已被撤回');
                 if (beforeEl) {
                     messageList.insertBefore(recalledTip, beforeEl);
                 } else {
@@ -23647,7 +23977,7 @@
             // 降级：渲染成系统提示 + 原始 JSON（异常兜底）
             var offTip = document.createElement('div');
             offTip.className = 'system-tip';
-            offTip.textContent = '[服务号消息] ' + (offEnv && offEnv.official ? (offEnv.official.title || offEnv.official.content || '') : '');
+            offTip.textContent = I18N.t('[服务号消息]') + ' ' + (offEnv && offEnv.official ? (offEnv.official.title || offEnv.official.content || '') : '');
             if (beforeEl) {
                 messageList.insertBefore(offTip, beforeEl);
             } else {
@@ -26065,18 +26395,30 @@
     // localStorage 缓存兜底——首绘先按缓存应用（登录页遮罩下不可见，零闪烁），
     // fetch 返回修正并更新缓存；接口不可达沿用缓存值（首次失败=默认全显示，安全侧：入口可见仅多入口，不可见则功能失联）。
     // 语义归口：显式 false 才隐藏，undefined/缺字段/旧缓存=显示（向后兼容）
+    // 注：isWebBrowser 已在文件顶部定义（用于 WEB 浏览器隐藏游戏中心）
     function applyUiFeatures(f) {
         if (!f || typeof f !== 'object') return;
         // 挂到 window 供子模块（hover-card 等）读取游戏中心/工作台开关
         window.__imUiFeatures = f;
         var gc = document.getElementById('game-center-btn');
-        if (gc) gc.style.display = f.game_center === false ? 'none' : '';
+        if (gc) {
+            // WEB 浏览器端不显示游戏中心（PC 客户端和手机 APP 正常显示）
+            if (isWebBrowser) {
+                gc.style.display = 'none';
+            } else {
+                gc.style.display = f.game_center === false ? 'none' : '';
+            }
+        }
         var wb = document.querySelector('.nav-icon.sidebar-tab[data-tab="workbench"]');
         if (wb) wb.style.display = f.workbench === false ? 'none' : '';
         // 被隐藏面板若正激活（如刷新前停在工作台且开关已关），切回聊天面板防"空白侧栏"
         if (f.workbench === false && wb && wb.classList.contains('active')) {
             var chatTab = document.querySelector('.nav-icon.sidebar-tab[data-tab="chat"]');
             if (chatTab) chatTab.click();
+        }
+        // 功能开关变化后重新计算响应式导航栏布局
+        if (typeof window.__adjustNavRail === 'function') {
+            setTimeout(function () { window.__adjustNavRail(); }, 50);
         }
     }
     (function initUiFeatures() {
@@ -30197,7 +30539,7 @@
         nm.textContent = card.name || card.app_id || '';
         var sub = document.createElement('div');
         sub.className = 'oc-sub';
-        sub.textContent = '服务号';
+        sub.textContent = I18N.t('服务号');
         info.appendChild(nm);
         info.appendChild(sub);
         if (card.desc) {
@@ -30223,7 +30565,7 @@
             } else {
                 // 主动发 Subscribe 114 让服务端 upsert 会话 + 推 113 SubList 回填
                 IMSocket.send({ msg_type: MSG.OFFICIAL_SUB_ACTION, app_id: card.app_id });
-                showToast('已打开服务号，请稍候…');
+                showToast(I18N.t('已打开服务号，请稍候…'));
             }
         });
         body.appendChild(bubble);

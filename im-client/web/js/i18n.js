@@ -19,7 +19,7 @@
     'use strict';
     var LANG_KEY = 'im_lang';                       // 偏好存储键（与 im_theme 同风格）
     var BASE = 'zh';                                // 基准语言（key 即中文原文，零查表）
-    var PACK_VER = '3.36';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：桌面快捷方式菜单文案）
+    var PACK_VER = '3.53';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：审计发现 3 个空值翻译修复 + 占位符补齐）
     var lang = BASE;                                // 当前语言
     var packs = { zh: {}, en: {} };                 // 语言包缓存（zh 包同时充当静态文本反查基准）
 

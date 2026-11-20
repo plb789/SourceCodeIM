@@ -11,6 +11,8 @@
             document.documentElement.setAttribute('data-theme', theme);
         })();
     </script>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.37"></script>
     <link rel="stylesheet" href="css/style.css?v=1.52">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -284,7 +286,7 @@
             }
 
             function showError(msg) {
-                $errMsg.textContent = msg || '加载失败';
+                $errMsg.textContent = msg || I18N.t('加载失败');
                 showView($error);
             }
 
@@ -298,9 +300,9 @@
 
             function renderAccount(data, token) {
                 accountCache = data;
-                var name = data.display_name || '未知服务号';
-                var desc = data.description || '感谢您的关注';
-                var count = (data.subscribe_count || 0) + ' 人已关注';
+                var name = data.display_name || I18N.t('未知服务号');
+                var desc = data.description || I18N.t('感谢您的关注');
+                var count = I18N.t('{n} 人已关注', { n: (data.subscribe_count || 0) });
                 var subscribed = !!data.subscribed;
 
                 if (token) {
@@ -313,14 +315,14 @@
 
                     if (subscribed) {
                         $mBtns.innerHTML =
-                            '<button class="btn btn-success" disabled>✓ 已关注</button>' +
-                            '<button class="btn btn-secondary" onclick="goChat()">进入聊天</button>' +
-                            '<button class="btn btn-secondary" id="btn-unsub">取消关注</button>';
+                            '<button class="btn btn-success" disabled>' + I18N.t('✓ 已关注') + '</button>' +
+                            '<button class="btn btn-secondary" onclick="goChat()">' + I18N.t('进入聊天') + '</button>' +
+                            '<button class="btn btn-secondary" id="btn-unsub">' + I18N.t('取消关注') + '</button>';
                         document.getElementById('btn-unsub').addEventListener('click', doUnsubscribe);
                     } else {
                         $mBtns.innerHTML =
-                            '<button class="btn btn-primary" id="btn-sub">立即关注</button>' +
-                            '<button class="btn btn-secondary" onclick="goHome()">返回</button>';
+                            '<button class="btn btn-primary" id="btn-sub">' + I18N.t('立即关注') + '</button>' +
+                            '<button class="btn btn-secondary" onclick="goHome()">' + I18N.t('返回') + '</button>';
                         document.getElementById('btn-sub').addEventListener('click', doSubscribe);
                     }
                     showView($main);
@@ -335,7 +337,7 @@
             }
 
             function loadAccount() {
-                if (!appId) { showError('缺少 app_id 参数'); return; }
+                if (!appId) { showError(I18N.t('缺少 app_id 参数')); return; }
                 showView($loading);
 
                 var token = getToken();
@@ -347,22 +349,22 @@
                     .then(function (res) {
                         var data = res && res.data ? res.data : res;
                         if (!data || !data.app_id) {
-                            showError(errMsg(res, '服务号不存在'));
+                            showError(errMsg(res, I18N.t('服务号不存在')));
                             return;
                         }
                         renderAccount(data, token);
                     })
                     .catch(function (err) {
-                        showError('网络错误：' + (err.message || err));
+                        showError(I18N.t('网络错误：{msg}', { msg: (err.message || err) }));
                     });
             }
 
             function doSubscribe() {
                 var token = getToken();
-                if (!token) { showToast('请先登录'); return; }
+                if (!token) { showToast(I18N.t('请先登录')); return; }
                 var btn = document.getElementById('btn-sub');
                 btn.disabled = true;
-                btn.innerHTML = '<span class="loader"></span> 关注中…';
+                btn.innerHTML = '<span class="loader"></span> ' + I18N.t('关注中…');
 
                 fetch('/api/official/subscribe/' + encodeURIComponent(appId), {
                     method: 'POST',
@@ -371,25 +373,25 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
                     if (res && res.ok) {
-                        showToast('✓ 关注成功，正在打开聊天…');
+                        showToast(I18N.t('✓ 关注成功，正在打开聊天…'));
                         setTimeout(window.goChat, 600);
                     } else {
-                        showToast(errMsg(res, '关注失败'));
+                        showToast(errMsg(res, I18N.t('关注失败')));
                         btn.disabled = false;
-                        btn.textContent = '立即关注';
+                        btn.textContent = I18N.t('立即关注');
                     }
                 })
                 .catch(function (err) {
-                    showToast('网络错误');
+                    showToast(I18N.t('网络错误'));
                     btn.disabled = false;
-                    btn.textContent = '立即关注';
+                    btn.textContent = I18N.t('立即关注');
                 });
             }
 
             function doUnsubscribe() {
                 var token = getToken();
-                if (!token) { showToast('请先登录'); return; }
-                if (!confirm('确定取消关注此服务号吗？')) return;
+                if (!token) { showToast(I18N.t('请先登录')); return; }
+                if (!confirm(I18N.t('确定取消关注此服务号吗？'))) return;
 
                 fetch('/api/official/unsubscribe/' + encodeURIComponent(appId), {
                     method: 'POST',
@@ -398,13 +400,13 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
                     if (res && res.ok) {
-                        showToast('已取消关注');
+                        showToast(I18N.t('已取消关注'));
                         setTimeout(loadAccount, 800);
                     } else {
-                        showToast(errMsg(res, '取消失败'));
+                        showToast(errMsg(res, I18N.t('取消失败')));
                     }
                 })
-                .catch(function () { showToast('网络错误'); });
+                .catch(function () { showToast(I18N.t('网络错误')); });
             }
 
             // ========= 跳转到首页登录 =========

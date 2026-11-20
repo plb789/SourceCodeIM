@@ -65,8 +65,17 @@
     // ===== 游戏中心开关判断（后台「功能开关」归口 features.go） =====
     // 语义归口：显式 false 才隐藏，undefined/缺字段=显示（向后兼容旧缓存/旧客户端）
     // 数据来源：chat.js applyUiFeatures 挂的 window.__imUiFeatures；兜底 localStorage 缓存
+    // 阶段三百一十：纯 WEB 浏览器端（非 PC Electron、非 Capacitor 原生 APP）也强制隐藏游戏中心入口
     var GC_ENABLED_CACHED = null; // 模块级缓存，首次读一次后热更新靠 chat.js 切换
     function isGameCenterEnabled() {
+        // 阶段三百一十：统一读 chat.js 导出的 window.__imEnv（chat.js 在 L3031 之前加载）
+        // 兜底：如果 chat.js 没加载（极端场景），自己算一遍
+        var _isWebBrowser = (window.__imEnv && window.__imEnv.isWebBrowser !== undefined)
+            ? window.__imEnv.isWebBrowser
+            : !!(window.desktop && !window.__webCallBridge) === false
+              && !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) === false;
+        if (_isWebBrowser) return false; // WEB 浏览器端强制关闭
+
         // 优先 window 上的实时值（chat.js fetch 完 /api/features 会更新）
         var f = window.__imUiFeatures;
         if (!f || typeof f !== 'object') {

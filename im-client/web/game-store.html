@@ -5020,13 +5020,9 @@
     <!-- 3. 展示柜编辑弹窗：最多 10 个槽位，每槽选类型 + 标题 + 启用开关 -->
     <div class="gs-modal-mask hidden" id="gpShowcaseMask">
         <div class="gs-modal" style="width:720px;max-height:85vh;display:flex;flex-direction:column">
-            <div class="gs-modal-title">展示柜编辑</div>
-            <div class="gp-showcase-hint">等级越高可解锁越多槽位；点击下拉选择类型，拖动调整顺序</div>
-            <div class="gp-showcase-safety-note">
-                <b>自定义 HTML 安全规则：</b>
-                支持 <code>div/span/a/img/table/b/i/u/code/pre/blockquote</code> 和 <code>inline style</code>；
-                自动过滤 <code>&lt;script&gt;</code>、<code>onclick/onerror</code> 等事件属性、<code>javascript:</code> 协议、<code>&lt;iframe/object/embed/form/input/button&gt;</code> 等危险标签；单段上限 8KB
-            </div>
+            <div class="gs-modal-title" data-i18n-text="展示柜编辑">展示柜编辑</div>
+            <div class="gp-showcase-hint" data-i18n-text="等级越高可解锁越多槽位；点击下拉选择类型，拖动调整顺序">等级越高可解锁越多槽位；点击下拉选择类型，拖动调整顺序</div>
+            <div class="gp-showcase-safety-note" id="gpShowcaseSafetyNote"></div>
             <div class="gp-showcase-list" id="gpShowcaseList"></div>
             <div class="gp-showcase-add">
                 <button class="gs-btn" id="gpShowcaseAdd">＋ 添加展示柜</button>

@@ -337,6 +337,15 @@
                 <div class="nav-icon sidebar-tab" data-tab="rc" title="远程控制">
                     <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h7v2H8v2h8v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z"/><path fill="currentColor" d="m11.5 7.5 4 6-1.9.1-1.2 2.2-1.4-.6 1.2-2.2-1.9-.6z"/></svg>
                 </div>
+                <!-- 阶段三百一十：更多按钮（响应式自适应——窗口高度不足时显示，点击展开被隐藏的导航项） -->
+                <div class="nav-icon nav-more-btn hidden" id="nav-more-btn" title="更多">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+                </div>
+            </div>
+            <!-- 阶段三百一十：更多弹出面板（窗口高度不足时显示被隐藏的导航项，自绘浮层） -->
+            <div class="nav-more-panel hidden" id="nav-more-panel">
+                <div class="nav-more-arrow"></div>
+                <div class="nav-more-list" id="nav-more-list"></div>
             </div>
             <div class="nav-bottom">
                 <button id="add-friend-btn" class="nav-btn" title="添加好友">

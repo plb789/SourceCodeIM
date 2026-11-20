@@ -1114,6 +1114,7 @@ div.login-accounts-avatar-ph {
     flex-direction: column;
     align-items: center;
     padding: 18px 0 14px;
+    overflow: hidden; /* 防止按钮跑出 rail 下边界——即使算高了 1px 也不会溢出 */
 }
 
 .nav-top {
@@ -1143,6 +1144,7 @@ div.login-accounts-avatar-ph {
     flex-direction: column;
     gap: 10px;
     margin-top: 26px;
+    overflow: hidden; /* 让 scrollHeight 准确反映内容高度，不被 flex 压扁 */
 }
 
 .nav-icon {
@@ -1150,6 +1152,7 @@ div.login-accounts-avatar-ph {
     width: 38px;
     height: 38px;
     display: flex;
+    flex-shrink: 0; /* 关键！防止 flex 把图标压扁——保持真实 38px 高度 */
     align-items: center;
     justify-content: center;
     border-radius: 8px;
@@ -1197,9 +1200,136 @@ div.login-accounts-avatar-ph {
 
 .nav-bottom {
     margin-top: auto;
+    flex-shrink: 0; /* 防止被挤压 */
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+/* 阶段三百一十：更多按钮（响应式自适应——窗口高度不足时显示） */
+.nav-more-btn {
+    border: 2px dashed var(--rail-icon, rgba(255,255,255,0.5));
+    border-radius: 8px;
+    background: transparent;
+    color: var(--rail-icon);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.nav-more-btn:hover {
+    border-color: var(--primary, #576b95);
+    color: var(--primary, #576b95);
+    background: var(--hover, rgba(0,0,0,0.05));
+}
+html[data-theme="dark"] .nav-more-btn:hover {
+    background: rgba(255,255,255,0.08);
+}
+.nav-more-btn::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 16px;
+    background: transparent;
+    z-index: -1;
+}
+/* 阶段三百一十：响应式临时隐藏（与 feature 开关的 style.display 永久隐藏区分开） */
+.nav-icons .nav-icon.nav-rail-hidden {
+    display: none !important;
+}
+
+/* 阶段三百一十：更多弹出面板 */
+.nav-more-panel {
+    position: fixed;
+    left: 72px;
+    background: #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.1);
+    padding: 8px;
+    min-width: 140px;
+    max-width: 180px;
+    z-index: 1000;
+    animation: navMoreIn 0.15s ease-out;
+    border: 1px solid rgba(0,0,0,0.08);
+}
+@keyframes navMoreIn {
+    from { opacity: 0; transform: translateX(-4px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+html[data-theme="dark"] .nav-more-panel {
+    background: #2b2b2b;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+    border-color: rgba(255,255,255,0.1);
+}
+html:not([data-theme]) .nav-more-panel {
+    background: #ffffff;
+}
+.nav-more-arrow {
+    position: absolute;
+    left: -6px;
+    width: 10px;
+    height: 10px;
+    background: #ffffff;
+    transform: rotate(45deg);
+    border-left: 1px solid rgba(0,0,0,0.08);
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+html[data-theme="dark"] .nav-more-arrow {
+    background: #2b2b2b;
+    border-left-color: rgba(255,255,255,0.1);
+    border-bottom-color: rgba(255,255,255,0.1);
+}
+.nav-more-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.nav-more-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #333333;
+    transition: background 0.12s;
+    font-size: 13px;
+}
+html[data-theme="dark"] .nav-more-item {
+    color: #e8e8e8;
+}
+.nav-more-item:hover {
+    background: rgba(0,0,0,0.06);
+}
+html[data-theme="dark"] .nav-more-item:hover {
+    background: rgba(255,255,255,0.1);
+}
+.nav-more-item .nav-more-icon {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #576b95;
+    flex-shrink: 0;
+}
+html[data-theme="dark"] .nav-more-item .nav-more-icon {
+    color: #8fa8c9;
+}
+.nav-more-item.active {
+    color: #576b95;
+}
+html[data-theme="dark"] .nav-more-item.active {
+    color: #576b95;
+}
+.nav-more-item.active .nav-more-icon {
+    color: var(--primary);
+}
+.nav-more-item .nav-more-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .nav-btn {
@@ -8502,7 +8632,9 @@ html.m .nav-icon[data-tab="drive"],
 html.m .nav-icon[data-tab="rc"],
 html.m #game-center-btn,
 html.m #rc-panel,
-html.m .nav-bottom {
+html.m .nav-bottom,
+html.m .nav-more-btn,
+html.m .nav-more-panel {
     display: none;
 }
 

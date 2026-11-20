@@ -33,7 +33,19 @@
     // 数据源：localStorage 缓存（chat.js initUiFeatures 写入）；FETCH /api/features 兜底。
     // 关闭时：主界面所有入口都已隐藏（applyUiFeatures），此处兜底拦截绕过主界面直接打开 game-store.html 的场景。
     // 实现：设置 window.__GS_BLOCKED 标记 + 清空 body + 显示禁用遮罩；后续 initXXX() IIFE 靠 $() 返回 null 自然短路。
+    // 阶段三百一十：纯 WEB 浏览器端（非 PC Electron、非 Capacitor 原生 APP）也强制拦截
     (function checkGameCenterGate() {
+        // 阶段三百一十：纯 WEB 浏览器环境判定
+        var _isPCDesktop = !!(window.desktop && !window.__webCallBridge);
+        var _isCapacitorNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        var _isWebBrowser = !_isPCDesktop && !_isCapacitorNative;
+
+        if (_isWebBrowser) {
+            window.__GS_BLOCKED = true;
+            showDisabledOverlay();
+            return;
+        }
+
         var f = null;
         try { f = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { f = null; }
         var blocked = f && f.game_center === false;
@@ -58,8 +70,8 @@
         ov.style.cssText = 'position:fixed;inset:0;background:var(--bg,#1a1a1a);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text,#ccc);font-family:system-ui,-apple-system,sans-serif;z-index:9999;';
         ov.innerHTML =
             '<div style="width:64px;height:64px;border-radius:50%;background:#444;display:flex;align-items:center;justify-content:center;font-size:32px;">🎮</div>' +
-            '<div style="font-size:18px;font-weight:600;">游戏中心已被管理员禁用</div>' +
-            '<div style="font-size:13px;opacity:0.6;text-align:center;max-width:320px;">如需使用请联系管理员在后台重新开启</div>';
+            '<div style="font-size:18px;font-weight:600;">' + T('游戏中心已被管理员禁用') + '</div>' +
+            '<div style="font-size:13px;opacity:0.6;text-align:center;max-width:320px;">' + T('如需使用请联系管理员在后台重新开启') + '</div>';
         document.body.appendChild(ov);
     }
 
@@ -967,7 +979,7 @@
         if (pct > 100) pct = 100;
         $('gpProgFill').style.width = pct + '%';
         $('gpLvlExp').textContent = exp + ' / ' + nextReq + ' EXP';
-        $('gpLvlNext').textContent = '再获得 ' + Math.max(0, nextReq - exp) + ' EXP 升到 Lv.' + (lvl + 1);
+        $('gpLvlNext').textContent = T('再获得 {n} EXP 升到 Lv.{lv}', { n: Math.max(0, nextReq - exp), lv: lvl + 1 });
 
         // 9. 最爱游戏
         var favCard = $('gpCardFav');
@@ -1754,6 +1766,16 @@
     }
     function renderShowcaseEditor() {
         try {
+        // 安全规则提示（富文本，动态填充以支持国际化）
+        var $safetyNote = $('gpShowcaseSafetyNote');
+        if ($safetyNote) {
+            $safetyNote.innerHTML =
+                '<b>' + T('自定义 HTML 安全规则：') + '</b>' +
+                T('支持') + ' <code>div/span/a/img/table/b/i/u/code/pre/blockquote</code> ' +
+                T('和 inline style') + '; ' +
+                T('自动过滤 script/onclick/onerror 等事件属性、javascript: 协议、iframe/object/embed/form/input/button 等危险标签；单段上限 8KB');
+        }
+
         var maxSlots = showcaseMaxSlots; // 模块级，openShowcaseEditor 打开时已设置
         var list = $('gpShowcaseList');
         if (!list) { console.error('[renderShowcaseEditor] #gpShowcaseList DOM not found'); return; }
