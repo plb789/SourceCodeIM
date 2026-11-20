@@ -1114,7 +1114,7 @@ div.login-accounts-avatar-ph {
     flex-direction: column;
     align-items: center;
     padding: 18px 0 14px;
-    overflow: hidden; /* 防止按钮跑出 rail 下边界——即使算高了 1px 也不会溢出 */
+    overflow: visible; /* 允许角标等视觉元素溢出 rail 边界显示 */
 }
 
 .nav-top {
@@ -1144,7 +1144,7 @@ div.login-accounts-avatar-ph {
     flex-direction: column;
     gap: 10px;
     margin-top: 26px;
-    overflow: hidden; /* 让 scrollHeight 准确反映内容高度，不被 flex 压扁 */
+    overflow: visible; /* 允许角标溢出显示，scrollHeight 通过 flex-shrink:0 保证 */
 }
 
 .nav-icon {
