@@ -1498,6 +1498,8 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 	// ② 事务 toggle + 给作者发经验值（新增点赞时 +2 exp，取消不扣）
 	var liked bool
 	var expGain int
+	var authorLevelUp bool
+	var authorNewLevel int
 	err := store.DB.Transaction(func(tx *gorm.DB) error {
 		// FOR UPDATE 锁截图行
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&shot, req.ScreenshotID).Error; err != nil {
@@ -1524,6 +1526,8 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 			newExp := author.Exp + int64(expGain)
 			newLevel := calcLevelFromExp(int(newExp))
 			levelUp := newLevel > author.Level
+			authorLevelUp = levelUp
+			authorNewLevel = newLevel
 			updates := map[string]interface{}{"exp": newExp}
 			if levelUp { updates["level"] = newLevel }
 			tx.Model(&author).Updates(updates)
@@ -1554,6 +1558,32 @@ func (s *Server) HandleProfileScreenshotLike(w http.ResponseWriter, r *http.Requ
 
 	// 重新查最新计数
 	store.DB.First(&shot, req.ScreenshotID)
+
+	// ③ 新增点赞时，WS 推送经验变动帧给作者（全部在线端弹 toast + 桌面通知）
+	// code 使用 screenshot_id + 点赞人 生成唯一键，前端 6秒去重窗口吞掉重复
+	if expGain > 0 && shot.Username != "" {
+		expCode := fmt.Sprintf("screenshot_like_%d_%s", req.ScreenshotID, username)
+		expDesc := username + " 点赞了你的截图"
+		if shot.Title != "" {
+			expDesc = username + " 点赞了你的「" + shot.Title + "」"
+		}
+		expPayload, _ := json.Marshal(map[string]interface{}{
+			"reason":     "screenshot_like",
+			"code":       expCode,
+			"name":       "截图获得点赞",
+			"desc":       expDesc,
+			"exp_reward": expGain,
+			"level_up":   authorLevelUp,
+			"new_level":  authorNewLevel,
+		})
+		wsData, _ := json.Marshal(&protocol.Message{
+			MsgType:   protocol.MsgTypeExpGainPush,
+			ToUser:    shot.Username,
+			Content:   string(expPayload),
+			Timestamp: time.Now().Unix(),
+		})
+		s.sendToUser(shot.Username, wsData)
+	}
 
 	profileOK(w, map[string]interface{}{
 		"liked":      liked,
