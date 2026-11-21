@@ -839,7 +839,7 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 			GameID   uint
 			HasOwned int
 		}
-		store.DB.Raw("SELECT game_id, COUNT(*) AS has_owned FROM game_libraries WHERE username = ? AND pay_refunded = 0 GROUP BY game_id", viewer).Scan(&ownedRows)
+		store.DB.Raw("SELECT game_id, COUNT(*) AS has_owned FROM im_game_library WHERE username = ? AND pay_refunded = 0 GROUP BY game_id", viewer).Scan(&ownedRows)
 		for _, r := range ownedRows {
 			if r.HasOwned > 0 {
 				ownedPermOf[r.GameID] = true
@@ -988,14 +988,13 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 				"play_seconds":      lib.PlaySeconds,
 			}
 		}
-		// owned_permanently：该用户对这款游戏已拥有永久所有权（曾付费/免费入库，且从未成功退款），
-		// 即便当前移出库（removed_at!=NULL）也不影响所有权——客户端据此渲染"已永久拥有 / 免费重新入库"提示，
-		// 而不是重复显示扣费购买块。条件：历史 GameLibrary 行存在且 pay_refunded=false。
-		if hasToken {
-			var perm int64
-			store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND pay_refunded = ?", viewer, g.ID, false).Count(&perm)
-			item["owned_permanently"] = perm > 0
-		}
+	}
+	// owned_permanently：只要有 token 就查（独立于 hasLib），移出库也不丢失所有权标记
+	// 条件：历史 GameLibrary 行存在且 pay_refunded=false（退款失败/超期/次数用完移出 → 所有权保留）
+	if hasToken {
+		var perm int64
+		store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND pay_refunded = ?", viewer, g.ID, false).Count(&perm)
+		item["owned_permanently"] = perm > 0
 	}
 	adminJSON(w, item)
 }
