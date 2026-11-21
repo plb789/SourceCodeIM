@@ -1455,6 +1455,8 @@ type GameLibrary struct {
 	PayPrice float64 `gorm:"column:pay_price;type:double;default:0" json:"pay_price"`
 	// PayRefunded 是否已退款（true=已退积分，失去所有权，再次加入需重新付费）
 	PayRefunded bool `gorm:"column:pay_refunded;type:tinyint(1);default:false" json:"pay_refunded"`
+	// RefundCount 累计退款次数（防反复买退薅退款窗口；每次退款成功 +1，重新付费清零）
+	RefundCount int `gorm:"column:refund_count;default:0" json:"refund_count"`
 	// PlaySeconds 累计游玩秒数（客户端 start/end 上报归口累加）
 	PlaySeconds int64 `gorm:"column:play_seconds;default:0" json:"play_seconds"`
 	// PlayCount 累计游玩会话次数（成就引擎次数型判定数据源；每次新会话 start 时 +1，

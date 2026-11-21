@@ -307,6 +307,10 @@ type GameConfig struct {
 	// 移除游戏库时，若入库时间（im_game_library.create_time）距今已超过 RefundDays 天，则不退还积分；
 	// 0 或负数=不限制时间（默认行为，全退）。默认值见 Default()
 	RefundDays int `yaml:"refund_days"`
+	// RefundMaxPerGame 同一用户同一游戏最多退款次数：
+	// 防止反复买退薅退款窗口。GameLibrary.refund_count 超过此值后，再移出库只软删除不退积分。
+	// 0 或负数=不限制次数（风险高）。默认值见 Default()
+	RefundMaxPerGame int `yaml:"refund_max_per_game"`
 
 	// ===== 商家销售分成与提现（2026-11-18 新增） =====
 	// MerchantRevenueEnabled 商家游戏销售分成开关（全局）：
@@ -928,6 +932,8 @@ func Default() *Config {
 			Save: GameSaveConfig{Enabled: true},
 			// Steam 同款退款期限：默认入库 7 天内移除可退积分，超期不退（0=全退无限制）
 			RefundDays: 7,
+			// 退款次数上限：同一用户同一游戏最多退 2 次，防止反复买退薅退款窗口（0=不限制）
+			RefundMaxPerGame: 2,
 			// 商家游戏销售分成：默认开启；免费游戏/官方游戏不分账
 			MerchantRevenueEnabled:            true,
 			MinWithdrawPoints:                 1000,

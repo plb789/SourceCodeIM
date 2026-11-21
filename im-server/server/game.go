@@ -1279,8 +1279,9 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 				}
 				if isRefunded {
 					// 已退款用户重新付费：清退款标记 + 更新实付快照
+					// 注意：CreateTime 不重置（退款窗口锁定首次购买日）；RefundCount 不清零（累计退款次数硬上限）
 					updates["pay_refunded"] = false
-					updates["pay_price"] = payNow
+					updates["pay_price"]    = payNow
 					logger.Info("已退款用户重新购买：用户 %s 游戏#%d 付 %.3f 积分，复用老库行(id=%d)", username, g.ID, payNow, existing.ID)
 				} else {
 					logger.Info("免费重新激活(事务内竞态兜底)：用户 %s 游戏#%d 复用老库行(id=%d)", username, g.ID, existing.ID)
@@ -1619,6 +1620,10 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 			deadline := lib.CreateTime.AddDate(0, 0, refundDays)
 			canRefund = time.Now().Before(deadline)
 		}
+		// 退款次数上限（防反复买退薅退款窗口）
+		if canRefund && s.cfg.Game.RefundMaxPerGame > 0 && lib.RefundCount >= s.cfg.Game.RefundMaxPerGame {
+			canRefund = false
+		}
 
 		now := time.Now()
 		if pay > 0 && canRefund {
@@ -1707,7 +1712,8 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 			"state":      0,
 		}
 		if refunded {
-			updates["pay_refunded"] = true // 退款成功 → 失去所有权
+			updates["pay_refunded"] = true                        // 退款成功 → 失去所有权
+			updates["refund_count"]  = gorm.Expr("refund_count + 1") // 累计退款次数 +1
 		}
 		if err := tx.Model(&lib).Updates(updates).Error; err != nil {
 			return fmt.Errorf("移出失败: %w", err)

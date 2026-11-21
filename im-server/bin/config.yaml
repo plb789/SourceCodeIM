@@ -713,6 +713,8 @@ game:
   achievement_sign_required: false
   # Steam 同款退款期限：入库超过 N 天移除不退还积分；0 或负数=不限制（全退）。默认 7
   refund_days: 7
+  # 同一用户同一游戏累计退款次数上限（防反复买退薅退款窗口）；0 或负数=不限制（风险高）。默认 2
+  refund_max_per_game: 2
   # 商家游戏销售分成开关（付费游戏入库按 commission_rate 给商家加分账收益）
   merchant_revenue_enabled: true
   # 商家提现最小积分额
