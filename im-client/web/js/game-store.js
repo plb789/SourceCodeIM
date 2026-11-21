@@ -8896,7 +8896,7 @@
                 if (state.detailId === gid) { updateInstallBox(); refreshReviewBtn(); }
             });
         };
-        if (price <= 0) { doJoin(); return; }
+        if (price <= 0 || g.owned_permanently) { doJoin(); return; } // 免费游戏 或 永久拥有者：直接入库，跳扣费确认
         var balTxt = state.balance === null ? '' : T('，当前余额 ') + fmtPoints(state.balance) + T(' 积分');
         if (state.balance !== null && state.balance < price) {
             showConfirm(T('积分不足'), T('获取「') + name + T('」需要 ') + fmtPoints(price) + T(' 积分，当前余额 ') + fmtPoints(state.balance) + T('，请联系管理员发放。'), T('知道了'), null);
