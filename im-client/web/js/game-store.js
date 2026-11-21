@@ -7807,7 +7807,7 @@
 
     // 参数模板 → 参数数组：替换 {0}=登录账号、{1}=账号专属密码（spawn 直传数组，无需再转义引号）
     // buildLaunchArgs：参数模板 → 占位符替换 → 分词数组
-    // {0}=平台登录账号 {1}=平台账号派生密码 {2}=自定义账号（opts.customUsername）{3}=自定义密码（opts.customPassword）
+    // {0}=平台登录账号 {1}=平台账号派生密码 {2}=自定义账号 {3}=自定义密码 {name}=用户昵称（空则回退平台账号）
     function buildLaunchArgs(tpl, gid, opts) {
         var meta = gameLaunchMeta(gid);
         // 商户隐藏模式：强制用商户模板，忽略用户覆盖（用户在属性弹窗保存的 args 会被忽略）
@@ -7817,6 +7817,7 @@
         if (!tpl) return [];
         var u0 = String(username || '');          // {0} 平台账号
         var p1 = String(meta.password || '');     // {1} 平台派生密码
+        var nName = String(myNickname || '').trim() || u0; // {name} 昵称空则兜底平台账号
         // {2}/{3} 智能回退：有自定义账号密码就用，没有就回退到 {0}/{1}（平台账号密码）
         // 这样模板只写 {2}/{3} 时默认启动也能带平台账号密码，只写 {0}/{1} 时保持原行为不变
         var u2Raw = String((opts && opts.customUsername) || '');
@@ -7826,7 +7827,7 @@
         var parts = splitLaunchArgs(tpl);
         var out = [];
         for (var i = 0; i < parts.length; i++) {
-            out.push(parts[i].replace(/\{0\}/g, u0).replace(/\{1\}/g, p1).replace(/\{2\}/g, u2).replace(/\{3\}/g, p3));
+            out.push(parts[i].replace(/\{0\}/g, u0).replace(/\{1\}/g, p1).replace(/\{2\}/g, u2).replace(/\{3\}/g, p3).replace(/\{name\}/g, nName));
         }
         return out;
     }
@@ -7836,8 +7837,9 @@
     function buildLocalArgs(lo) {
         var tpl = String((lo && lo.args) || '').trim();
         if (!tpl) return [];
+        var nName = String(myNickname || '').trim() || String(username || '');
         return splitLaunchArgs(tpl).map(function (p) {
-            return p.replace(/\{0\}/g, String(username || '')).replace(/\{1\}/g, '');
+            return p.replace(/\{0\}/g, String(username || '')).replace(/\{1\}/g, '').replace(/\{name\}/g, nName);
         });
     }
 

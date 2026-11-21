@@ -593,7 +593,16 @@
                         <input type="file" id="m-f-cover-file" accept=".png,.jpg,.jpeg,.gif,.webp" class="hidden">
                         <button id="m-f-cover-pick" class="admin-btn small">上传封面</button>
                         <img id="m-f-cover-prev" class="m-cover-prev hidden" alt="">
-                        <input id="m-f-cover" class="admin-input" readonly placeholder="上传后自动填充">
+                        <button id="m-f-cover-clear" class="admin-btn small hidden" type="button">清除封面</button>
+                        <input id="m-f-cover" class="hidden">
+                    </div>
+                </div>
+                <div class="m-row"><label>库横幅（游戏库选中游戏的顶部大图，可空=用封面）</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="file" id="m-f-banner-file" accept=".png,.jpg,.jpeg,.gif,.webp" class="hidden">
+                        <button id="m-f-banner-pick" class="admin-btn small">上传库横幅</button>
+                        <img id="m-f-banner-prev" class="m-cover-prev hidden" alt="">
+                        <button id="m-f-banner-clear" class="admin-btn small hidden" type="button">清除横幅</button>
                     </div>
                 </div>
                 <div class="m-row"><label>截图（最多 12 张，多选上传）</label>
@@ -604,9 +613,17 @@
                     </div>
                     <input id="m-f-ss" class="hidden">
                 </div>
+                <div class="m-row"><label>宣传视频（mp4/webm/mkv，单个 ≤200MB，最多 8 个）</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="file" id="m-f-vids-file" accept=".mp4,.webm,.mkv,video/mp4,video/webm" class="hidden">
+                        <button id="m-f-vids-pick" class="admin-btn small">添加视频</button>
+                        <span id="m-f-vids-hint" class="m-head-tip">mp4/webm/mkv，单个 ≤200MB，最多 8 个</span>
+                    </div>
+                </div>
+                <div id="m-f-vids-list" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;"></div>
                 <div class="m-row"><label>启动程序（安装目录内相对路径，如 bin/game.exe）</label><input id="m-f-exe" class="admin-input" maxlength="255"></div>
                 <div class="m-row"><label>启动显示名 / 启动参数</label>
-                    <div style="display:flex;gap:8px;"><input id="m-f-exename" class="admin-input" maxlength="128"><input id="m-f-exeargs" class="admin-input" maxlength="1024" placeholder="{0}=账号 {1}=专属密码"></div>
+                    <div style="display:flex;gap:8px;"><input id="m-f-exename" class="admin-input" maxlength="128"><input id="m-f-exeargs" class="admin-input" maxlength="1024" placeholder="{0}=账号 {1}=专属密码 {2}=自定义账号 {3}=自定义密码 {name}=用户昵称"></div>
                 </div>
                 <div class="m-row"><label>开放积分赞助</label><input type="checkbox" id="m-f-rgw"></div>
                 <div class="m-row"><label>汇率（1 积分=N 游戏币）/ 单日限额（0=不限）</label>

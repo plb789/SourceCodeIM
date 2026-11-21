@@ -352,10 +352,18 @@
     // ==================== 新增/编辑游戏 ====================
     var editingGame = null; // null=新增
     var ssList = []; // 截图 URL 列表
+    var bannerUrl = ''; // 库横幅 URL（空=回退封面）
+    var vidsList = []; // 宣传视频 URL 列表
+    var vidUploading = false; // 视频上传进行中（防并发/保存拦截）
+    var VID_EXTS = ['mp4', 'webm', 'mkv']; // 与服务端白名单一致
+    var MAX_VIDEOS = 8;                    // 最多 8 个
+    var MAX_VID_SIZE = 200 * 1024 * 1024;  // 单文件 ≤200MB
     $('m-game-add').addEventListener('click', function () { openGameEditor(null); });
     function openGameEditor(g) {
         editingGame = g || null;
         ssList = [];
+        bannerUrl = '';
+        vidsList = [];
         $('m-game-title').textContent = g ? '编辑游戏 — ' + g.name : '新增游戏';
         $('m-f-name').value = g ? g.name : '';
         $('m-f-slug').value = g ? g.slug : '';
@@ -386,7 +394,10 @@
         }
         $('m-f-cover').value = g ? (g.cover || '') : '';
         refreshCoverPrev();
+        // banner/videos 已在 fillEditorFromCache 从 games 列表缓存 full 对象回填；refreshBannerPrev/refreshVidsList 刷新 UI
+        refreshBannerPrev();
         refreshSsTip();
+        refreshVidsList();
         $('m-game-tip').textContent = g && g.audit_status === 2
             ? '保存后将回到待审核，审核通过前玩家继续看到现有内容'
             : '提交后进入待审核，管理员审核通过后玩家可见';
@@ -409,12 +420,53 @@
         setFormDM(Number(full.download_method) === 3 ? '3' : '0', full.direct_base_url || '');
         try { ssList = JSON.parse(full.screenshots || '[]') || []; } catch (eSs) { ssList = []; }
         refreshSsTip();
+        bannerUrl = full.banner || '';
+        refreshBannerPrev();
+        try { vidsList = JSON.parse(full.videos || '[]') || []; } catch (eV) { vidsList = []; }
+        refreshVidsList();
     }
     function refreshCoverPrev() {
         var v = $('m-f-cover').value.trim();
         var img = $('m-f-cover-prev');
         if (v) { img.src = v; img.classList.remove('hidden'); }
         else img.classList.add('hidden');
+        // 封面清除按钮显隐（HTML 新增）
+        var clr = $('m-f-cover-clear');
+        if (clr) clr.classList.toggle('hidden', !v);
+    }
+    function refreshBannerPrev() {
+        var img = $('m-f-banner-prev');
+        var clr = $('m-f-banner-clear');
+        if (bannerUrl) { img.src = bannerUrl; img.classList.remove('hidden'); if (clr) clr.classList.remove('hidden'); }
+        else { img.classList.add('hidden'); if (clr) clr.classList.add('hidden'); }
+    }
+    function refreshVidsList() {
+        var box = $('m-f-vids-list');
+        if (!box) return;
+        box.innerHTML = '';
+        vidsList.forEach(function (url, idx) {
+            var row = document.createElement('div');
+            row.style.cssText = 'position:relative;width:120px;height:80px;border-radius:6px;overflow:hidden;background:rgba(0,0,0,0.3);';
+            var v = document.createElement('video');
+            v.src = url; v.muted = true; v.preload = 'metadata';
+            v.style.cssText = 'width:100%;height:100%;object-fit:cover;pointer-events:none;';
+            row.appendChild(v);
+            var name = document.createElement('div');
+            name.style.cssText = 'position:absolute;bottom:0;left:0;right:0;padding:2px 4px;font-size:11px;color:#fff;background:rgba(0,0,0,0.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            name.textContent = url.split('/').pop() || url;
+            row.appendChild(name);
+            var del = document.createElement('button');
+            del.textContent = '×';
+            del.type = 'button';
+            del.title = '移除视频';
+            del.style.cssText = 'position:absolute;top:2px;right:2px;width:20px;height:20px;border:none;border-radius:50%;background:rgba(200,50,50,0.8);color:#fff;cursor:pointer;font-size:14px;line-height:20px;padding:0;';
+            del.addEventListener('click', function () {
+                vidsList.splice(idx, 1);
+                refreshVidsList();
+            });
+            row.appendChild(del);
+            box.appendChild(row);
+        });
     }
 
     // 下载方式表单联动（商户直连·安全加固）：radio 显隐地址行
@@ -484,8 +536,109 @@
         $('m-f-ss-tip').textContent = ssList.length ? '已上传 ' + ssList.length + ' 张' : '未上传';
     }
 
+    // ===== 封面清除 =====
+    var coverClr = $('m-f-cover-clear');
+    if (coverClr) coverClr.addEventListener('click', function () {
+        $('m-f-cover').value = '';
+        refreshCoverPrev();
+    });
+
+    // ===== 库横幅上传（复用图片通道 /api/merchant/upload/image） =====
+    $('m-f-banner-pick').addEventListener('click', function () { $('m-f-banner-file').click(); });
+    $('m-f-banner-file').addEventListener('change', function () {
+        var f = this.files[0];
+        this.value = '';
+        if (!f) return;
+        toast('库横幅上传中…');
+        uploadImage(f).then(function (url) {
+            bannerUrl = url;
+            refreshBannerPrev();
+            toast('库横幅已上传');
+        }).catch(function (e) { toast(e.message || '横幅上传失败'); });
+    });
+    $('m-f-banner-clear').addEventListener('click', function () {
+        bannerUrl = '';
+        refreshBannerPrev();
+    });
+
+    // ===== 宣传视频分片上传（与管理端同通道，复用 /api/merchant/upload/video + finish） =====
+    function uploadVideoChunk(file, cb) {
+        var ext = (file.name.split('.').pop() || '').toLowerCase();
+        if (VID_EXTS.indexOf(ext) === -1) { cb({ ok: false, msg: '仅支持 mp4/webm/mkv 视频' }); return; }
+        if (file.size > MAX_VID_SIZE) { cb({ ok: false, msg: '视频超出 200MB 上限' }); return; }
+        var uploadId = 'gv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+        var total = Math.ceil(file.size / CHUNK);
+        var seq = 0;
+        var hint = $('m-f-vids-hint');
+        function sendChunk() {
+            if (seq >= total) { finish(); return; }
+            var start = seq * CHUNK;
+            file.slice(start, Math.min(start + CHUNK, file.size)).arrayBuffer().then(function (chunk) {
+                fetch('/api/merchant/upload/video?upload_id=' + encodeURIComponent(uploadId) +
+                    '&seq=' + seq + '&total=' + total + '&size=' + file.size + '&name=' + encodeURIComponent(file.name), {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/octet-stream' },
+                    body: chunk
+                }).then(function (resp) {
+                    return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+                }).then(function (r) {
+                    if (!r.ok) { cleanup(r.msg || '上传失败'); return; }
+                    seq++;
+                    if (hint) hint.textContent = '上传中 ' + Math.round((seq / total) * 100) + '%';
+                    sendChunk();
+                });
+            }).catch(function () { cleanup('网络异常'); });
+        }
+        function finish() {
+            fetch('/api/merchant/upload/video/finish?upload_id=' + encodeURIComponent(uploadId), {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + getToken() }
+            }).then(function (resp) {
+                return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+            }).then(function (r) {
+                if (r.ok && r.data && r.data.url) { cb({ ok: true, url: r.data.url }); return; }
+                cleanup(r.msg || '合并失败');
+            }).catch(function () { cleanup('网络异常'); });
+        }
+        function cleanup(msg) {
+            fetch('/api/merchant/upload/cancel', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ upload_id: uploadId })
+            }).catch(function () { /* 忽略 */ });
+            cb({ ok: false, msg: msg });
+        }
+        sendChunk();
+    }
+    $('m-f-vids-pick').addEventListener('click', function () {
+        if (vidUploading) { toast('视频上传中，请稍候'); return; }
+        $('m-f-vids-file').click();
+    });
+    $('m-f-vids-file').addEventListener('change', function () {
+        var file = (this.files || [])[0];
+        this.value = '';
+        if (!file) return;
+        if (vidsList.length >= MAX_VIDEOS) { toast('最多 ' + MAX_VIDEOS + ' 个宣传视频'); return; }
+        vidUploading = true;
+        var btn = $('m-f-vids-pick');
+        btn.disabled = true;
+        btn.textContent = '上传中…';
+        uploadVideoChunk(file, function (result) {
+            vidUploading = false;
+            btn.disabled = false;
+            btn.textContent = '添加视频';
+            var hint = $('m-f-vids-hint');
+            if (hint) hint.textContent = 'mp4/webm/mkv，单个 ≤200MB，最多 8 个';
+            if (!result.ok) { toast(result.msg || '视频上传失败'); return; }
+            vidsList.push(result.url);
+            refreshVidsList();
+            toast('视频已上传');
+        });
+    });
+
     $('m-game-cancel').addEventListener('click', function () { $('m-game-mask').classList.add('hidden'); });
     $('m-game-ok').addEventListener('click', function () {
+        if (vidUploading) { toast('视频上传中，请稍候'); return; }
         var payload = {
             name: $('m-f-name').value.trim(),
             slug: $('m-f-slug').value.trim(),
@@ -496,7 +649,9 @@
             publisher: $('m-f-pub').value.trim(),
             price: Number($('m-f-price').value) || 0,
             cover: $('m-f-cover').value.trim(),
+            banner: bannerUrl,
             screenshots: JSON.stringify(ssList),
+            videos: JSON.stringify(vidsList),
             launch_exe: $('m-f-exe').value.trim(),
             launch_name: $('m-f-exename').value.trim(),
             launch_args: $('m-f-exeargs').value,

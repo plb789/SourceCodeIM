@@ -60,6 +60,8 @@ func registerMerchantRoutes(s *Server) {
 	http.HandleFunc("POST /api/merchant/upload/chunk", s.merchantGuard(s.handleAdminGameChunk))
 	http.HandleFunc("POST /api/merchant/upload/cancel", s.merchantGuard(s.handleAdminGameChunkCancel))
 	http.HandleFunc("POST /api/merchant/upload/image", s.merchantGuard(s.handleAdminGameImage))
+	http.HandleFunc("POST /api/merchant/upload/video", s.merchantGuard(s.handleAdminGameVideoChunk))
+	http.HandleFunc("POST /api/merchant/upload/video/finish", s.merchantGuard(s.handleAdminGameVideoFinish))
 	// 赞助统计与网关包（merchantrecharge.go / merchantgateway.go）
 	http.HandleFunc("GET /api/merchant/recharge/summary", s.merchantGuard(s.handleMerchantRechargeSummary))
 	http.HandleFunc("GET /api/merchant/recharge/orders", s.merchantGuard(s.handleMerchantRechargeOrders))

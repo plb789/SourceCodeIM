@@ -78,6 +78,7 @@ type merchantGameReq struct {
 	Cover       string  `json:"cover"`
 	Banner      string  `json:"banner"`
 	Screenshots string  `json:"screenshots"`
+	Videos      string  `json:"videos"`
 	Tags        string  `json:"tags"`
 	Developer   string  `json:"developer"`
 	Publisher   string  `json:"publisher"`
@@ -144,6 +145,12 @@ func (s *Server) merchantGameBaseClean(g *model.Game, req *merchantGameReq) erro
 		return err
 	}
 	g.Screenshots = ss
+	// 宣传视频（复用管理端 gameVideosClean：JSON 数组，每项 /static/upload/games/videos/ 前缀，≤8 个）
+	vids, err := gameVideosClean(req.Videos)
+	if err != nil {
+		return err
+	}
+	g.Videos = vids
 	// 启动程序（商户自己的游戏，启动配置由商户提供；清洗归口复用管理端 helper）
 	if rawExe := strings.TrimSpace(req.LaunchExe); rawExe != "" {
 		g.LaunchExe = gameRelPathClean(rawExe)
@@ -237,7 +244,8 @@ func (s *Server) handleMerchantGameList(w http.ResponseWriter, r *http.Request) 
 		// owner/audit 审计字段与 GameSecret 等服务端私有项绝不下发）
 		list = append(list, map[string]interface{}{
 			"id": g.ID, "slug": g.Slug, "name": g.Name, "short_desc": g.ShortDesc, "cover": g.Cover,
-			"description": g.Description, "screenshots": g.Screenshots, "tags": g.Tags,
+			"banner": g.Banner, "screenshots": g.Screenshots, "videos": g.Videos,
+			"description": g.Description, "tags": g.Tags,
 			"developer": g.Developer, "publisher": g.Publisher, "price": g.Price,
 			"launch_exe": g.LaunchExe, "launch_name": g.LaunchName, "launch_args": g.LaunchArgs,
 			// 下载方式与直连地址（商户直连·编辑回填数据源；base_url 可下发——本就属商户自己填写）
@@ -322,7 +330,7 @@ func (s *Server) handleMerchantGameUpdate(w http.ResponseWriter, r *http.Request
 	now := time.Now()
 	updates := map[string]interface{}{
 		"name": u.Name, "short_desc": u.ShortDesc, "description": u.Description,
-		"cover": u.Cover, "banner": u.Banner, "screenshots": u.Screenshots, "tags": u.Tags,
+		"cover": u.Cover, "banner": u.Banner, "screenshots": u.Screenshots, "videos": u.Videos, "tags": u.Tags,
 		"developer": u.Developer, "publisher": u.Publisher, "price": u.Price,
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"recharge_enabled":   u.RechargeEnabled,

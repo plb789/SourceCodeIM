@@ -5582,8 +5582,8 @@
                         </div>
                         <!-- 普通模式：用户可编辑 textarea（launch_args_hidden=false） -->
                         <div id="gsPropArgsEditWrap">
-                            <textarea class="gs-rev-input" id="gsPropArgs" maxlength="1024" placeholder="自定义启动参数（留空则用游戏默认）。支持占位符：{0}=登录账号，{1}=账号专属密码，{2}=自定义账号，{3}=自定义密码"></textarea>
-                            <div class="gs-prop-hint">占位符 {2}/{3} 需配合下方「启动账号」使用；SmartSteamEmu 游戏仅支持 {0}/{1}</div>
+                            <textarea class="gs-rev-input" id="gsPropArgs" maxlength="1024" placeholder="自定义启动参数（留空则用游戏默认）。支持占位符：{0}=登录账号，{1}=账号专属密码，{2}=自定义账号，{3}=自定义密码，{name}=用户昵称"></textarea>
+                            <div class="gs-prop-hint">占位符 {2}/{3} 需配合下方「启动账号」使用；{name} 为空时自动回退平台账号；SmartSteamEmu 游戏仅支持 {0}/{1}</div>
                         </div>
                         <!-- 商户隐藏模式：用户看不到模板（launch_args_hidden=true） -->
                         <div id="gsPropArgsHidden" class="gs-prop-args-hidden hidden">

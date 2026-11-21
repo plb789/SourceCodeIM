@@ -1061,6 +1061,10 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	// latest_version 按种子日期递增（同日重传自动追加序号 .2/.3——客户端按字符串比较判更新，
 	// 同日重传日期不变会漏掉更新提示）；未换种子（普通编辑保存）latest_version 原值保留不递增
 	// （防每次编辑保存都误触全员更新）。u.LatestVersion 先预置库中旧值作递增基线
+	// u.SizeBytes 同样预置库中旧值：前端编辑表单/上下架切换 payload 不带 size_bytes（散文件/ZIP/
+	// 分卷 ZIP 的大小由版本登记 Phase2 写入，后续编辑不会改），gameTorrentMetaFill 仅在 BT 方式
+	// 下覆盖。否则零值被写回会把版本登记写入的正确大小清零。
+	u.SizeBytes = g.SizeBytes
 	u.TorrentPath = tp
 	u.LatestVersion = g.LatestVersion
 	s.gameTorrentMetaFill(&u, tp != "" && tp != g.TorrentPath)
