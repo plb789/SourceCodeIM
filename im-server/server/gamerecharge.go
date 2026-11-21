@@ -350,8 +350,8 @@ func (s *Server) HandleGameRecharge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.Info("充值订单创建：用户 %s 游戏#%d 积分 %.3f 到账 %.3f 网关 %s 订单 %d", username, g.ID, pay, amount, gw, order.ID)
-	balance, _ := userPoints(username) // 回执用独立读（事务已 commit）
-	adminJSON(w, map[string]interface{}{"ok": true, "order_id": order.ID, "points": pay, "amount": amount, "balance": aiPointsRound3(balance)})
+	// 直接用事务内回填的 after（tx SELECT 必走主库），替代事务外 userPoints（会被读写分离中间件路由到从库导致旧值）
+	adminJSON(w, map[string]interface{}{"ok": true, "order_id": order.ID, "points": pay, "amount": amount, "balance": aiPointsRound3(after)})
 }
 
 // HandleGameRechargeOrders GET /api/game/recharge/orders 本人兑换记录（倒序分页；game_id 可选过滤；

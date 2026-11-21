@@ -154,7 +154,7 @@ ai_billing:
 secure_file_key: "04295b6cbee2a305b95ed81c52bf47637939dcdd40e4525dc644286a2b107402"
 
 # MySQL 数据源
-mysql_dsn: "root:Prminac6sas0@ifW@tcp(172.16.89.97:6544)/im?charset=utf8mb4&parseTime=True&loc=Local"
+mysql_dsn: "root:Prminac6sas0@ifW@tcp(172.16.89.50:4716)/im?charset=utf8mb4&parseTime=True&loc=Local"
 # MySQL 连接池参数（并发优化 E4，缺省：max_open=2000 / max_idle=50 / lifetime 不设）
 # max_open 为懒建立软上限（不预占），但受 MySQL 服务端 max_connections 硬顶（默认 151）——
 # 调大本项时服务端须配套 SET GLOBAL max_connections（每连接约 1-10MB 内存，自行评估）

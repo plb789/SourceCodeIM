@@ -412,8 +412,12 @@ func (s *Server) HandleGameCardRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 事务归口：核销与加分同事务；条件更新 status 0→1 为唯一赢家判定（并发/重复提交仅一次成功）
+	// 关键：after 余额必须在事务内通过 tx 查询——读写分离中间件会把事务外的 SELECT 路由到从库，
+	// 主从复制延迟（典型 10ms~50ms）导致刚 UPDATE 完主库、紧接着 SELECT 从库读到旧值，
+	// PointsLog.balance_after 被写错，前端拿到错误余额。同事务内 tx 用同一个 DB 连接，绝不走从库。
 	errTaken := fmt.Errorf("该卡已使用")
 	errUser := fmt.Errorf("用户不存在: %s", username)
+	var after float64 // 事务内回填的核销后余额
 	err := store.DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		res := tx.Model(&model.RechargeCard{}).
@@ -433,6 +437,12 @@ func (s *Server) HandleGameCardRedeem(w http.ResponseWriter, r *http.Request) {
 		if res2.RowsAffected == 0 {
 			return errUser
 		}
+		// 事务内立刻查 after——同 tx 连接强制走主库，绕过读写分离延迟
+		var u model.User
+		if err := tx.Select("points").Where("username = ?", username).First(&u).Error; err != nil {
+			return fmt.Errorf("核销后查余额失败: %w", err)
+		}
+		after = aiPointsRound3(u.Points)
 		return nil
 	})
 	if err != nil {
@@ -451,10 +461,9 @@ func (s *Server) HandleGameCardRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cardRateSuccess(username)
-	after, _ := userPoints(username)
 	recordPointsLog(username, card.Points, after, "card_recharge", "system", "卡密充值: "+cardNo)
 	logger.Info("卡密核销成功：用户 %s 卡 %s 面值 %.3f 余额 %.3f", username, cardNo, card.Points, after)
-	adminJSON(w, map[string]interface{}{"ok": true, "points": card.Points, "balance": aiPointsRound3(after)})
+	adminJSON(w, map[string]interface{}{"ok": true, "points": card.Points, "balance": after})
 }
 
 // cardSeedMigration 充值卡表迁移归口（InitGame 逐表迁移列表追加）

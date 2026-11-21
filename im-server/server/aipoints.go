@@ -50,21 +50,37 @@ func userPoints(username string) (float64, error) {
 // userPointsDeduct 扣除积分并返回扣后余额：
 // 原子 UPDATE 钳制非负（points-cost 与 0 取大），余额不足时扣到 0 为止；
 // SQL 端 ROUND(points-?,3) 归一——DB double 减法会保留二进制误差长尾，每笔落库即归一（阶段一百六十二）；
-// 影响行数为 0 视为用户不存在
+// 影响行数为 0 视为用户不存在；
+// 关键：UPDATE 与 SELECT 必须在同一个事务内（用 store.DB.Transaction + tx）——读写分离中间件
+// 会把独立的 SELECT 路由到从库，主从复制延迟（典型 10ms~50ms）导致刚 UPDATE 完主库、紧接着 SELECT
+// 从库读到旧值，流水 balance_after 被写错、前端拿到错误余额。同事务内 tx 用同一个 DB 连接，绝不走从库。
 func userPointsDeduct(username string, cost float64) (float64, error) {
 	if cost < 0 {
 		cost = 0
 	}
-	res := store.DB.Model(&model.User{}).
-		Where("username = ?", username).
-		Update("points", gorm.Expr("GREATEST(ROUND(points - ?, 3), 0)", cost))
-	if res.Error != nil {
-		return 0, res.Error
+	var after float64
+	err := store.DB.Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.User{}).
+			Where("username = ?", username).
+			Update("points", gorm.Expr("GREATEST(ROUND(points - ?, 3), 0)", cost))
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("用户不存在: %s", username)
+		}
+		// 同事务内立刻查 after——tx 强制走主库，绕过读写分离延迟
+		var u model.User
+		if err := tx.Select("points").Where("username = ?", username).First(&u).Error; err != nil {
+			return fmt.Errorf("扣分后查余额失败: %w", err)
+		}
+		after = aiPointsRound3(u.Points)
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	if res.RowsAffected == 0 {
-		return 0, fmt.Errorf("用户不存在: %s", username)
-	}
-	return userPoints(username)
+	return after, nil
 }
 
 // recordPointsLog 阶段七十八：积分流水落库（AI 扣分/管理员调整/注册赠送统一审计入口）。

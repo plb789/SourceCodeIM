@@ -1134,6 +1134,7 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 	var lib model.GameLibrary
 	hadHistory := false
 	reactivated := false
+	var finalBalance float64 // 事务内回填的最终余额（绕过读写分离延迟，替代事务外 userPoints 查询）
 	qerr := store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&lib).Error
 	if qerr == nil {
 		hadHistory = true
@@ -1166,6 +1167,7 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 				Where("username = ?", username).First(&lockedUser).Error; uerr != nil {
 				return fmt.Errorf("锁定用户失败: %w", uerr)
 			}
+			finalBalance = lockedUser.Points // 初值：未扣分时的余额
 
 			// ② FOR UPDATE GameLibrary（existing 查询）—— 放在 User 之后，顺序 User→GameLibrary→Merchant
 			// 解决两个问题：
@@ -1257,6 +1259,7 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 					}
 					var after float64
 					tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
+					finalBalance = after // 事务内回填：绕过读写分离延迟
 					if err := tx.Create(&model.PointsLog{
 						Username: username, Change: -payNow, BalanceAfter: after,
 						Reason: "game_purchase", Operator: "system", Detail: "获取游戏(重新激活): " + g.Name,
@@ -1315,6 +1318,7 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 				}
 				var after float64
 				tx.Model(&model.User{}).Select("points").Where("username = ?", username).Scan(&after)
+				finalBalance = after // 事务内回填：绕过读写分离延迟
 				if err := tx.Create(&model.PointsLog{
 					Username:     username, Change: -pay, BalanceAfter: after,
 					Reason: "game_purchase", Operator: "system", Detail: "获取游戏: " + g.Name,
@@ -1371,7 +1375,15 @@ func (s *Server) HandleGameLibraryJoin(w http.ResponseWriter, r *http.Request) {
 		lib.RemovedAt = nil
 		lib.State = 0
 	}
-	balance, _ := userPoints(username)
+	// balance 获取：
+	//   走了事务(!hadHistory 分支) → 直接用事务内回填的 finalBalance（tx FOR UPDATE 后查到，必走主库，绕过读写分离延迟）
+	//   没走事务(已在库幂等/免费激活) → points 没变，强制主库查一次兜底（防读写分离从库延迟）
+	var balance float64
+	if !hadHistory {
+		balance = finalBalance
+	} else {
+		_ = store.DB.Raw("SELECT points FROM im_user WHERE username = ?", username).Scan(&balance).Error
+	}
 	// from=客户端已安装版本号：服务端据此计算 delta_size_bytes（增量更新实际需下载字节）
 	manifest, err := s.gameManifest(&g, "", strings.TrimSpace(r.URL.Query().Get("from")))
 	if err != nil {
@@ -1545,6 +1557,8 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 	var refunded bool
 	var refundExpired bool
 	var userGone bool
+	var finalBalance float64  // 事务内回填 username 的最终余额（绕过读写分离延迟，替代事务外 userPoints 查询）
+	var balanceCaptured bool  // finalBalance 是否真的在事务内被赋值过（并发幂等跳过时不会）
 	errTx := store.DB.Transaction(func(tx *gorm.DB) error {
 		// ====== 锁顺序：User → GameLibrary → MerchantIncomeLog → Merchant ======
 		// 与 HandleGameLibraryJoin / rechargeRefund / card.go / redpacket.go / aipoints.go
@@ -1564,9 +1578,14 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 					Where("username = ?", model.StorePlatformPool).First(&pp).Error; perr != nil {
 					return fmt.Errorf("用户 %s 和 platform_pool 均查不到，无法处理退款，请人工对账", username)
 				}
+				// userGone 时 username 余额不会被修改（钱退到 platform_pool），finalBalance 保持 0 值
+				// 事务后会走强制主库查询兜底
 			} else {
 				return fmt.Errorf("锁定用户失败: %w", uerr)
 			}
+		} else {
+			balanceCaptured = true
+			finalBalance = lockedUser.Points // 初值：未改积分时的余额；退款成功后会被覆盖
 		}
 
 		// ② FOR UPDATE 锁 GameLibrary + 状态机 CAS 抢占：
@@ -1619,6 +1638,9 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 			}
 			var after float64
 			tx.Model(&model.User{}).Select("points").Where("username = ?", targetUser).Scan(&after)
+			if targetUser == username {
+				finalBalance = after // 退到用户本人 → 更新余额；退到 platform_pool 时 username 余额不变
+			}
 			if err := tx.Create(&model.PointsLog{
 				Username: targetUser, Change: pay, BalanceAfter: after,
 				Reason: reason, Operator: "system", Detail: detail,
@@ -1697,7 +1719,15 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 		adminFail(w, http.StatusInternalServerError, "移出失败")
 		return
 	}
-	balance, _ := userPoints(username)
+	// balance 获取：
+	//   事务内已捕获(balanceCaptured=true) → 直接用 finalBalance（tx FOR UPDATE 后查到，必走主库）
+	//   未捕获(并发幂等跳过/userGone) → 强制主库查一次兜底（防读写分离从库延迟）
+	var balance float64
+	if balanceCaptured {
+		balance = finalBalance
+	} else {
+		_ = store.DB.Raw("SELECT points FROM im_user WHERE username = ?", username).Scan(&balance).Error
+	}
 	resp := map[string]interface{}{"ok": true, "balance": aiPointsRound3(balance), "refunded": refunded}
 	if refundExpired {
 		resp["refund_expired"] = true
