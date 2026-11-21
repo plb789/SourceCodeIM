@@ -375,6 +375,12 @@
         $('m-f-dev').value = '';
         $('m-f-pub').value = '';
         $('m-f-price').value = g ? (g.price || 0) : 0;
+        // 退款协议开关与内容回填
+        var refundOn = g && Number(g.price) > 0 && g.show_refund_protocol;
+        $('m-f-refund-switch').checked = !!refundOn;
+        $('m-f-refund-split').classList.toggle('hidden', !refundOn);
+        $('m-f-refund-content').value = g ? (g.refund_protocol_content || '') : '';
+        $('m-f-refund-content').dispatchEvent(new Event('input')); // 回填时刷预览
         $('m-f-exe').value = '';
         $('m-f-exename').value = '';
         $('m-f-exeargs').value = '';
@@ -499,6 +505,18 @@
             return r.data.url;
         });
     }
+
+    // ===== 退款协议编辑器：实时预览（与 admin 同款） =====
+    (function () {
+        var ta = $('m-f-refund-content');
+        var prev = $('m-f-refund-preview');
+        if (ta && prev) {
+            ta.addEventListener('input', function () {
+                var v = (ta.value || '').trim();
+                prev.innerHTML = v || '<span style="color:#aaa;font-size:11px;">（留空则客户端按平台退款配置动态渲染默认协议）</span>';
+            });
+        }
+    })();
     $('m-f-cover-pick').addEventListener('click', function () { $('m-f-cover-file').click(); });
     $('m-f-cover-file').addEventListener('change', function () {
         var f = this.files[0];
@@ -648,6 +666,9 @@
             developer: $('m-f-dev').value.trim(),
             publisher: $('m-f-pub').value.trim(),
             price: Number($('m-f-price').value) || 0,
+            // 退款协议开关（price>0 且开关勾选才开启）
+            show_refund_protocol: (Number($('m-f-price').value) || 0) > 0 && $('m-f-refund-switch').checked,
+            refund_protocol_content: $('m-f-refund-switch').checked ? $('m-f-refund-content').value.trim() : '',
             cover: $('m-f-cover').value.trim(),
             banner: bannerUrl,
             screenshots: JSON.stringify(ssList),
@@ -3071,3 +3092,38 @@
     });
 
 })();
+
+// ===== 退款协议编辑器辅助：fillRefundProtocolTemplate =====
+function fillRefundProtocolTemplate(taId) {
+    var ta = (typeof taId === 'string') ? document.getElementById(taId) : taId;
+    if (!ta) return;
+    var tpl = [
+        '<h4>一、退款条件</h4>',
+        '<p>您购买本游戏后，如满足以下全部条件，可申请全额退还积分：</p>',
+        '<ul>',
+        '  <li>购买时间不超过 <strong>{DAYS}</strong> 天（从加入游戏库之日起计算）</li>',
+        '  <li>单账号对同一游戏累计退款不超过 <strong>{MAX}</strong> 次</li>',
+        '  <li>退款将清空入库权限（需重新购买方可再次使用）</li>',
+        '</ul>',
+        '<h4>二、退款步骤</h4>',
+        '<ol>',
+        '  <li>在客户端「我的游戏库」中右键该游戏</li>',
+        '  <li>选择「移出游戏库」</li>',
+        '  <li>系统自动校验条件，通过后全额退还积分</li>',
+        '  <li>积分即时退回钱包</li>',
+        '</ol>',
+        '<h4>三、何时不可退款</h4>',
+        '<ul>',
+        '  <li>超过 <strong>{DAYS}</strong> 天退款期限</li>',
+        '  <li>累计退款已达 <strong>{MAX}</strong> 次</li>',
+        '  <li>游戏因违规被管理员下架/封禁</li>',
+        '</ul>',
+        '<p style="color:#888;font-size:12px;">如遇退款问题或纠纷，请联系平台管理员处理。</p>'
+    ].join('\n');
+    ta.value = tpl;
+    try { ta.dispatchEvent(new Event('input')); } catch (_) {}
+    ta.focus();
+    var prevBorder = ta.style.borderColor;
+    ta.style.borderColor = 'var(--primary, #1677ff)';
+    setTimeout(function () { ta.style.borderColor = prevBorder; }, 800);
+}

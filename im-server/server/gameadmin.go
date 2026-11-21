@@ -208,6 +208,20 @@ func gameSavePathsClean(s string) string {
 	return string(b)
 }
 
+// gameRefundProtocolClean 退款协议内容清洗（归口）：trim + 长度限制（上限 4096 字符，防止过长文本撑爆 DB text 列）+
+// 富文本消毒（复用 gameDescContentClean 的白名单消毒器，防 XSS）。空串合法（=客户端渲染平台默认协议文本）
+func gameRefundProtocolClean(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(content) > 4096 {
+		r := []rune(content)
+		content = string(r[:4096])
+	}
+	return gameDescContentClean(content)
+}
+
 // gamePortForwardsClean 端口透传转发规则清洗（归口）：入参须为合法 JSON 数组串，元素逐条校验——
 // proto 仅 tcp/udp；mode 仅 空串=直连 / gateway=经加密网关（网关模式 remote_host 留空，远端端口
 // 语义=网关本机 127.0.0.1 端口，网关地址/指纹/token 由服务端全局配置随库接口下发）；
@@ -734,6 +748,9 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	if g.Price < 0 {
 		g.Price = 0
 	}
+	// 退款协议开关与内容清洗（price>0 时开关才有意义；协议内容复用富文本消毒器，空=客户端渲染平台默认协议）
+	g.ShowRefundProtocol = g.Price > 0 && g.ShowRefundProtocol
+	g.RefundProtocolContent = gameRefundProtocolClean(g.RefundProtocolContent)
 	if g.DownloadMethod != 0 && g.DownloadMethod != 1 && g.DownloadMethod != 2 && g.DownloadMethod != 3 {
 		g.DownloadMethod = 0 // 下载方式白名单：0=HTTP（默认）1=BT（生成种子）2=BT（上传种子）3=HTTP·商户直连
 	}
@@ -930,6 +947,8 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	// 归属/审核态回填（管理端编辑弹窗「游戏归属」下拉；与列表列同语义：空=官方，非空=商户账号）
 	item["owner_username"] = g.OwnerUsername
 	item["audit_status"] = g.AuditStatus
+	// 退款协议内容回填（管理端/商户端编辑表单要完整回填）
+	item["refund_protocol_content"] = g.RefundProtocolContent
 	adminJSON(w, item)
 }
 
@@ -976,6 +995,9 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	if u.Price < 0 {
 		u.Price = 0
 	}
+	// 退款协议开关与内容清洗（同创建口径）
+	u.ShowRefundProtocol = u.Price > 0 && u.ShowRefundProtocol
+	u.RefundProtocolContent = gameRefundProtocolClean(u.RefundProtocolContent)
 	if u.DownloadMethod != 0 && u.DownloadMethod != 1 && u.DownloadMethod != 2 && u.DownloadMethod != 3 {
 		u.DownloadMethod = 0 // 下载方式白名单（同创建口径）：+3=HTTP·商户直连
 	}
@@ -1088,6 +1110,9 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"cover": u.Cover, "banner": u.Banner, "screenshots": u.Screenshots, "tags": u.Tags, "videos": vids,
 		"developer": u.Developer, "publisher": u.Publisher,
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
+		// 退款协议开关与内容（price>0 时开关自动归一；空内容=客户端渲染平台默认协议）
+		"show_refund_protocol":    u.ShowRefundProtocol,
+		"refund_protocol_content": u.RefundProtocolContent,
 		"direct_base_url": u.DirectBaseURL,
 		"launch_exe":      u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"launch_args_hidden": u.LaunchArgsHidden,

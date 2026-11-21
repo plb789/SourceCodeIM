@@ -1032,6 +1032,13 @@ type Game struct {
 	// Price 售价（积分价格：0=免费直接入库；>0=入库需严格扣除对应积分，共用 AI 积分钱包，
 	// 流水 reason=game_purchase/game_refund；P2 商店化启用）
 	Price float64 `gorm:"column:price;type:double;default:0" json:"price"`
+	// ShowRefundProtocol 是否在客户端详情页显示退款协议入口（仅 price>0 时有意义；
+	// 勾选后客户端「获取游戏」积分旁显示「退款协议」按钮，点击弹窗展示 RefundProtocolContent；
+	// 服务端可下发默认协议文本供前端展示，商户/管理员可自定义覆盖）
+	ShowRefundProtocol bool `gorm:"column:show_refund_protocol;default:false" json:"show_refund_protocol"`
+	// RefundProtocolContent 自定义退款协议内容（富文本，可空；空=客户端渲染平台默认协议文本
+	// ——协调 config.game.refund_days / refund_max_per_game 的实际设定动态生成）
+	RefundProtocolContent string `gorm:"column:refund_protocol_content;type:text" json:"refund_protocol_content"`
 	// DownloadMethod 下载方式（0=HTTP 清单直连[默认] 1=BT 种子下载[服务端按版本文件生成种子]
 	// 2=BT 上传种子[管理员自制 .torrent 直发] 3=HTTP·商户直连[商户自带文件服务器]）——
 	// 1 走 P2SP 混合（种子任务叠加 HTTP 直链源），2 为纯 BT（不叠加 P2SP，按上传种子自带的

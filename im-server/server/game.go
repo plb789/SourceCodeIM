@@ -251,6 +251,10 @@ func (s *Server) HandleGameStoreConfig(w http.ResponseWriter, r *http.Request) {
 		"card_buy_url":   cardBuyURL,
 		// 自定义推荐区块（Steam 首页多区块同构：标题+样式+有序游戏，管理端配置）
 		"store_sections": gameSectionList(viewer),
+		// 退款政策参数（协调 config.game.refund_days / refund_max_per_game）：客户端退款协议弹窗动态渲染默认文案时
+		// 需按服务端真实生效配置生成措辞，避免前端硬编码与运营配置不一致
+		"refund_days":          s.cfg.Game.RefundDays,
+		"refund_max_per_game":  s.cfg.Game.RefundMaxPerGame,
 	})
 }
 
@@ -349,6 +353,8 @@ func gameSummary(g model.Game) map[string]interface{} {
 		// 联机方式（建房页随应用带出显示，只读；空=跟随全局。非敏感路由标记，公开摘要可下发）
 		"net_mode": g.NetMode,
 		"price":    g.Price,
+		// 退款协议开关（列表卡片判断用；完整协议文本仅详情接口单独下发，避免列表接口重复携带 text 列）
+		"show_refund_protocol": g.ShowRefundProtocol,
 		// 下载方式（0=HTTP 清单直连[默认] 1=BT/P2SP 混合）——PC 客户端按此选下载通道
 		"download_method": g.DownloadMethod,
 		"down_count":      g.DownCount,
@@ -817,6 +823,7 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 	// 待更新（4）——最新版本 ≠ 已装版本时玩家在商店卡片即见"待更新"徽标
 	viewer := strings.TrimSpace(q.Get("username"))
 	libState := map[uint]int8{}
+	ownedPermOf := map[uint]bool{} // 永久拥有（有过库记录且未退款——移除/超期/次数用完都保留所有权）
 	if viewer != "" {
 		var libs []model.GameLibrary
 		store.DB.Where("username = ? AND removed_at IS NULL", viewer).Find(&libs)
@@ -826,6 +833,17 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, l := range libs {
 			libState[l.GameID] = libStateForView(l.State, l.InstalledVersion, gameLatest[l.GameID])
+		}
+		// 永久拥有批量查：一次 GROUP BY 覆盖本页所有游戏；零额外查询
+		var ownedRows []struct {
+			GameID   uint
+			HasOwned int
+		}
+		store.DB.Raw("SELECT game_id, COUNT(*) AS has_owned FROM game_libraries WHERE username = ? AND pay_refunded = 0 GROUP BY game_id", viewer).Scan(&ownedRows)
+		for _, r := range ownedRows {
+			if r.HasOwned > 0 {
+				ownedPermOf[r.GameID] = true
+			}
 		}
 	}
 	// 评测聚合随行下发（商店悬停气泡卡"评测"行 Steam 同款摘要；一条 GROUP BY 归口仅查本页游戏）
@@ -842,6 +860,9 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 		// 入库后值为库状态 0-4，0=正常在库即"已入库"徽标）
 		if st, ok := libState[g.ID]; ok {
 			item["in_library"] = st
+		}
+		if ownedPermOf[g.ID] {
+			item["owned_permanently"] = true
 		}
 		if a, ok := revOf[g.ID]; ok {
 			attachReviewSummary(item, a)
@@ -922,6 +943,8 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	item["description"] = g.Description
 	item["versions"] = verList
+	// 退款协议完整正文（仅详情接口下发；列表接口只下发布尔开关以节省带宽）
+	item["refund_protocol_content"] = g.RefundProtocolContent
 	// 积分充值可用性（仅布尔开关，非敏感）：客户端据此显隐"积分赞助"入口（服务端下单时仍全量校验）
 	item["recharge_enabled"] = g.RechargeEnabled
 	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏专属密钥确定性派生，仅本人可得；真实登录密码不下发）。
@@ -964,6 +987,14 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 				"install_path":      lib.InstallPath,
 				"play_seconds":      lib.PlaySeconds,
 			}
+		}
+		// owned_permanently：该用户对这款游戏已拥有永久所有权（曾付费/免费入库，且从未成功退款），
+		// 即便当前移出库（removed_at!=NULL）也不影响所有权——客户端据此渲染"已永久拥有 / 免费重新入库"提示，
+		// 而不是重复显示扣费购买块。条件：历史 GameLibrary 行存在且 pay_refunded=false。
+		if hasToken {
+			var perm int64
+			store.DB.Model(&model.GameLibrary{}).Where("username = ? AND game_id = ? AND pay_refunded = ?", viewer, g.ID, false).Count(&perm)
+			item["owned_permanently"] = perm > 0
 		}
 	}
 	adminJSON(w, item)
@@ -1557,6 +1588,7 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 
 	var refunded bool
 	var refundExpired bool
+	var refundMaxed bool   // 新增：达到累计退款次数上限（与超期并列的另一种"不能退"）
 	var userGone bool
 	var finalBalance float64  // 事务内回填 username 的最终余额（绕过读写分离延迟，替代事务外 userPoints 查询）
 	var balanceCaptured bool  // finalBalance 是否真的在事务内被赋值过（并发幂等跳过时不会）
@@ -1618,11 +1650,25 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 		canRefund := pay > 0
 		if canRefund && refundDays > 0 {
 			deadline := lib.CreateTime.AddDate(0, 0, refundDays)
-			canRefund = time.Now().Before(deadline)
+			if !time.Now().Before(deadline) {
+				canRefund = false
+				refundExpired = true // 明确是超期导致的不能退
+			}
 		}
-		// 退款次数上限（防反复买退薅退款窗口）
-		if canRefund && s.cfg.Game.RefundMaxPerGame > 0 && lib.RefundCount >= s.cfg.Game.RefundMaxPerGame {
-			canRefund = false
+		// 退款次数上限（防反复买退薅退款窗口）：
+		// 查询同一用户 + 同一游戏 **所有历史 GameLibrary 行的 refund_count 总和**，
+		// 而非只看当前行的 lib.RefundCount —— 否则玩家每次退款后重新付费会创建新行(refund_count=0)
+		// 绕过限制，形同虚设。
+		var totalRefunds int64
+		if canRefund && s.cfg.Game.RefundMaxPerGame > 0 {
+			_ = tx.Model(&model.GameLibrary{}).
+				Select("COALESCE(SUM(refund_count), 0)").
+				Where("username = ? AND game_id = ?", username, lib.GameID).
+				Scan(&totalRefunds).Error
+			if int(totalRefunds) >= s.cfg.Game.RefundMaxPerGame {
+				canRefund = false
+				refundMaxed = true // 明确是累计次数达到上限导致的不能退（不是超期）
+			}
 		}
 
 		now := time.Now()
@@ -1702,9 +1748,16 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		} else if pay > 0 && !canRefund {
-			refundExpired = true
-			logger.Info("移出库超期不退：用户 %s 游戏#%d 入库 %v 超 %d 天期限，应退 %.3f 未退",
-				username, id, lib.CreateTime, refundDays, pay)
+			// 日志按具体原因区分（refundExpired/refundMaxed 已在上面判定分支设置好）
+			if refundExpired {
+				logger.Info("移出库超期不退：用户 %s 游戏#%d 入库 %v 超 %d 天期限，应退 %.3f 未退",
+					username, id, lib.CreateTime, refundDays, pay)
+			} else if refundMaxed {
+				logger.Info("移出库达次数上限不退：用户 %s 游戏#%d 累计退款达 %d 次上限，应退 %.3f 未退",
+					username, id, s.cfg.Game.RefundMaxPerGame, pay)
+			} else {
+				logger.Info("移出库条件不满足不退：用户 %s 游戏#%d pay=%.3f 应退未退（其他 canRefund=false 场景）", username, id, pay)
+			}
 		}
 		// 软删除库条目（GameLibrary 已 FOR UPDATE 锁住，直接 UPDATE 安全）
 		updates := map[string]interface{}{
@@ -1735,9 +1788,14 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 		_ = store.DB.Raw("SELECT points FROM im_user WHERE username = ?", username).Scan(&balance).Error
 	}
 	resp := map[string]interface{}{"ok": true, "balance": aiPointsRound3(balance), "refunded": refunded}
+	// 两种"不能退"的原因分开下发，客户端据此给精准提示
 	if refundExpired {
 		resp["refund_expired"] = true
 		resp["refund_days"] = refundDays
+	}
+	if refundMaxed {
+		resp["refund_maxed"] = true
+		resp["refund_max"] = s.cfg.Game.RefundMaxPerGame
 	}
 	adminJSON(w, resp)
 }

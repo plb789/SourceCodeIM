@@ -588,6 +588,26 @@
                     <div style="display:flex;gap:8px;"><input id="m-f-dev" class="admin-input" maxlength="64" placeholder="开发商"><input id="m-f-pub" class="admin-input" maxlength="64" placeholder="发行商"></div>
                 </div>
                 <div class="m-row"><label>售价（积分，0=免费）</label><input id="m-f-price" type="number" min="0" step="0.001" class="admin-input" value="0"></div>
+                <!-- 退款协议开关（仅 price>0 时有意义） -->
+                <div class="m-row" style="align-items:center;gap:10px;flex-wrap:wrap;flex-direction:unset;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#888;">
+                        <input id="m-f-refund-switch" type="checkbox" style="width:16px;height:16px;" onchange="document.getElementById('m-f-refund-split').classList.toggle('hidden', !this.checked)">
+                        客户端显示「退款协议」
+                    </label>
+                    <button type="button" class="admin-btn small" style="padding:2px 10px;font-size:12px;" onclick="fillRefundProtocolTemplate('m-f-refund-content')">📋 插入默认模板</button>
+                    <span style="font-size:12px;color:#aaa;">留空=客户端按平台退款配置动态渲染默认协议</span>
+                </div>
+                <!-- 分屏编辑器（与 admin 同款，直接放 form 容器以满宽对齐） -->
+                <div id="m-f-refund-split" class="gm-desc-split hidden" style="height:240px;">
+                    <div class="gm-desc-split-pane gm-desc-split-left">
+                        <textarea id="m-f-refund-content" class="admin-input gm-desc-input" maxlength="4096" placeholder="可自定义退款协议内容（留空则客户端显示平台默认协议）。支持纯文本或 HTML 标签" style="resize:none;line-height:1.6;"></textarea>
+                    </div>
+                    <div class="gm-desc-split-bar" title="拖动调节宽度"></div>
+                    <div class="gm-desc-split-pane gm-desc-split-right">
+                        <div class="gm-desc-preview-label">实时预览</div>
+                        <div id="m-f-refund-preview" class="gm-desc-preview gs-desc" style="height:calc(100% - 24px);"></div>
+                    </div>
+                </div>
                 <div class="m-row"><label>封面图</label>
                     <div style="display:flex;gap:8px;align-items:center;">
                         <input type="file" id="m-f-cover-file" accept=".png,.jpg,.jpeg,.gif,.webp" class="hidden">

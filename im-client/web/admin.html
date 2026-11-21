@@ -1578,6 +1578,26 @@
                     <input id="gm-f-directurl" class="admin-input hidden" style="max-width:320px;" maxlength="512" placeholder="外部源根地址 https://cdn.example.com/game/">
                 </div>
                 <span class="admin-field-hint">积分价格：用户从商店获取游戏时从其积分钱包扣除（0=免费），移出游戏库全额退还</span>
+                <!-- 退款协议开关（仅 price>0 时有意义） -->
+                <div class="gm-form-row" style="align-items:center;gap:10px;flex-wrap:wrap;">
+                    <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;color:#888;">
+                        <input id="gm-f-refund-switch" type="checkbox" style="width:16px;height:16px;" onchange="document.getElementById('gm-f-refund-split').classList.toggle('hidden', !this.checked)">
+                        客户端显示「退款协议」
+                    </label>
+                    <button id="gm-f-refund-default-btn" type="button" class="admin-btn small" style="padding:2px 10px;font-size:12px;" onclick="fillRefundProtocolTemplate('gm-f-refund-content')">📋 插入默认模板</button>
+                    <span style="font-size:12px;color:#aaa;">留空=客户端按 refund_days / refund_max_per_game 动态渲染平台默认协议</span>
+                </div>
+                <!-- 分屏编辑器（与「详细介绍」同款，直接放 gm-form-body 以满宽对齐） -->
+                <div id="gm-f-refund-split" class="gm-desc-split hidden" style="height:280px;">
+                    <div class="gm-desc-split-pane gm-desc-split-left">
+                        <textarea id="gm-f-refund-content" class="admin-input gm-desc-input" maxlength="4096" placeholder="可自定义退款协议内容（留空则客户端显示平台默认协议）。支持纯文本或 HTML 标签" style="resize:none;line-height:1.6;"></textarea>
+                    </div>
+                    <div class="gm-desc-split-bar" title="拖动调节宽度"></div>
+                    <div class="gm-desc-split-pane gm-desc-split-right">
+                        <div class="gm-desc-preview-label">实时预览（客户端看到的效果）</div>
+                        <div id="gm-f-refund-preview" class="gm-desc-preview gs-desc" style="height:calc(100% - 24px);"></div>
+                    </div>
+                </div>
                 <!-- 游戏归属（阶段二百九十七）：官方=平台自运营免审；选商户账号保存即转移归属——
                      转移后游戏回待审核（玩家端暂不可见），商户管理「游戏审核」通过后自动重新上架；
                      新建游戏固定官方（服务端强制），该行仅编辑态显示 -->

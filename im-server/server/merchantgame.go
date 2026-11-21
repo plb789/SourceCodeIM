@@ -83,6 +83,9 @@ type merchantGameReq struct {
 	Developer   string  `json:"developer"`
 	Publisher   string  `json:"publisher"`
 	Price       float64 `json:"price"`
+	// 退款协议开关与自定义内容（商户可自定；空内容=客户端渲染平台默认协议）
+	ShowRefundProtocol    bool   `json:"show_refund_protocol"`
+	RefundProtocolContent string `json:"refund_protocol_content"`
 	LaunchExe   string  `json:"launch_exe"`
 	LaunchName  string  `json:"launch_name"`
 	LaunchArgs  string  `json:"launch_args"`
@@ -130,6 +133,9 @@ func (s *Server) merchantGameBaseClean(g *model.Game, req *merchantGameReq) erro
 		return fmt.Errorf("售价不能为负数")
 	}
 	g.Price = req.Price
+	// 退款协议开关与内容清洗（同管理端口径：price>0 时开关才有意义；内容复用清洗器）
+	g.ShowRefundProtocol = g.Price > 0 && req.ShowRefundProtocol
+	g.RefundProtocolContent = gameRefundProtocolClean(req.RefundProtocolContent)
 	cover, err := merchantImgURLClean(req.Cover)
 	if err != nil {
 		return err
@@ -247,6 +253,9 @@ func (s *Server) handleMerchantGameList(w http.ResponseWriter, r *http.Request) 
 			"banner": g.Banner, "screenshots": g.Screenshots, "videos": g.Videos,
 			"description": g.Description, "tags": g.Tags,
 			"developer": g.Developer, "publisher": g.Publisher, "price": g.Price,
+			// 退款协议字段（商户端编辑回填用）
+			"show_refund_protocol":    g.ShowRefundProtocol,
+			"refund_protocol_content": g.RefundProtocolContent,
 			"launch_exe": g.LaunchExe, "launch_name": g.LaunchName, "launch_args": g.LaunchArgs,
 			// 下载方式与直连地址（商户直连·编辑回填数据源；base_url 可下发——本就属商户自己填写）
 			"download_method": g.DownloadMethod, "direct_base_url": g.DirectBaseURL,
@@ -332,6 +341,9 @@ func (s *Server) handleMerchantGameUpdate(w http.ResponseWriter, r *http.Request
 		"name": u.Name, "short_desc": u.ShortDesc, "description": u.Description,
 		"cover": u.Cover, "banner": u.Banner, "screenshots": u.Screenshots, "videos": u.Videos, "tags": u.Tags,
 		"developer": u.Developer, "publisher": u.Publisher, "price": u.Price,
+		// 退款协议开关与内容（同管理端：price>0 时开关自动归一）
+		"show_refund_protocol":    u.ShowRefundProtocol,
+		"refund_protocol_content": u.RefundProtocolContent,
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"recharge_enabled":   u.RechargeEnabled,
 		"recharge_gw":        u.RechargeGw,

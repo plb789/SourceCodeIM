@@ -327,6 +327,72 @@
     function closeModal() {
         modalMask.classList.add('hidden');
         modalOkCb = null;
+        // 恢复确定/取消按钮原状（防止 showConfirm 的调用方临时改了按钮文案/显隐后未恢复）
+        var ok = $('gsModalOk'), cancel = $('gsModalCancel');
+        if (ok) ok.style.display = '';
+        if (cancel) cancel.textContent = T('取消');
+    }
+
+    // openRefundProtocolHTML 退款协议 HTML 生成（供属性弹窗"退款协议"分栏消费）：
+    // 服务端下发自定义内容则渲染之；空则渲染 defaultRefundProtocolHTML（按服务端配置动态生成）
+    function openRefundProtocolHTML(g) {
+        var custom = g && g.refund_protocol_content ? String(g.refund_protocol_content).trim() : '';
+        return custom ? custom : defaultRefundProtocolHTML(g);
+    }
+
+    // defaultRefundProtocolHTML 平台默认退款协议（协调服务端 config.game.refund_days / refund_max_per_game）：
+    // 从 state.cfg（/api/game/config 下发）读取真实生效配置生成措辞，避免硬编码与运营配置漂移
+    // ——管理员/商户可通过自定义协议（refund_protocol_content）覆盖
+    function defaultRefundProtocolHTML(g) {
+        var price = g && g.price ? fmtPoints(g.price) : '—';
+        var gameName = g && g.name ? String(g.name) : T('该游戏');
+        // 从服务端下发的 state.cfg 读取真实生效配置；取失败或 ≤0 时兜底到保守默认
+        var cfg = state.cfg || {};
+        var rawDays = Number(cfg.refund_days);
+        var rawMax = Number(cfg.refund_max_per_game);
+        var refundDays = (rawDays > 0) ? rawDays : 7;
+        var refundMax = (rawMax > 0) ? rawMax : 2;
+        // 服务端 0/负数 = 无限制：协议文案特殊处理（避免用户误解"不能退"的边界）
+        var daysUnlimited = rawDays !== null && rawDays !== undefined && rawDays <= 0;
+        var maxUnlimited = rawMax !== null && rawMax !== undefined && rawMax <= 0;
+        return '<div class="gs-refund-protocol">' +
+            '<h4>' + T('一、退款条件') + '</h4>' +
+            '<p>' + T('您在购买') + '「' + escHtml(gameName) + '」' + T('（售价 ') + price + T(' 积分）后，如满足以下全部条件，可申请全额退还积分：') + '</p>' +
+            '<ul>' +
+            (daysUnlimited
+                ? '<li>' + T('购买时间不限（服务端已关闭退款期限）') + '</li>'
+                : '<li>' + T('购买时间不超过 ') + refundDays + T(' 天（从您加入游戏库之日起计算）') + '</li>') +
+            (maxUnlimited
+                ? '<li>' + T('单账号累计退款次数不限') + '</li>'
+                : '<li>' + T('单账号对同一游戏累计退款不超过 ') + refundMax + T(' 次（防反复薅退款窗口）') + '</li>') +
+            '<li>' + T('退款将同时清空您对该游戏的入库权限（需重新购买方可再次使用）') + '</li>' +
+            '</ul>' +
+            '<h4>' + T('二、退款步骤') + '</h4>' +
+            '<ol>' +
+            '<li>' + T('在客户端「我的游戏库」中找到该游戏') + '</li>' +
+            '<li>' + T('右键点击 → 选择「移出游戏库」（或点击游戏属性面板中的「移除」按钮）') + '</li>' +
+            '<li>' + T('系统自动校验退款条件，通过后全额退还购买所消耗的积分') + '</li>' +
+            '<li>' + T('积分即时退回您的积分钱包，可用于再次购买游戏或积分充值') + '</li>' +
+            '</ol>' +
+            '<h4>' + T('三、何时不可退款') + '</h4>' +
+            '<ul>' +
+            (daysUnlimited
+                ? ''
+                : '<li>' + T('您已超过 ') + refundDays + T(' 天的退款期限') + '</li>') +
+            (maxUnlimited
+                ? ''
+                : '<li>' + T('您已对该游戏退款达 ') + refundMax + T(' 次（同一账号）') + '</li>') +
+            '<li>' + T('游戏因违规被管理员下架/封禁（您已获得的入库权限保留，但不可退款）') + '</li>' +
+            '</ul>' +
+            '<p class="gs-refund-tip">' + T('如遇退款问题或纠纷，请联系平台管理员处理。') + '</p>' +
+            '</div>';
+    }
+
+    // escHtml 简单的 HTML 转义（协议里的游戏名可能包含特殊字符）
+    function escHtml(s) {
+        return String(s).replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+        });
     }
 
     $('gsModalOk').addEventListener('click', function () {
@@ -4713,8 +4779,15 @@
                 pTags.appendChild(el('span', 'gs-car-tag', t));
             });
             pAction.innerHTML = '';
-            var play = el('button', 'gs-car-play' + ((Number(g.price) || 0) > 0 ? '' : ' free'), '');
-            fillPrice(play, g, T('免费开玩'));
+            var ownedPerm = !!g.owned_permanently;
+            var isFree = (Number(g.price) || 0) === 0;
+            var play = el('button', 'gs-car-play' + (ownedPerm || isFree ? ' free' : ''), '');
+            if (ownedPerm) {
+                play.textContent = T('永久拥有');
+                play.style.fontSize = '12px';
+            } else {
+                fillPrice(play, g, T('免费开玩'));
+            }
             play.addEventListener('click', function (ev) {
                 ev.stopPropagation();
                 openDetail(g.id);
@@ -4818,9 +4891,25 @@
             // 大卡底部渐隐条带一句话介绍（小卡仅名称，Steam 同款）
             if (big && g.short_desc) fade.appendChild(el('div', 'gs-promo-desc', g.short_desc));
             c.appendChild(fade);
-            // 价格角标（右下深色胶囊：免费走主题绿高亮，积分价白字）
-            var pb = el('div', 'gs-promo-price' + ((Number(g.price) || 0) > 0 ? '' : ' free'));
-            fillPrice(pb, g, T('免费'));
+            // 价格角标（右下深色胶囊：免费/已拥有走主题绿高亮，积分价白字）
+            var pbClass = 'gs-promo-price';
+            var pbText = T('免费');
+            var ownedPerm = !!g.owned_permanently;
+            if (ownedPerm) {
+                pbClass += ' free';
+                pbText = T('永久拥有');
+            } else if ((Number(g.price) || 0) > 0) {
+                pbText = null; // fillPrice 会填充积分
+            } else {
+                pbClass += ' free';
+            }
+            var pb = el('div', pbClass);
+            if (ownedPerm) {
+                pb.textContent = pbText;
+                pb.style.fontSize = '11px';
+            } else {
+                fillPrice(pb, g, pbText);
+            }
             c.appendChild(pb);
             return c;
         }
@@ -4927,8 +5016,14 @@
             g.tags.slice(0, 5).forEach(function (t) { tg.appendChild(el('span', 'gs-car-tag', t)); });
             info.appendChild(tg);
         }
-        var hPrice = el('div', 'gs-lrow-price' + ((Number(g.price) || 0) > 0 ? '' : ' free'));
-        fillPrice(hPrice, g, T('免费开玩'));
+        var ownedPerm = !!g.owned_permanently;
+        var isFree = (Number(g.price) || 0) === 0;
+        var hPrice = el('div', 'gs-lrow-price' + (ownedPerm || isFree ? ' free' : ''));
+        if (ownedPerm) {
+            hPrice.textContent = T('永久拥有');
+        } else {
+            fillPrice(hPrice, g, T('免费开玩'));
+        }
         info.appendChild(hPrice);
         hero.appendChild(info);
         hero.appendChild(lpvMediaEl(g, 4));
@@ -8084,6 +8179,7 @@
         refreshPropExe();
         $('gsPropSaveSec').classList.add('hidden'); // 本地游戏无云存档：隐藏分栏按钮 + 内容区
         $('gsPropNavCloud').classList.add('hidden');
+        $('gsPropNavRefund').classList.add('hidden'); // 本地游戏非商店购买，永远隐藏退款协议分栏
         $('gsPropMask').classList.remove('hidden');
         showPropPane('general'); // 每次打开归位到「通用」分栏
     }
@@ -8155,6 +8251,14 @@
         $('gsPropPf').textContent = pfs.length ? pfRulesToText(pfs) : T('无（直连游戏默认服务器）');
         refreshPropExe();
         initSaveSection(gid); // 云存档分栏（仅 PC 端显示；WEB 端隐藏该分栏按钮）
+        // 退款协议分栏显隐（仅商店游戏 price>0 且服务端 show_refund_protocol=true 时显示；本地游戏永远隐藏）
+        var showRefund = !propLid && (Number(g.price) || 0) > 0 && g.show_refund_protocol;
+        $('gsPropNavRefund').classList.toggle('hidden', !showRefund);
+        if (showRefund) {
+            // 渲染退款协议内容到属性 pane（自定义优先 / 空则 defaultRefundProtocolHTML 按服务端配置生成）
+            $('gsPropRefundPrice').textContent = fmtPoints(g.price) + T(' 积分');
+            $('gsPropRefundBody').innerHTML = openRefundProtocolHTML(g);
+        }
         $('gsPropMask').classList.remove('hidden');
         showPropPane('general'); // 每次打开归位到「通用」分栏
         if (DESKTOP && DESKTOP.gameGetLaunchOptions) {
@@ -8194,7 +8298,7 @@
         for (var i = 0; i < items.length; i++) {
             items[i].classList.toggle('active', items[i].getAttribute('data-pane') === name);
         }
-        ['general', 'launch', 'cloud'].forEach(function (p) {
+        ['general', 'launch', 'cloud', 'refund'].forEach(function (p) {
             $('gsPropPane' + cap(p)).classList.toggle('hidden', p !== name);
         });
         $('gsPropPanes').scrollTop = 0; // 切分栏回到顶部（分栏内容各自独立阅读）
@@ -8822,10 +8926,15 @@
                 if (res.data && res.data.balance !== undefined && res.data.balance !== null) { state.balance = res.data.balance; syncPointsOut(res.data.balance); }
                 delete state.lib[gid];
                 if (state.games[gid]) { state.games[gid].in_library = undefined; }
-                // 根据服务端返回的 refunded / refund_expired 区分 toast 文案
+                // 根据服务端返回的 refunded / refund_expired / refund_maxed 区分 toast 文案
                 if (res.data && res.data.refund_expired) {
+                    // 超过退款期限（入库距今超过 refund_days）
                     var d = res.data.refund_days || 7;
                     toast(T('已移出游戏库，入库超过') + d + T('天，积分不予退还'));
+                } else if (res.data && res.data.refund_maxed) {
+                    // 累计退款次数已达上限（同一用户同一游戏跨所有购买记录）
+                    var m = res.data.refund_max || 2;
+                    toast(T('已移出游戏库，累计退款达') + m + T('次上限，积分不予退还'));
                 } else if (res.data && res.data.refunded) {
                     toast(T('已移出游戏库，积分已退还'));
                 } else {
@@ -9181,9 +9290,13 @@
         box.innerHTML = '';
         // 未入库：Steam 同款购买块（价格行 + 余额 + 获取按钮；已入库才出现安装/启动按钮组）
         if (libState === null || libState === undefined) {
-            box.appendChild(el('div', 'gs-install-state', T('获取游戏')));
+            var ownedPerm = !!(g.owned_permanently); // 永久拥有权：曾付费/免费入库且从未成功退款
+            box.appendChild(el('div', 'gs-install-state', ownedPerm ? T('已永久拥有') : T('获取游戏')));
             var priceRow = el('div', 'gs-price-row');
-            if ((Number(g.price) || 0) > 0) {
+            if (ownedPerm) {
+                // 已永久拥有：不再显示扣费金额，给"永久拥有"徽标
+                priceRow.appendChild(el('span', 'gs-price free', T('永久拥有 · 可免费重新入库')));
+            } else if ((Number(g.price) || 0) > 0) {
                 priceRow.appendChild(el('span', 'gs-price-ico', '⚡'));
                 priceRow.appendChild(el('span', 'gs-price', fmtPoints(g.price)));
                 priceRow.appendChild(el('span', 'gs-price-unit', T('积分')));
@@ -9191,7 +9304,10 @@
                 priceRow.appendChild(el('span', 'gs-price free', T('免费')));
             }
             box.appendChild(priceRow);
-            if (username && state.balance !== null) {
+            if (ownedPerm) {
+                box.appendChild(el('div', 'gs-install-sub gs-owned-perm-tip',
+                    T('你曾拥有过这款游戏且所有权已永久保留——退款期限已过或已达退款上限，移除不影响你对它的所有权')));
+            } else if (username && state.balance !== null) {
                 box.appendChild(el('div', 'gs-install-sub', T('当前余额：') + fmtPoints(state.balance) + T(' 积分')));
             }
             if (!username) {
@@ -9199,8 +9315,12 @@
                 return;
             }
             var buyActs = el('div', 'gs-install-actions');
-            buyActs.appendChild(mkBtn((Number(g.price) || 0) > 0 ? T('用积分获取') : T('加入库'), 'primary', function () { joinLibrary(g); }));
-            if (username && g.recharge_enabled) buyActs.appendChild(mkBtn(T('积分赞助'), '', function () { openRecharge(gid); })); // 仅开放充值的游戏显示（服务端下单仍全量校验）
+            if (ownedPerm) {
+                buyActs.appendChild(mkBtn(T('重新入库'), 'primary', function () { joinLibrary(g); }));
+            } else {
+                buyActs.appendChild(mkBtn((Number(g.price) || 0) > 0 ? T('用积分获取') : T('加入库'), 'primary', function () { joinLibrary(g); }));
+            }
+            if (username && !ownedPerm && g.recharge_enabled) buyActs.appendChild(mkBtn(T('积分赞助'), '', function () { openRecharge(gid); }));
             box.appendChild(buyActs);
             if (!IN_ELECTRON) box.appendChild(el('div', 'gs-bar-hint', T('下载与启动请在 PC 客户端中进行')));
             return;
